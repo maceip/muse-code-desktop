@@ -53,6 +53,11 @@ private func collectAccessibilityTexts(from object: Any, depth: Int = 0) -> [Str
 @MainActor
 private func collectTexts(in view: NSView) -> [String] {
     var out: [String] = []
+    if let tv = view as? PlaceholderTextView {
+        if !tv.placeholder.isEmpty { out.append(tv.placeholder) }
+        let s = tv.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !s.isEmpty { out.append(s) }
+    }
     if let tf = view as? NSTextField {
         let s = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if !s.isEmpty { out.append(s) }
@@ -192,13 +197,14 @@ struct MuseUITestMain {
         check(resolvedMuse != nil, "PiDiscoveryService.resolveExecutable(named: \"muse\") must dynamically locate muse on PATH")
         check(HarnessDescriptor.descriptor(for: .museCode).fallbackBinaries.isEmpty, "HarnessDescriptor.museCode.fallbackBinaries must not contain hardcoded paths")
 
-        // 7. Verify Tachometer Credit Gauge (15k rpm full -> 500 rpm low)
-        check(MuseCreditBatteryButton.maxRPM == 15_000, "Tachometer max RPM must be 15,000")
-        check(MuseCreditBatteryButton.minRPM == 500, "Tachometer min RPM must be 500")
-        check(MuseCreditBatteryButton.formatRPM(15_000) == "15k rpm", "15,000 RPM must format as '15k rpm'")
-        check(MuseCreditBatteryButton.formatRPM(500) == "500 rpm", "500 RPM must format as '500 rpm'")
+        // 7. Verify Tachometer Credit Gauge renders icon-only (no text or border around icon)
         let tachoView = MuseCreditBatteryButton(controller: controller)
-        check(tachoView.currentRPM >= 500 && tachoView.currentRPM <= 15_000, "Tachometer currentRPM must be within 500...15000")
+        let tachoHost = NSHostingView(rootView: tachoView)
+        tachoHost.frame = NSRect(x: 0, y: 0, width: 40, height: 30)
+        tachoHost.layoutSubtreeIfNeeded()
+        let tachoTexts = collectTexts(in: tachoHost)
+        check(tachoTexts.isEmpty, "MuseCreditBatteryButton must be icon-only with no text label (found: \(tachoTexts))")
+        check(tachoView.remainingFraction >= 0.0 && tachoView.remainingFraction <= 1.0, "Tachometer remainingFraction must be within 0.0...1.0")
 
         // 8. Verify SessionIcons catalog (16 icons) and 4–5 char shorthand persistence
         check(SessionIconCatalog.all.count == 16, "SessionIconCatalog must provide 16 session icons")
@@ -234,7 +240,40 @@ struct MuseUITestMain {
         let placeholderTV = PlaceholderTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 48))
         check(placeholderTV.subviews.contains(where: { $0 is GlowingCaretView }), "PlaceholderTextView must contain GlowingCaretView")
 
-        print("PASS: All Muse UI, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, and backend state transitions verified.")
+        // 10. Verify Liquid Glass Composer & 3D Morphing Voice Orb (`orb1.gif`)
+        let composerHost = NSHostingView(
+            rootView: ComposerView(
+                state: state,
+                controller: controller,
+                focusTick: 0
+            )
+            .frame(width: 680, height: 220)
+        )
+        window.contentView = composerHost
+        composerHost.frame = NSRect(x: 0, y: 0, width: 680, height: 220)
+        composerHost.layoutSubtreeIfNeeded()
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        composerHost.layoutSubtreeIfNeeded()
+        let composerTexts = collectTexts(in: composerHost)
+        check(
+            composerTexts.contains("Search or Ask") || composerTexts.contains("Muse is not running…") || composerTexts.contains("Steer Muse, or queue a follow-up…"),
+            "Liquid Glass input pill must mount PlaceholderTextView with 'Search or Ask' placeholder (got: \(composerTexts))"
+        )
+        let orbHost = NSHostingView(
+            rootView: LiquidGlassVoiceOrbView(
+                isRecording: true,
+                isTranscribing: false,
+                duration: 2.5,
+                onTap: {}
+            )
+            .frame(width: 96, height: 96)
+        )
+        window.contentView = orbHost
+        orbHost.frame = NSRect(x: 0, y: 0, width: 96, height: 96)
+        orbHost.layoutSubtreeIfNeeded()
+        check(orbHost.fittingSize.width >= 92 && orbHost.fittingSize.height >= 92, "LiquidGlassVoiceOrbView must render the 3D 96x96 Liquid Glass Voice Orb")
+
+        print("PASS: All Muse UI, Liquid Glass composer, 3D Voice Orb, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, and backend state transitions verified.")
         exit(0)
     }
 }

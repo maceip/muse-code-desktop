@@ -17,8 +17,10 @@ struct ComposerContextStrip: View {
     @State private var showsBranches = false
     @State private var branches: [String] = []
 
+    var isGlassSurface: Bool = true
+
     var body: some View {
-        HStack(spacing: 22) {
+        HStack(spacing: 20) {
             chip("folder-02", controller.projectName, help: controller.projectPath.abbreviatingHomeDirectory) {
                 showsProjects.toggle()
             }
@@ -32,8 +34,7 @@ struct ComposerContextStrip: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .frame(height: ComposerMetrics.contextStripHeight)
+        .frame(height: 28)
     }
 
     // MARK: - Projects
@@ -95,18 +96,19 @@ struct ComposerContextStrip: View {
 
     private func chip(_ systemImage: String, _ title: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 7) {
-                HugeIcon(name: systemImage)
-                    .font(.system(size: 12.5, weight: .regular))
+            HStack(spacing: 8) {
+                HugeIcon(name: systemImage, size: 15)
+                    .foregroundStyle(isGlassSurface ? Color.white.opacity(0.82) : Color.secondary)
                 Text(title)
-                    .font(.system(size: 13.5))
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(isGlassSurface ? Color.white.opacity(0.95) : Color.primary.opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.primary.opacity(0.85))
+        .focusEffectDisabled()
         .help(help)
     }
 }

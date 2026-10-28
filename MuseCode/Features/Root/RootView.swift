@@ -239,21 +239,22 @@ struct RootView: View {
         if !state.isSettingsPresented {
             let buttonTop = WindowChromeMetrics.titlebarRowCenter - TitlebarIconButton.size / 2
             HStack(spacing: 6) {
+                TitlebarIconButton(
+                    systemImage: "layout-align-left",
+                    help: isSidebarVisible ? "Hide sidebar (⌃⌘S)" : "Show sidebar (⌃⌘S)",
+                    isActive: isSidebarVisible
+                ) {
+                    toggleSidebar()
+                }
+
                 if isSidebarVisible {
                     Rectangle()
                         .fill(AppTheme.cardStroke)
                         .frame(width: 1, height: 18)
-                        .padding(.trailing, 2)
+                        .padding(.horizontal, 2)
                 }
 
                 HStack(spacing: 2) {
-                    TitlebarIconButton(
-                        systemImage: "layout-align-left",
-                        help: isSidebarVisible ? "Hide sidebar (⌃⌘S)" : "Show sidebar (⌃⌘S)",
-                        isActive: isSidebarVisible
-                    ) {
-                        toggleSidebar()
-                    }
                     TitlebarIconButton(systemImage: "arrow-left-01", help: "Back", isEnabled: state.canGoBack) {
                         Task { await state.goBack() }
                     }
@@ -278,12 +279,12 @@ struct RootView: View {
         }
     }
 
-    /// Where the detail pane's titlebar controls start: aligned with the
-    /// sidebar's trailing divider when the sidebar is expanded (and AppRail has
-    /// vanished), or right past the traffic lights when the sidebar is hidden.
+    /// Where the titlebar controls start: when the sidebar is expanded, the
+    /// sidebar toggle button sits on the trailing edge of the sidebar (just
+    /// inside its right border), with the divider aligned to `cardInset + sidebarWidth`.
     private var controlsLeading: CGFloat {
         if isSidebarVisible {
-            return WindowChromeMetrics.cardInset + sidebarWidth
+            return WindowChromeMetrics.cardInset + sidebarWidth - TitlebarIconButton.size - 8
         }
         return WindowChromeMetrics.sidebarToggleLeading
     }

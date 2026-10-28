@@ -80,10 +80,18 @@ struct ComposerView: View {
     @State private var attachmentError: String?
     @State private var isDropTargeted = false
     @State private var isModelPickerPresented = false
+    @State private var isWaveIgniting = false
+    @State private var isContractedToOrb = false
+    @State private var isShowingVoiceErrorPopover = false
+    @Bindable private var stt = MuseVoiceSTTService.shared
+
+    private var isVoiceActive: Bool {
+        stt.isRecording || stt.isTranscribing
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !suggestions.isEmpty {
+        VStack(alignment: .center, spacing: 10) {
+            if !suggestions.isEmpty && !isContractedToOrb {
                 ComposerSuggestionList(
                     suggestions: suggestions,
                     selectedIndex: suggestionIndex,
@@ -96,32 +104,39 @@ struct ComposerView: View {
                 BannerView(level: .warning, title: "Attachment not added", message: attachmentError, onDismiss: { self.attachmentError = nil })
             }
 
-            VStack(spacing: 0) {
-                if isTucked {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if let tray {
-                            tray.environment(\.isInComposerTray, true)
-                        }
-                        if controller.items.isEmpty {
-                            ComposerContextStrip(state: state, controller: controller)
-                        }
-                    }
-                        .padding(.bottom, ComposerMetrics.contextStripOverlap)
-                        .background(
-                            UnevenRoundedRectangle(
-                                topLeadingRadius: 16,
-                                topTrailingRadius: 16,
-                                style: .continuous
-                            )
-                            .fill(AppTheme.composerContextFill)
-                        )
-                        .padding(.horizontal, ComposerMetrics.contextStripInset)
-                }
-                composerBox
-                    .padding(.top, isTucked ? -ComposerMetrics.contextStripOverlap : 0)
+            if let tray, !isContractedToOrb {
+                tray.environment(\.isInComposerTray, true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        LiquidGlassCardBackground(cornerRadius: 18, isDarkTopPill: false)
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
+
+            // Top Smoked Liquid Glass Input Pill — morphs into the 3D Liquid Glass Voice Orb when mic is active
+            morphingTopInputOrOrb
+
+            // Bottom Frosted Liquid Glass Control Card — fades and scales out when morphed into the Voice Orb
+            if !isContractedToOrb {
+                liquidGlassControlCard
+                    .opacity(isWaveIgniting ? 0.0 : 1.0)
+                    .scaleEffect(isWaveIgniting ? 0.95 : 1.0, anchor: .top)
+                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
             }
         }
-        .onAppear { loadDraft() }
+        .animation(.spring(response: 0.44, dampingFraction: 0.80), value: isContractedToOrb)
+        .animation(.easeOut(duration: 0.22), value: isWaveIgniting)
+        .onChange(of: isVoiceActive) { _, active in
+            syncOrbAnimationState(active: active)
+        }
+        .onAppear {
+            loadDraft()
+            if isVoiceActive {
+                isWaveIgniting = true
+                isContractedToOrb = true
+            }
+        }
         .onChange(of: controller.draftKey) { _, _ in loadDraft() }
         .onChange(of: controller.composerPrefill) { _, newValue in
             guard let newValue, !newValue.isEmpty else { return }
@@ -140,23 +155,32 @@ struct ComposerView: View {
         }
     }
 
-    /// Whether a band sits behind the top of the box: the context strip of an
-    /// empty chat, the agent's tray, or both.
-    private var isTucked: Bool {
-        controller.items.isEmpty || tray != nil
+    // MARK: - Liquid Glass Top Input Pill & Morphing 3D Voice Orb (`orb1.gif`)
+
+    private var morphingTopInputOrOrb: some View {
+        ZStack {
+            if isContractedToOrb {
+                LiquidGlassVoiceOrbView(
+                    isRecording: stt.isRecording,
+                    isTranscribing: stt.isTranscribing,
+                    duration: stt.recordingDuration,
+                    onTap: { toggleVoiceOrbRecording() }
+                )
+                .frame(width: 96, height: 96)
+                .transition(.scale(scale: 0.86).combined(with: .opacity))
+            } else {
+                liquidGlassInputPill
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .popover(isPresented: $isShowingVoiceErrorPopover, arrowEdge: .top) {
+            voiceErrorPopover
+        }
     }
 
-    // MARK: - Editor
-
-    /// One rounded box: the editor on top, every control on one row beneath it.
-    /// The box is the only filled shape in the composer — there is no second
-    /// container behind it, so the whole thing reads as one object instead of a
-    /// card sitting inside a bar. It is also deliberately short: two lines of
-    /// text, then the controls (§6).
-    private var composerBox: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // The placeholder is drawn inside the text view, at the same origin
-            // as real text, so the two cannot sit on different lines.
+    private var liquidGlassInputPill: some View {
+        HStack(alignment: .center, spacing: 10) {
             ComposerTextView(
                 text: $text,
                 placeholder: placeholder,
@@ -171,42 +195,119 @@ struct ComposerView: View {
                 onAcceptSuggestion: acceptCurrentSuggestion
             )
             .frame(minHeight: ComposerMetrics.editorMinHeight, maxHeight: ComposerMetrics.editorMaxHeight)
-            .padding(.top, 8)
-            
-            // `.frame(minHeight:maxHeight:)` is flexible: the composer floats in
-            // an overlay, so the stack that holds the box is proposed the whole
-            // pane height and hands the surplus to the only child that will take
-            // it — the editor — which then sits at `editorMaxHeight` even when it
-            // is empty (a blank band above the placeholder). `fixedSize` proposes
-            // no height, so the frame resolves to the height `sizeThatFits`
-            // measured for the text, and the box is two lines when the prompt is.
             .fixedSize(horizontal: false, vertical: true)
+            .opacity(isWaveIgniting ? 0.15 : 1.0)
 
-            if !attachments.isEmpty {
-                attachmentRow.padding(.top, ComposerMetrics.attachmentGap)
+            HStack(spacing: 8) {
+                Button {
+                    toggleVoiceOrbRecording()
+                } label: {
+                    HugeIcon(name: "mic-01", size: 18)
+                        .foregroundStyle(Color.white.opacity(0.82))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .accessibilityLabel("Voice input via Muse built-in STT")
+                .help("Voice input via Muse built-in STT (`muse voice transcribe`)")
+                .contextMenu {
+                    Button("Transcribe Audio Clip (.wav / .m4a)…") {
+                        pickAndTranscribeAudioFile()
+                    }
+                }
+
+                if isStreamingRun || canSend {
+                    primaryActionButton
+                }
             }
-
-            controlRow.padding(.top, ComposerMetrics.editorControlGap)
+            .opacity(isWaveIgniting ? 0.0 : 1.0)
         }
-        .padding(.horizontal, ComposerMetrics.boxHorizontalPadding)
-        .padding(.top, ComposerMetrics.boxTopPadding)
-        .padding(.bottom, ComposerMetrics.boxBottomPadding)
-        .background(AppTheme.composerFill, in: RoundedRectangle(cornerRadius: ComposerMetrics.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: ComposerMetrics.cornerRadius, style: .continuous)
-                .stroke(isDropTargeted ? Color.accentColor : AppTheme.composerStroke, lineWidth: isDropTargeted ? 2 : 1)
+        .padding(.leading, 18)
+        .padding(.trailing, 14)
+        .padding(.vertical, 11)
+        .background(
+            ZStack {
+                LiquidGlassCardBackground(
+                    cornerRadius: 28,
+                    isDarkTopPill: true,
+                    isDropTargeted: isDropTargeted
+                )
+
+                // Stage 1 of `orb1.gif`: Horizontal chromatic plasma wave igniting across the pill before contracting into the 3D orb
+                if isWaveIgniting {
+                    PlasmaHorizonWaveCanvas(isCircularOrb: false)
+                        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                        .transition(.opacity)
+                }
+            }
         )
-        .shadow(color: AppTheme.composerShadow, radius: 10, y: 4)
+        .frame(maxWidth: isWaveIgniting ? 280 : .infinity)
         .dropDestination(for: URL.self) { urls, _ in
             addAttachments(urls)
             return true
         } isTargeted: { isDropTargeted = $0 }
     }
 
+    // MARK: - Bottom Frosted Liquid Glass Control Card (Transparent Baseline Controls)
+
+    private var liquidGlassControlCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Row 1: Project Folder & Git Branch (baseline transparent style)
+            HStack(spacing: 16) {
+                ComposerContextStrip(state: state, controller: controller, isGlassSurface: true)
+                ComposerAccessControl(controller: controller)
+            }
+
+            // Row 2: Model & Reasoning Effort Picker (baseline transparent style)
+            HStack(spacing: 12) {
+                modelThinkingMenu
+                Spacer(minLength: 0)
+            }
+
+            if !attachments.isEmpty {
+                attachmentRow
+            }
+
+            // Row 3: Attach Control on left, Tachometer Credit Gauge (`15k rpm`) on right
+            HStack(spacing: 12) {
+                Button {
+                    chooseAttachments()
+                } label: {
+                    HStack(spacing: 8) {
+                        HugeIcon(name: "add-01", size: 15)
+                            .foregroundStyle(Color.white.opacity(0.84))
+                        Text("Attach files or images")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.88))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .accessibilityLabel("Attach files or images")
+                .help("Attach images or text files — drag and drop works too")
+
+                Spacer(minLength: 8)
+
+                MuseCreditBatteryButton(controller: controller, isGlassSurface: true)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(
+            LiquidGlassCardBackground(
+                cornerRadius: 24,
+                isDarkTopPill: false,
+                isDropTargeted: isDropTargeted
+            )
+        )
+    }
+
     private var placeholder: String {
         if !controller.connection.isConnected { return "Muse is not running…" }
         if controller.runtime.isBusy { return "Steer Muse, or queue a follow-up…" }
-        return "Do anything"
+        return "Search or Ask"
     }
 
     private var attachmentRow: some View {
@@ -216,80 +317,140 @@ struct ComposerView: View {
                     HStack(spacing: 6) {
                         HugeIcon(name: attachment.systemImage)
                             .imageScale(.small)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.white.opacity(0.82))
                         VStack(alignment: .leading, spacing: 0) {
                             Text(attachment.fileName)
                                 .font(.caption)
+                                .foregroundStyle(Color.white.opacity(0.95))
                                 .lineLimit(1)
                             Text(attachment.displaySize)
                                 .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(Color.white.opacity(0.65))
                         }
                         Button {
                             attachments.removeAll { $0.id == attachment.id }
                         } label: {
                             HugeIcon(name: "cancel-circle")
                                 .imageScale(.small)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(Color.white.opacity(0.72))
                         }
                         .buttonStyle(.borderless)
                         .accessibilityLabel("Remove \(attachment.fileName)")
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
-                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7))
+                    .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                    )
                 }
             }
             .padding(.horizontal, 2)
         }
     }
 
-    // MARK: - Controls
+    // MARK: - Voice Orb Morphing & STT Recording Actions
 
-    /// Left: what goes into the prompt. Right: how Pi will run it. One row, and
-    /// no more: everything that used to sit here (a queue counter, a separate
-    /// interrupt, a steering/follow-up dropdown) is either redundant with Return
-    /// or lives on the stop button's own shortcut.
-    private var controlRow: some View {
-        HStack(spacing: 10) {
-            iconButton("add-01", size: 16, help: "Attach images or text files — drag and drop works too") {
-                chooseAttachments()
+    private func toggleVoiceOrbRecording() {
+        if !isVoiceActive && !isContractedToOrb {
+            // Stage 1: Ignite the horizontal plasma wave inside the dark Liquid Glass input pill
+            withAnimation(.easeOut(duration: 0.18)) {
+                isWaveIgniting = true
             }
-
-            ComposerAccessControl(controller: controller)
-            modelThinkingMenu
-
-            Spacer(minLength: 8)
-
-            HStack(spacing: 10) {
-                MuseCreditBatteryButton(controller: controller)
-                MuseVoiceSTTButton(controller: controller, text: $text)
-                primaryActionButton
+            // Stage 2: Contract pill horizontally into the centered 3D Liquid Glass Orb
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
+                    isContractedToOrb = true
+                }
             }
         }
-        .frame(height: ComposerMetrics.controlRowHeight)
-        .font(.system(size: 13))
-    }
 
-    /// Asks the focused composer to start macOS Dictation, the same action
-    /// Edit ▸ Start Dictation sends.
-    private func startDictation() {
-        state.run(.focusComposer)
-        DispatchQueue.main.async {
-            NSApp.sendAction(Selector(("startDictation:")), to: nil, from: nil)
+        Task {
+            await stt.toggleRecording(installation: controller.museInstallation) { transcribed in
+                appendTranscription(transcribed)
+            }
+            if stt.lastError != nil {
+                isShowingVoiceErrorPopover = true
+            }
+            if !stt.isRecording && !stt.isTranscribing {
+                collapseOrbBackToInputPill()
+            }
         }
     }
 
-    private func iconButton(_ systemImage: String, size: CGFloat = 12.5, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HugeIcon(name: systemImage)
-                .font(.system(size: size, weight: .regular))
+    private func syncOrbAnimationState(active: Bool) {
+        if active {
+            if !isContractedToOrb {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    isWaveIgniting = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
+                        isContractedToOrb = true
+                    }
+                }
+            }
+        } else {
+            collapseOrbBackToInputPill()
+        }
+    }
+
+    private func collapseOrbBackToInputPill() {
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+            isContractedToOrb = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+            withAnimation(.easeOut(duration: 0.20)) {
+                isWaveIgniting = false
+            }
+        }
+    }
+
+    private func appendTranscription(_ transcribed: String) {
+        let trimmed = transcribed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if text.isEmpty {
+            text = trimmed
+        } else if text.hasSuffix(" ") || text.hasSuffix("\n") {
+            text += trimmed
+        } else {
+            text += " " + trimmed
+        }
+    }
+
+    private func pickAndTranscribeAudioFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a .wav or .m4a audio clip to transcribe with `muse voice transcribe`"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            if let result = await stt.transcribeFile(at: url, installation: controller.museInstallation) {
+                appendTranscription(result)
+            } else if stt.lastError != nil {
+                isShowingVoiceErrorPopover = true
+            }
+        }
+    }
+
+    private var voiceErrorPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Muse Voice STT", huge: "mic-01")
+                .font(.callout.weight(.semibold))
+            Text(stt.lastError ?? "Could not transcribe audio.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Transcribe Audio File (.wav / .m4a)…") {
+                isShowingVoiceErrorPopover = false
+                pickAndTranscribeAudioFile()
+            }
+            .buttonStyle(.settingsPill)
         }
-        .buttonStyle(.plain)
-        .help(help)
+        .padding(12)
+        .frame(width: 260)
     }
 
     /// Idle it sends; working it stops. Both are one button, in the place the
@@ -299,9 +460,6 @@ struct ComposerView: View {
         if isStreamingRun {
             Button {
                 Task {
-                    // The documented Stop: clear the queue, put what was queued
-                    // back in the box, then abort. `⌘.` in the menu is the
-                    // hard stop that leaves the queue to Muse.
                     await controller.interrupt()
                     text = controller.drafts.text(for: controller.draftKey)
                 }
@@ -321,11 +479,11 @@ struct ComposerView: View {
             } label: {
                 HugeIcon(name: "arrow-up-02", size: 15)
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(canSend ? Color.white : Color.secondary)
+                    .foregroundStyle(canSend ? Color.white : Color.white.opacity(0.45))
                     .frame(width: 28, height: 28)
                     .background(
                         Circle()
-                            .fill(canSend ? AppTheme.accentBlue : Color.primary.opacity(0.10))
+                            .fill(canSend ? AppTheme.accentBlue : Color.white.opacity(0.14))
                     )
                     .contentShape(Circle())
             }
@@ -336,32 +494,33 @@ struct ComposerView: View {
         }
     }
 
-    /// Model and reasoning effort remain one control, but the catalog opens in a
-    /// popover rather than a native menu so provider and model names are
-    /// searchable. The popover also names the harness that supplied the catalog.
+    /// Model and reasoning effort remain one control, rendered in transparent
+    /// baseline style inside the frosted Liquid Glass card.
     private var modelThinkingMenu: some View {
         Button {
             isModelPickerPresented.toggle()
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 8) {
+                HugeIcon(name: "sparkles", size: 15)
+                    .foregroundStyle(Color.white.opacity(0.82))
                 Text(controller.model?.displayName ?? "Model")
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.95))
                     .lineLimit(1)
                 if let effort {
                     Text(effort.capitalized)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.72))
                 }
-                HugeIcon(name: "arrow-down-01")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                HugeIcon(name: "arrow-down-01", size: 11)
+                    .foregroundStyle(Color.white.opacity(0.70))
                     .padding(.leading, 2)
             }
-            .font(.system(size: 13.5))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .fixedSize()
-        .foregroundStyle(.secondary)
         .help("Model and reasoning effort used for new prompts")
         .popover(isPresented: $isModelPickerPresented, arrowEdge: .bottom) {
             ComposerModelPicker(
@@ -415,6 +574,10 @@ struct ComposerView: View {
     }
 
     private func handleEscape() {
+        if isVoiceActive || isContractedToOrb {
+            toggleVoiceOrbRecording()
+            return
+        }
         if !suggestions.isEmpty {
             text = suggestionContextCleared()
             fileMatches = []
@@ -695,6 +858,7 @@ enum AttachmentLoader {
 
 struct MuseCreditBatteryButton: View {
     var controller: PiSessionController
+    var isGlassSurface: Bool = true
     @State private var isPopoverPresented = false
     @Bindable private var usageService = MuseUsageService.shared
 
@@ -751,7 +915,13 @@ struct MuseCreditBatteryButton: View {
     private var gaugeColor: Color {
         if currentRPM <= 2_000 { return .red }
         if currentRPM <= 5_500 { return .orange }
-        return AppTheme.accentBlue
+        return isGlassSurface
+            ? Color(red: 0.25, green: 0.68, blue: 1.0)
+            : AppTheme.accentBlue
+    }
+
+    private var remainingPercentInt: Int {
+        Int((remainingFraction * 100.0).rounded())
     }
 
     var body: some View {
@@ -759,32 +929,18 @@ struct MuseCreditBatteryButton: View {
             isPopoverPresented.toggle()
             Task { await usageService.refresh(installation: controller.museInstallation) }
         } label: {
-            HStack(spacing: 5) {
-                TachometerMiniDial(
-                    fraction: remainingFraction,
-                    tint: gaugeColor
-                )
-                .frame(width: 20, height: 15)
-
-                Text(rpmLabel)
-                    .font(.system(size: 11, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(currentRPM <= 2_000 ? Color.red : Color.primary)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 24)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.primary.opacity(0.07))
+            TachometerMiniDial(
+                fraction: remainingFraction,
+                tint: gaugeColor,
+                isGlassSurface: isGlassSurface
             )
-            .overlay(
-                Capsule(style: .continuous)
-                    .strokeBorder(gaugeColor.opacity(0.32), lineWidth: 1)
-            )
-            .contentShape(Capsule())
+            .frame(width: 22, height: 16)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .help("Muse Credit Tachometer: \(currentRPM.formatted()) RPM (15k rpm full • 500 rpm low)")
+        .help("Muse Credit & Capacity Gauge (\(remainingPercentInt)% remaining)")
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
             popoverContent
         }
@@ -804,10 +960,10 @@ struct MuseCreditBatteryButton: View {
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Muse Credit Tachometer")
+                Text("Muse Credit Gauge")
                     .font(.callout.weight(.semibold))
                 Spacer()
-                Text(rpmLabel.uppercased())
+                Text("\(remainingPercentInt)%")
                     .font(.callout.monospacedDigit().weight(.bold))
                     .foregroundStyle(gaugeColor)
             }
@@ -822,12 +978,12 @@ struct MuseCreditBatteryButton: View {
             .padding(.vertical, 2)
 
             HStack {
-                Text("500 rpm (Low)")
-                    .font(.caption2.monospacedDigit())
+                Text("Low")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("15k rpm (Full)")
-                    .font(.caption2.monospacedDigit())
+                Text("Full")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
@@ -914,6 +1070,7 @@ struct MuseCreditBatteryButton: View {
 struct TachometerMiniDial: View {
     var fraction: Double
     var tint: Color
+    var isGlassSurface: Bool = true
 
     var body: some View {
         Canvas { context, size in
@@ -932,7 +1089,11 @@ struct TachometerMiniDial: View {
                 endAngle: .degrees(endDeg),
                 clockwise: false
             )
-            context.stroke(bgArc, with: .color(.primary.opacity(0.22)), style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
+            context.stroke(
+                bgArc,
+                with: .color(isGlassSurface ? Color.white.opacity(0.28) : Color.primary.opacity(0.22)),
+                style: StrokeStyle(lineWidth: 2.0, lineCap: .round)
+            )
 
             var activeArc = Path()
             activeArc.addArc(
@@ -953,7 +1114,11 @@ struct TachometerMiniDial: View {
             var needle = Path()
             needle.move(to: center)
             needle.addLine(to: tip)
-            context.stroke(needle, with: .color(.primary), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            context.stroke(
+                needle,
+                with: .color(isGlassSurface ? Color.white.opacity(0.95) : Color.primary),
+                style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+            )
 
             // Center pivot
             let hubRect = CGRect(x: center.x - 1.8, y: center.y - 1.8, width: 3.6, height: 3.6)
@@ -1029,110 +1194,333 @@ struct TachometerLargeDial: View {
             context.fill(Path(ellipseIn: hub), with: .color(tint))
         }
         .overlay(alignment: .bottom) {
-            Text("\(rpm.formatted()) RPM")
+            Text("\(Int((fraction * 100.0).rounded()))%")
                 .font(.system(size: 11, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(.secondary)
         }
     }
 }
 
-// MARK: - Muse Built-In STT Microphone Control (`muse voice transcribe`)
+// MARK: - Liquid Glass Translucent Surfaces & 3D Morphing Voice Orb (`orb1.gif`)
 
-struct MuseVoiceSTTButton: View {
-    var controller: PiSessionController
-    @Binding var text: String
-    @Bindable private var stt = MuseVoiceSTTService.shared
-    @State private var isShowingErrorPopover = false
+struct LiquidGlassBlurBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .hudWindow
+    var blendingMode: NSVisualEffectView.BlendingMode = .withinWindow
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        view.isEmphasized = true
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
+        nsView.state = .active
+    }
+}
+
+struct LiquidGlassCardBackground: View {
+    var cornerRadius: CGFloat
+    var isDarkTopPill: Bool
+    var isDropTargeted: Bool = false
 
     var body: some View {
-        Button {
-            Task {
-                await stt.toggleRecording(installation: controller.museInstallation) { transcribed in
-                    appendTranscription(transcribed)
-                }
-                if stt.lastError != nil {
-                    isShowingErrorPopover = true
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                if stt.isTranscribing {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .frame(width: 16, height: 16)
-                } else if stt.isRecording {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 8, height: 8)
-                    Text(String(format: "%d:%02d", Int(stt.recordingDuration) / 60, Int(stt.recordingDuration) % 60))
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.red)
-                } else {
-                    HugeIcon(name: "mic-01")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(minWidth: 26, minHeight: 26)
-            .padding(.horizontal, stt.isRecording ? 6 : 0)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(stt.isRecording ? Color.red.opacity(0.14) : Color.clear)
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ZStack {
+            LiquidGlassBlurBackground(
+                material: .hudWindow,
+                blendingMode: .withinWindow
             )
-            .contentShape(Capsule())
+
+            if isDarkTopPill {
+                // Dark obsidian top fading into smoky frosted glass at the bottom (matching Screenshot 14.04.21 & orb1.gif)
+                LinearGradient(
+                    stops: [
+                        .init(color: Color(red: 0.04, green: 0.04, blue: 0.06, opacity: 0.95), location: 0.0),
+                        .init(color: Color(red: 0.12, green: 0.12, blue: 0.15, opacity: 0.88), location: 0.52),
+                        .init(color: Color(red: 0.36, green: 0.35, blue: 0.39, opacity: 0.78), location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                // Subtle bottom inner glass refraction sheen
+                LinearGradient(
+                    colors: [
+                        Color.clear,
+                        Color.white.opacity(0.14)
+                    ],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+            } else {
+                // Translucent smoky frosted glass card for the lower control deck
+                LinearGradient(
+                    stops: [
+                        .init(color: Color(red: 0.39, green: 0.38, blue: 0.42, opacity: 0.72), location: 0.0),
+                        .init(color: Color(red: 0.48, green: 0.47, blue: 0.51, opacity: 0.62), location: 0.55),
+                        .init(color: Color(red: 0.55, green: 0.54, blue: 0.58, opacity: 0.56), location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.10),
+                        Color.clear,
+                        Color.white.opacity(0.08)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        }
+        .clipShape(shape)
+        .overlay(
+            shape.strokeBorder(
+                isDropTargeted
+                    ? AnyShapeStyle(Color.accentColor)
+                    : AnyShapeStyle(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(isDarkTopPill ? 0.38 : 0.48),
+                                Color.white.opacity(0.22),
+                                Color.white.opacity(isDarkTopPill ? 0.52 : 0.38)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    ),
+                lineWidth: isDropTargeted ? 2.0 : 1.1
+            )
+        )
+        .shadow(
+            color: Color.black.opacity(isDarkTopPill ? 0.26 : 0.18),
+            radius: isDarkTopPill ? 18 : 16,
+            y: isDarkTopPill ? 8 : 7
+        )
+    }
+}
+
+/// The 3D Liquid Glass Sphere / Voice Orb that the top input pill morphs into
+/// when the microphone button is clicked (`orb1.gif`, frames 6–22).
+struct LiquidGlassVoiceOrbView: View {
+    var isRecording: Bool
+    var isTranscribing: Bool
+    var duration: TimeInterval
+    var onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                // Soft outer ambient glass halo
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color.black.opacity(0.28),
+                                Color(red: 0.22, green: 0.58, blue: 0.95).opacity(0.10),
+                                Color.clear
+                            ],
+                            center: .center,
+                            startRadius: 32,
+                            endRadius: 58
+                        )
+                    )
+                    .frame(width: 114, height: 114)
+
+                // Core 96x96 3D Liquid Glass Sphere
+                ZStack {
+                    LiquidGlassBlurBackground(
+                        material: .hudWindow,
+                        blendingMode: .withinWindow
+                    )
+
+                    // Base sphere gradient: glossy obsidian-black upper hemisphere, smoky silver-frosted glass lower hemisphere
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color(red: 0.02, green: 0.02, blue: 0.04, opacity: 0.98), location: 0.0),
+                            .init(color: Color(red: 0.05, green: 0.06, blue: 0.09, opacity: 0.95), location: 0.44),
+                            .init(color: Color(red: 0.56, green: 0.56, blue: 0.60, opacity: 0.58), location: 0.72),
+                            .init(color: Color(red: 0.74, green: 0.74, blue: 0.78, opacity: 0.50), location: 1.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+
+                    // 60fps undulating chromatic plasma horizon wave (icy sky-blue top bloom, blazing white core ribbon, warm amber-gold bottom bloom)
+                    PlasmaHorizonWaveCanvas(isCircularOrb: true)
+
+                    // Top-left 3D glass dome specular highlight
+                    Ellipse()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.26),
+                                    Color.white.opacity(0.04),
+                                    Color.clear
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 62, height: 30)
+                        .offset(y: -26)
+                        .blur(radius: 2)
+
+                    // Bottom inner crescent glass reflection
+                    Circle()
+                        .trim(from: 0.08, to: 0.42)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.10),
+                                    Color.white.opacity(0.65),
+                                    Color.white.opacity(0.10)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            style: StrokeStyle(lineWidth: 2.2, lineCap: .round)
+                        )
+                        .frame(width: 88, height: 88)
+                }
+                .frame(width: 92, height: 92)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.45),
+                                    Color.white.opacity(0.22),
+                                    Color.white.opacity(0.68)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1.3
+                        )
+                        .frame(width: 92, height: 92)
+                )
+                .shadow(color: Color.black.opacity(0.32), radius: 18, y: 9)
+            }
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .help(stt.isRecording ? "Stop recording & transcribe via `muse voice transcribe`" : "Voice input via Muse built-in STT (`muse voice transcribe`)")
-        .contextMenu {
-            Button("Transcribe Audio Clip (.wav / .m4a)…") {
-                pickAndTranscribeAudioFile()
-            }
-        }
-        .popover(isPresented: $isShowingErrorPopover, arrowEdge: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Muse Voice STT", huge: "mic-01")
-                    .font(.callout.weight(.semibold))
-                Text(stt.lastError ?? "Could not transcribe audio.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Transcribe Audio File (.wav / .m4a)…") {
-                    isShowingErrorPopover = false
-                    pickAndTranscribeAudioFile()
+        .help(
+            isTranscribing
+                ? "Transcribing voice via `muse voice transcribe`…"
+                : "Listening (\(String(format: "%d:%02d", Int(duration) / 60, Int(duration) % 60))) — click Orb or press Esc to transcribe"
+        )
+    }
+}
+
+/// 60fps animated chromatic plasma wave rendered inside the contracting pill (Frames 3–5)
+/// and across the equator of the 3D Liquid Glass Voice Orb (Frames 6–22 of `orb1.gif`).
+struct PlasmaHorizonWaveCanvas: View {
+    var isCircularOrb: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            Canvas { context, size in
+                let midY = size.height * (isCircularOrb ? 0.53 : 0.56)
+                let width = size.width
+                let steps = 48
+
+                func waveY(xNorm: Double, phaseOffset: Double, ampScale: Double) -> CGFloat {
+                    // Envelope tapers gently near edges inside the sphere
+                    let edgeEnvelope = isCircularOrb
+                        ? sin(xNorm * .pi)
+                        : (0.45 + 0.55 * sin(xNorm * .pi))
+                    let primary = sin(xNorm * .pi * 2.15 - t * 3.8 + phaseOffset)
+                    let secondary = 0.45 * cos(xNorm * .pi * 3.4 + t * 2.6 - phaseOffset * 0.7)
+                    let amp = (isCircularOrb ? 6.5 : 5.0) * ampScale * edgeEnvelope
+                    return midY + CGFloat(primary + secondary) * CGFloat(amp)
                 }
-                .buttonStyle(.settingsPill)
-            }
-            .padding(12)
-            .frame(width: 260)
-        }
-    }
 
-    private func appendTranscription(_ transcribed: String) {
-        let trimmed = transcribed.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        if text.isEmpty {
-            text = trimmed
-        } else if text.hasSuffix(" ") || text.hasSuffix("\n") {
-            text += trimmed
-        } else {
-            text += " " + trimmed
-        }
-    }
+                func buildRibbonPath(phaseOffset: Double, yOffset: CGFloat, thickness: CGFloat, ampScale: Double = 1.0) -> Path {
+                    var path = Path()
+                    for i in 0...steps {
+                        let u = Double(i) / Double(steps)
+                        let x = CGFloat(u) * width
+                        let y = waveY(xNorm: u, phaseOffset: phaseOffset, ampScale: ampScale) + yOffset - thickness * 0.5
+                        if i == 0 {
+                            path.move(to: CGPoint(x: x, y: y))
+                        } else {
+                            path.addLine(to: CGPoint(x: x, y: y))
+                        }
+                    }
+                    for i in (0...steps).reversed() {
+                        let u = Double(i) / Double(steps)
+                        let x = CGFloat(u) * width
+                        let y = waveY(xNorm: u, phaseOffset: phaseOffset + 0.35, ampScale: ampScale) + yOffset + thickness * 0.5
+                        path.addLine(to: CGPoint(x: x, y: y))
+                    }
+                    path.closeSubpath()
+                    return path
+                }
 
-    private func pickAndTranscribeAudioFile() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose a .wav or .m4a audio clip to transcribe with `muse voice transcribe`"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task {
-            if let result = await stt.transcribeFile(at: url, installation: controller.museInstallation) {
-                appendTranscription(result)
-            } else if stt.lastError != nil {
-                isShowingErrorPopover = true
+                // 1. Deep upper sky-blue / cyan atmospheric bloom
+                var deepCyanCtx = context
+                deepCyanCtx.addFilter(.blur(radius: isCircularOrb ? 11 : 13))
+                let deepCyanPath = buildRibbonPath(phaseOffset: 0.0, yOffset: -9, thickness: isCircularOrb ? 22 : 18, ampScale: 1.15)
+                deepCyanCtx.fill(
+                    deepCyanPath,
+                    with: .linearGradient(
+                        Gradient(colors: [
+                            Color(red: 0.08, green: 0.55, blue: 1.0, opacity: 0.85),
+                            Color(red: 0.28, green: 0.82, blue: 1.0, opacity: 0.95),
+                            Color(red: 0.08, green: 0.55, blue: 1.0, opacity: 0.85)
+                        ]),
+                        startPoint: CGPoint(x: 0, y: midY - 12),
+                        endPoint: CGPoint(x: width, y: midY - 4)
+                    )
+                )
+
+                // 2. Warm lower amber-gold / orange atmospheric bloom
+                var amberCtx = context
+                amberCtx.addFilter(.blur(radius: isCircularOrb ? 9 : 11))
+                let amberPath = buildRibbonPath(phaseOffset: 0.5, yOffset: 7, thickness: isCircularOrb ? 16 : 14, ampScale: 1.05)
+                amberCtx.fill(
+                    amberPath,
+                    with: .linearGradient(
+                        Gradient(colors: [
+                            Color(red: 1.0, green: 0.52, blue: 0.12, opacity: 0.80),
+                            Color(red: 1.0, green: 0.74, blue: 0.26, opacity: 0.92),
+                            Color(red: 1.0, green: 0.52, blue: 0.12, opacity: 0.80)
+                        ]),
+                        startPoint: CGPoint(x: 0, y: midY + 4),
+                        endPoint: CGPoint(x: width, y: midY + 14)
+                    )
+                )
+
+                // 3. Mid cyan-white transition glow
+                var midGlowCtx = context
+                midGlowCtx.addFilter(.blur(radius: 5.0))
+                let midGlowPath = buildRibbonPath(phaseOffset: 0.2, yOffset: -2, thickness: 11, ampScale: 1.0)
+                midGlowCtx.fill(
+                    midGlowPath,
+                    with: .color(Color(red: 0.65, green: 0.92, blue: 1.0, opacity: 0.92))
+                )
+
+                // 4. Blazing white plasma core ribbon
+                var coreCtx = context
+                coreCtx.addFilter(.blur(radius: 1.8))
+                let corePath = buildRibbonPath(phaseOffset: 0.15, yOffset: 0, thickness: isCircularOrb ? 6.5 : 5.5, ampScale: 0.95)
+                coreCtx.fill(
+                    corePath,
+                    with: .color(Color.white.opacity(0.98))
+                )
             }
         }
     }
 }
+

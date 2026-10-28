@@ -22,18 +22,11 @@ struct ComposerTextView: NSViewRepresentable {
     /// you are answering are set at the same scale.
     static let fontSize: CGFloat = Typography.baseSize
 
-    /// The composer box follows the appearance (`AppTheme.composerFill`): a dark
-    /// grey box in the dark one, a white box in the light one. The text, caret
-    /// and placeholder resolve per appearance to match it.
-    static let textColor = adaptive(
-        dark: NSColor(red: 0.92, green: 0.92, blue: 0.93, alpha: 1),
-        light: NSColor(white: 0.1, alpha: 1)
-    )
+    /// The composer input pill uses a dark smoked Liquid Glass surface in both
+    /// light and dark appearances, so text and placeholder use crisp light ink.
+    static let textColor = NSColor(srgbRed: 0.96, green: 0.96, blue: 0.98, alpha: 1.0)
     static let caretColor = textColor
-    static let placeholderColor = adaptive(
-        dark: NSColor(red: 0.92, green: 0.92, blue: 0.93, alpha: 0.45),
-        light: NSColor(white: 0, alpha: 0.35)
-    )
+    static let placeholderColor = NSColor(srgbRed: 0.86, green: 0.86, blue: 0.90, alpha: 0.56)
 
     private static func adaptive(dark: NSColor, light: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
@@ -41,12 +34,9 @@ struct ComposerTextView: NSViewRepresentable {
         }
     }
 
-    /// How many lines the box always shows, and how many it shows before it
-    /// scrolls instead of growing any further. The composer floats over the
-    /// transcript (§6), so its ceiling is deliberately low: two lines is the
-    /// floor that keeps the box from collapsing to a sliver, six is the most of
-    /// the conversation it may cover as a prompt grows.
-    static let minimumLines = 2
+    /// Starts at one sleek line in the Liquid Glass input pill and expands up to
+    /// six lines before scrolling.
+    static let minimumLines = 1
     static let maximumLines = 6
 
     /// One line of this view's own font, as AppKit lays it out. Derived rather
