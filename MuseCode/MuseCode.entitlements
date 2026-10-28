@@ -1,5 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<!-- Developer ID distribution outside the Mac App Store requires App Sandbox
+	     disabled so Muse Code can spawn the user's `muse`/`pi` CLI toolchain,
+	     git, and workspace shells without sandbox restrictions. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<!-- Outbound network client for Muse usage telemetry, update checks, and
+	     model provider requests under Hardened Runtime. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- User-selected workspace access under Hardened Runtime. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<!-- Microphone capture for composer voice transcription under Hardened Runtime. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
 </plist>

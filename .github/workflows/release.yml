@@ -1,0 +1,168 @@
+name: Release (macOS Debug DMG + Notarization)
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      require_notarization:
+        description: "Fail the build if Apple Developer ID / notarization secrets are missing"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-dmg-release:
+    name: Build, Sign, Notarize & Upload Debug DMG
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine release version & tag
+        id: meta
+        run: |
+          BASE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            APP_VERSION="${TAG_NAME#v}"
+            PRERELEASE="false"
+          else
+            TAG_NAME="v${BASE_VERSION}-dev.${GITHUB_RUN_NUMBER}"
+            APP_VERSION="${BASE_VERSION}"
+            PRERELEASE="true"
+          fi
+          echo "app_version=${APP_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag_name=${TAG_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${PRERELEASE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Import Apple Developer ID certificate (if configured)
+        id: signing_cert
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -z "${MACOS_CERTIFICATE}" || -z "${MACOS_CERTIFICATE_PASSWORD}" ]]; then
+            echo "signed=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::MACOS_CERTIFICATE secret is not configured; falling back to ad-hoc Hardened Runtime signing."
+            exit 0
+          fi
+
+          KEYCHAIN_PATH="${RUNNER_TEMP}/muse-signing.keychain-db"
+          KEYCHAIN_PASS="$(uuidgen)"
+          CERT_PATH="${RUNNER_TEMP}/certificate.p12"
+
+          echo "${MACOS_CERTIFICATE}" | base64 --decode > "${CERT_PATH}"
+          security create-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" -P "${MACOS_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+
+          rm -f "${CERT_PATH}"
+          echo "signed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Build, Sign, Notarize & Verify Debug DMG
+        id: dmg
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          REQUIRE_NOTARIZATION: ${{ inputs.require_notarization }}
+        run: |
+          chmod +x Tools/build-dmg.sh scripts/check-notarization.sh
+          if [[ "${REQUIRE_NOTARIZATION}" == "true" && "${{ steps.signing_cert.outputs.signed }}" != "true" ]]; then
+            echo "ERROR: require_notarization=true, but MACOS_CERTIFICATE secret is not configured." >&2
+            exit 1
+          fi
+
+          ./Tools/build-dmg.sh --debug
+
+          STATUS="$(cat build/notarization.status)"
+          echo "notarization_status=${STATUS}" >> "${GITHUB_OUTPUT}"
+          if [[ "${STATUS}" == "notarized" ]]; then
+            ./scripts/check-notarization.sh build/MuseCode.dmg
+          elif [[ "${REQUIRE_NOTARIZATION}" == "true" ]]; then
+            echo "ERROR: require_notarization=true, but build/notarization.status=${STATUS}" >&2
+            exit 1
+          else
+            ./scripts/check-notarization.sh build/MuseCode.dmg --allow-adhoc
+          fi
+
+          DMG_PATH="$(ls build/muse-code-macos-*-debug.dmg | head -n 1)"
+          shasum -a 256 "${DMG_PATH}" build/MuseCode.dmg build/MuseCode.zip > build/SHA256SUMS.txt
+          cat build/SHA256SUMS.txt
+
+      - name: Upload Debug DMG Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: muse-code-macos-${{ steps.meta.outputs.app_version }}-debug-dmg
+          path: |
+            build/muse-code-macos-*-debug.dmg
+            build/MuseCode.dmg
+            build/MuseCode.zip
+            build/SHA256SUMS.txt
+            build/notarization.status
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish GitHub Release with Debug DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          NOTARY_STATUS: ${{ steps.dmg.outputs.notarization_status }}
+        run: |
+          NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
+          cat > "${NOTES_FILE}" <<EOF
+          ## Muse Code ${TAG_NAME} (macOS Debug DMG)
+
+          - **Commit**: \`${GITHUB_SHA}\`
+          - **Configuration**: \`Debug\` (\`ENABLE_DEBUG_DYLIB=NO\`, standalone runnable Mach-O executable)
+          - **Notarization Status**: \`${NOTARY_STATUS}\`
+          - **Self-Test Verification**: Passed \`Pie.app/Contents/MacOS/Pie --selftest\` from mounted DMG
+
+          ### SHA-256 Checksums
+          \`\`\`
+          $(cat build/SHA256SUMS.txt)
+          \`\`\`
+          EOF
+
+          PRE_FLAG=""
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            PRE_FLAG="--prerelease"
+          fi
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" \
+              build/muse-code-macos-*-debug.dmg \
+              build/MuseCode.dmg \
+              build/MuseCode.zip \
+              build/SHA256SUMS.txt \
+              --clobber
+          else
+            gh release create "${TAG_NAME}" \
+              build/muse-code-macos-*-debug.dmg \
+              build/MuseCode.dmg \
+              build/MuseCode.zip \
+              build/SHA256SUMS.txt \
+              --target "${GITHUB_SHA}" \
+              --title "Muse Code ${TAG_NAME}" \
+              --notes-file "${NOTES_FILE}" \
+              ${PRE_FLAG}
+          fi

@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-debug-dmg:
+    name: Build, Verify & Upload Debug DMG (macOS arm64)
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Lint shell scripts & plists
+        run: |
+          bash -n Tools/build-dmg.sh
+          bash -n scripts/check-notarization.sh
+          bash -n scripts/prepare-apple-secrets.sh
+          plutil -lint MuseCode/MuseCode.entitlements
+
+      - name: Import Apple Developer ID certificate (if configured)
+        id: signing_cert
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -z "${MACOS_CERTIFICATE}" || -z "${MACOS_CERTIFICATE_PASSWORD}" ]]; then
+            echo "signed=false" >> "${GITHUB_OUTPUT}"
+            echo "MACOS_CERTIFICATE secret not set; building ad-hoc Hardened Runtime Debug DMG."
+            exit 0
+          fi
+
+          KEYCHAIN_PATH="${RUNNER_TEMP}/muse-signing.keychain-db"
+          KEYCHAIN_PASS="$(uuidgen)"
+          CERT_PATH="${RUNNER_TEMP}/certificate.p12"
+
+          echo "${MACOS_CERTIFICATE}" | base64 --decode > "${CERT_PATH}"
+          security create-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" -P "${MACOS_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+          rm -f "${CERT_PATH}"
+          echo "signed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Build, Sign & Package Debug DMG
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          chmod +x Tools/build-dmg.sh scripts/check-notarization.sh
+          if [[ "${{ steps.signing_cert.outputs.signed }}" == "true" && -n "${APPLE_ID}" && -n "${APPLE_APP_SPECIFIC_PASSWORD}" && -n "${APPLE_TEAM_ID}" ]]; then
+            ./Tools/build-dmg.sh --debug
+            ./scripts/check-notarization.sh build/MuseCode.dmg
+          else
+            ./Tools/build-dmg.sh --debug --no-notarize
+            ./scripts/check-notarization.sh build/MuseCode.dmg --allow-adhoc
+          fi
+
+      - name: Mount Debug DMG & Run Packaged App Self-Test
+        run: |
+          MOUNT_DIR="$(mktemp -d /tmp/muse-ci-dmg.XXXXXX)"
+          trap 'hdiutil detach "${MOUNT_DIR}" -force >/dev/null 2>&1 || true; rmdir "${MOUNT_DIR}" >/dev/null 2>&1 || true' EXIT
+          hdiutil attach build/MuseCode.dmg -mountpoint "${MOUNT_DIR}" -nobrowse -readonly
+          ls -la "${MOUNT_DIR}"
+          test -d "${MOUNT_DIR}/Pie.app"
+          test -L "${MOUNT_DIR}/Applications"
+          codesign --verify --deep --strict --verbose=2 "${MOUNT_DIR}/Pie.app"
+          "${MOUNT_DIR}/Pie.app/Contents/MacOS/Pie" --selftest
+
+      - name: Upload Runnable Debug DMG Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: muse-code-macos-debug-dmg
+          path: |
+            build/muse-code-macos-*-debug.dmg
+            build/MuseCode.dmg
+            build/MuseCode.zip
+            build/notarization.status
+          if-no-files-found: error
+          retention-days: 30
