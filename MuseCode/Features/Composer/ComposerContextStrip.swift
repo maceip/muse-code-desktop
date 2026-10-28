@@ -32,7 +32,6 @@ struct ComposerContextStrip: View {
                 }
                 .popover(isPresented: $showsBranches, arrowEdge: .top) { branchPicker(current: branch) }
             }
-            Spacer(minLength: 0)
         }
         .frame(height: 28)
     }

@@ -38,6 +38,7 @@ struct InspectorView: View {
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    .frame(maxHeight: .infinity)
                 } else {
                     MuseRightSidebarPanel(state: state, controller: controller)
                 }
@@ -49,7 +50,6 @@ struct InspectorView: View {
                 )
             }
         }
-        .frame(maxHeight: .infinity)
         .background(AppTheme.elevated)
     }
 }
@@ -59,15 +59,19 @@ struct InspectorView: View {
 struct MuseRightSidebarPanel: View {
     @Bindable var state: AppState
     var controller: PiSessionController
+    var initiallyExpandMessages: Bool = false
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             MuseOverviewCard(state: state, controller: controller)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            MuseAgentMessagesCard(state: state, controller: controller)
                 .frame(maxWidth: .infinity)
-                .frame(minHeight: 210, idealHeight: 245, maxHeight: 300)
+
+            MuseAgentMessagesCard(
+                state: state,
+                controller: controller,
+                initiallyExpanded: initiallyExpandMessages
+            )
+            .frame(maxWidth: .infinity)
         }
         .padding(10)
         .background(AppTheme.elevated)
@@ -144,131 +148,111 @@ struct MuseOverviewCard: View {
             .padding(.top, 11)
             .padding(.bottom, 8)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // 4 Quick-Action Navigation Rows: Review, Files, Terminal, Extensions >
-                    VStack(spacing: 1) {
-                        overviewNavRow(
-                            icon: "note-01",
-                            title: "Review",
-                            badge: changedFileCount > 0 ? "\(changedFileCount)" : nil
-                        ) {
-                            state.openReviewInInspector()
-                        }
-
-                        overviewNavRow(
-                            icon: "folder-02",
-                            title: "Files",
-                            badge: nil
-                        ) {
-                            state.openFilesInInspector()
-                        }
-
-                        overviewNavRow(
-                            icon: "terminal",
-                            title: "Terminal",
-                            badge: state.isTerminalVisible ? "On" : nil
-                        ) {
-                            state.toggleTerminal()
-                        }
-
-                        overviewNavRow(
-                            icon: "puzzle",
-                            title: "Extensions",
-                            showsChevron: true
-                        ) {
-                            state.openExtensionsInInspector()
-                        }
+            VStack(alignment: .leading, spacing: 0) {
+                // 4 Quick-Action Navigation Rows: Review, Files, Terminal, Extensions >
+                VStack(spacing: 1) {
+                    overviewNavRow(
+                        icon: "note-01",
+                        title: "Review",
+                        badge: changedFileCount > 0 ? "\(changedFileCount)" : nil
+                    ) {
+                        state.openReviewInInspector()
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.bottom, 8)
 
+                    overviewNavRow(
+                        icon: "folder-02",
+                        title: "Files",
+                        badge: nil
+                    ) {
+                        state.openFilesInInspector()
+                    }
+
+                    overviewNavRow(
+                        icon: "terminal",
+                        title: "Terminal",
+                        badge: state.isTerminalVisible ? "On" : nil
+                    ) {
+                        state.toggleTerminal()
+                    }
+
+                    overviewNavRow(
+                        icon: "puzzle",
+                        title: "Extensions",
+                        showsChevron: true
+                    ) {
+                        state.openExtensionsInInspector()
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 8)
+
+                // Subagents section (only shown when subagents exist)
+                if !controller.subagents.isEmpty {
                     Divider()
                         .padding(.horizontal, 12)
 
-                    // Subagents section
                     overviewSectionHeader(title: "Subagents", count: controller.subagents.count)
 
-                    if controller.subagents.isEmpty {
-                        Text("No subagents spawned in this session yet.")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 8)
-                    } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(visibleSubagents) { subagent in
-                                subagentRow(subagent)
-                            }
-                            if controller.subagents.count > 3 {
-                                Button(showAllSubagents ? "Show less" : "See all") {
-                                    withAnimation(.easeInOut(duration: 0.15)) {
-                                        showAllSubagents.toggle()
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 4)
-                            }
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(visibleSubagents) { subagent in
+                            subagentRow(subagent)
                         }
-                        .padding(.bottom, 6)
+                        if controller.subagents.count > 3 {
+                            Button(showAllSubagents ? "Show less" : "See all") {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showAllSubagents.toggle()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                        }
                     }
+                    .padding(.bottom, 6)
+                }
 
+                // Background Tasks section (only shown when background tasks exist)
+                if !controller.backgroundTasks.isEmpty {
                     Divider()
                         .padding(.horizontal, 12)
 
-                    // Background Tasks section
                     overviewSectionHeader(title: "Background Tasks", count: controller.backgroundTasks.count)
 
-                    if controller.backgroundTasks.isEmpty {
-                        Text("No background tasks running.")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 8)
-                    } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(controller.backgroundTasks) { task in
-                                backgroundTaskRow(task)
-                            }
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(controller.backgroundTasks) { task in
+                            backgroundTaskRow(task)
                         }
-                        .padding(.bottom, 6)
                     }
+                    .padding(.bottom, 6)
+                }
 
+                // Artifacts section (only shown when artifacts exist)
+                if !controller.sessionArtifacts.isEmpty {
                     Divider()
                         .padding(.horizontal, 12)
 
-                    // Artifacts section
                     overviewSectionHeader(title: "Artifacts", count: controller.sessionArtifacts.count)
 
-                    if controller.sessionArtifacts.isEmpty {
-                        Text("Files written and plans created in this session appear here.")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 10)
-                    } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(visibleArtifacts) { artifact in
-                                artifactRow(artifact)
-                            }
-                            if controller.sessionArtifacts.count > 4 {
-                                Button(showAllArtifacts ? "Show less" : "See all") {
-                                    withAnimation(.easeInOut(duration: 0.15)) {
-                                        showAllArtifacts.toggle()
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 4)
-                            }
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(visibleArtifacts) { artifact in
+                            artifactRow(artifact)
                         }
-                        .padding(.bottom, 8)
+                        if controller.sessionArtifacts.count > 4 {
+                            Button(showAllArtifacts ? "Show less" : "See all") {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showAllArtifacts.toggle()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                        }
                     }
+                    .padding(.bottom, 8)
                 }
             }
         }
@@ -474,30 +458,47 @@ struct MuseOverviewCard: View {
 struct MuseAgentMessagesCard: View {
     @Bindable var state: AppState
     var controller: PiSessionController
+    var initiallyExpanded: Bool = false
 
     @State private var targetRecipient: String = ""
     @State private var messageDraft: String = ""
     @State private var isSending = false
+    @State private var isManuallyExpanded = false
+
+    private var isExpanded: Bool {
+        !controller.agentMessages.isEmpty || isManuallyExpanded || initiallyExpanded
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
+            // Header (collapses body when there are 0 messages unless expanded by the user)
             HStack(spacing: 6) {
-                HugeIcon(name: "message-multiple-01", size: 14)
-                    .foregroundStyle(Color.accentColor)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        isManuallyExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        HugeIcon(name: "message-multiple-01", size: 14)
+                            .foregroundStyle(Color.accentColor)
 
-                Text("Muse Agent Messages")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(.primary)
+                        Text("Muse Agent Messages")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(.primary)
 
-                Text("\(controller.agentMessages.count)")
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(.quaternary.opacity(0.6), in: Capsule())
+                        Text("\(controller.agentMessages.count)")
+                            .font(.system(size: 11, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(.quaternary.opacity(0.6), in: Capsule())
 
-                Spacer(minLength: 0)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
 
                 let peerSessions = state.projects.flatMap(\.sessions).filter {
                     $0.sessionId != nil && $0.sessionId != controller.sessionId
@@ -507,6 +508,7 @@ struct MuseAgentMessagesCard: View {
                         ForEach(peerSessions) { peer in
                             Button(peer.displayName) {
                                 targetRecipient = peer.sessionId ?? peer.displayName
+                                isManuallyExpanded = true
                             }
                         }
                     } label: {
@@ -527,88 +529,86 @@ struct MuseAgentMessagesCard: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Refresh agent messages")
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        isManuallyExpanded.toggle()
+                    }
+                } label: {
+                    HugeIcon(name: isExpanded ? "arrow-up-01" : "arrow-down-01", size: 12)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(isExpanded ? "Collapse Muse Agent Messages" : "Expand to send a Muse agent message")
             }
             .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
+            .padding(.vertical, 9)
 
-            Divider()
-                .padding(.horizontal, 12)
+            if isExpanded {
+                Divider()
+                    .padding(.horizontal, 12)
 
-            // Message feed
-            if controller.agentMessages.isEmpty {
-                VStack(spacing: 4) {
-                    Spacer(minLength: 0)
-                    Text("No cross-session or subagent messages yet")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Text("Peer session messages (`muse session-message`) and subagent replies appear here.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(controller.agentMessages) { msg in
-                            agentMessageRow(msg)
+                // Message feed (only shown when messages exist)
+                if !controller.agentMessages.isEmpty {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(controller.agentMessages) { msg in
+                                agentMessageRow(msg)
+                            }
                         }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: 160)
+
+                    Divider()
+                }
+
+                // Inline Compose Bar for `muse session-message send`
+                VStack(spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text("To:")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        TextField(
+                            "target session id or name",
+                            text: $targetRecipient
+                        )
+                        .textFieldStyle(.plain)
+                        .font(.caption2.monospaced())
                     }
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+                    .padding(.top, 6)
 
-            Divider()
+                    HStack(spacing: 6) {
+                        TextField("Send Muse agent message…", text: $messageDraft)
+                            .textFieldStyle(.plain)
+                            .font(.caption)
+                            .onSubmit { sendAgentMessage() }
 
-            // Inline Compose Bar for `muse session-message send`
-            VStack(spacing: 5) {
-                HStack(spacing: 6) {
-                    Text("To:")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    TextField(
-                        "target session id or name",
-                        text: $targetRecipient
-                    )
-                    .textFieldStyle(.plain)
-                    .font(.caption2.monospaced())
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 6)
-
-                HStack(spacing: 6) {
-                    TextField("Send Muse agent message…", text: $messageDraft)
-                        .textFieldStyle(.plain)
-                        .font(.caption)
-                        .onSubmit { sendAgentMessage() }
-
-                    Button {
-                        sendAgentMessage()
-                    } label: {
-                        if isSending {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            HugeIcon(name: "arrow-up-01", size: 12)
-                                .foregroundStyle(.white)
-                                .frame(width: 20, height: 20)
-                                .background(
-                                    Circle().fill(canSend ? AppTheme.accentBlue : Color.secondary.opacity(0.35))
-                                )
+                        Button {
+                            sendAgentMessage()
+                        } label: {
+                            if isSending {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                HugeIcon(name: "arrow-up-01", size: 12)
+                                    .foregroundStyle(.white)
+                                    .frame(width: 20, height: 20)
+                                    .background(
+                                        Circle().fill(canSend ? AppTheme.accentBlue : Color.secondary.opacity(0.35))
+                                    )
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .disabled(!canSend || isSending)
+                        .help("Send via muse session-message send")
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend || isSending)
-                    .help("Send via muse session-message send")
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 7)
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 7)
+                .background(AppTheme.background.opacity(0.5))
             }
-            .background(AppTheme.background.opacity(0.5))
         }
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

@@ -75,12 +75,6 @@ struct RootView: View {
         .overlay(alignment: .top) { titlebarCenterSearch }
         .overlay(alignment: .topTrailing) { titlebarTrailingControls }
         .ignoresSafeArea()
-        // An empty toolbar keeps the window's unified titlebar band, which is
-        // what centres the traffic lights on `titlebarRowCenter`. Everything
-        // drawn in the band is this view's own, so the toolbar draws nothing.
-        .toolbar {
-            ToolbarItem(placement: .navigation) { Color.clear.frame(width: 1, height: 1) }
-        }
         .toolbarBackground(.hidden, for: .windowToolbar)
         .task {
             if state.phase == .starting { await state.launch() }
@@ -248,10 +242,8 @@ struct RootView: View {
                 }
 
                 if isSidebarVisible {
-                    Rectangle()
-                        .fill(AppTheme.cardStroke)
-                        .frame(width: 1, height: 18)
-                        .padding(.horizontal, 2)
+                    Color.clear
+                        .frame(width: 5, height: 18)
                 }
 
                 HStack(spacing: 2) {
@@ -385,7 +377,6 @@ struct RootView: View {
 
                     InspectorView(state: state)
                         .frame(width: inspectorWidth)
-                        .frame(maxHeight: .infinity)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -393,6 +384,7 @@ struct RootView: View {
                         )
                         .shadow(color: .black.opacity(0.45), radius: 18, x: -4, y: 8)
                 }
+                .fixedSize(horizontal: false, vertical: state.inspectorArtifact == nil && !state.isNotificationsVisible)
                 .padding(.top, 10)
                 .padding(.trailing, 12)
                 .padding(.bottom, 12)

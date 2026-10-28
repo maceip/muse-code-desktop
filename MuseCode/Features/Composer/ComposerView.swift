@@ -253,23 +253,23 @@ struct ComposerView: View {
 
     private var liquidGlassControlCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Row 1: Project Folder & Git Branch (baseline transparent style)
-            HStack(spacing: 16) {
+            // Row 1: Project Folder & Git Branch on the left, Model & Reasoning Effort Selector on the right
+            HStack(spacing: 14) {
                 ComposerContextStrip(state: state, controller: controller, isGlassSurface: true)
                 ComposerAccessControl(controller: controller)
+                Spacer(minLength: 14)
+                modelThinkingMenu
             }
 
-            // Row 2: Model & Reasoning Effort Picker (baseline transparent style)
-            HStack(spacing: 12) {
-                modelThinkingMenu
-                Spacer(minLength: 0)
-            }
+            Rectangle()
+                .fill(Color.white.opacity(0.14))
+                .frame(height: 1)
 
             if !attachments.isEmpty {
                 attachmentRow
             }
 
-            // Row 3: Attach Control on left, Tachometer Credit Gauge (`15k rpm`) on right
+            // Row 2: Attach Control on left, Icon-Only Tachometer Credit Gauge on right
             HStack(spacing: 12) {
                 Button {
                     chooseAttachments()
@@ -288,13 +288,13 @@ struct ComposerView: View {
                 .accessibilityLabel("Attach files or images")
                 .help("Attach images or text files — drag and drop works too")
 
-                Spacer(minLength: 8)
+                Spacer(minLength: 14)
 
                 MuseCreditBatteryButton(controller: controller, isGlassSurface: true)
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.vertical, 13)
         .background(
             LiquidGlassCardBackground(
                 cornerRadius: 24,
@@ -307,7 +307,7 @@ struct ComposerView: View {
     private var placeholder: String {
         if !controller.connection.isConnected { return "Muse is not running…" }
         if controller.runtime.isBusy { return "Steer Muse, or queue a follow-up…" }
-        return "Search or Ask"
+        return "Ask Anything"
     }
 
     private var attachmentRow: some View {

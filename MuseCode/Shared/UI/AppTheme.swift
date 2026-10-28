@@ -142,14 +142,41 @@ struct SidebarColumnBackground: ViewModifier {
 /// opaque so the transcript keeps its contrast.
 struct WindowVibrancy: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
+        let view = WindowConfiguratorVisualEffectView()
         view.material = .sidebar
         view.blendingMode = .behindWindow
         view.state = .followsWindowActiveState
         return view
     }
 
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        (nsView as? WindowConfiguratorVisualEffectView)?.configureWindowIfNeeded()
+    }
+}
+
+private final class WindowConfiguratorVisualEffectView: NSVisualEffectView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        configureWindowIfNeeded()
+    }
+
+    func configureWindowIfNeeded() {
+        guard let window else { return }
+        window.titlebarSeparatorStyle = .none
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        if window.toolbar == nil {
+            let toolbar = NSToolbar(identifier: "MuseEmptyTitlebarToolbar")
+            toolbar.showsBaselineSeparator = false
+            window.toolbar = toolbar
+        } else {
+            window.toolbar?.showsBaselineSeparator = false
+            // Remove any SwiftUI-injected navigation separator items next to traffic lights
+            while let items = window.toolbar?.items, !items.isEmpty {
+                window.toolbar?.removeItem(at: 0)
+            }
+        }
+    }
 }
 
 extension NSColor {

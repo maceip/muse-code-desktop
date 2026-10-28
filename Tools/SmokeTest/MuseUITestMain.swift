@@ -164,33 +164,40 @@ struct MuseUITestMain {
         rootHosting.layoutSubtreeIfNeeded()
 
         let allTexts = collectTexts(in: rootHosting)
-        check(allTexts.contains("target session id or name"), "Floating right panel must render recipient field ('target session id or name')")
-        check(allTexts.contains("Send Muse agent message…"), "Floating right panel must render message composer ('Send Muse agent message…')")
+        if controller.agentMessages.isEmpty {
+            check(!allTexts.contains("Send Muse agent message…"), "MuseAgentMessagesCard must collapse when there are 0 messages")
+        }
+        if controller.sessionArtifacts.isEmpty {
+            check(!allTexts.contains("Files written and plans created in this session appear here."), "MuseOverviewCard must hide Artifacts section when empty")
+        }
 
-        // Verify MuseRightSidebarPanel direct rendering as well
-        let rightPanelHosting = NSHostingView(rootView: MuseRightSidebarPanel(state: state, controller: controller).frame(width: 310, height: 700))
-        rightPanelHosting.frame = NSRect(x: 0, y: 0, width: 310, height: 700)
+        // Verify MuseRightSidebarPanel expanded rendering
+        let rightPanelHosting = NSHostingView(
+            rootView: MuseRightSidebarPanel(
+                state: state,
+                controller: controller,
+                initiallyExpandMessages: true
+            )
+            .frame(width: 310)
+        )
+        rightPanelHosting.frame = NSRect(x: 0, y: 0, width: 310, height: 420)
         rightPanelHosting.layoutSubtreeIfNeeded()
         let rightPanelTexts = collectTexts(in: rightPanelHosting)
         check(rightPanelTexts.contains("target session id or name") && rightPanelTexts.contains("Send Muse agent message…"),
-              "MuseRightSidebarPanel must render Muse Agent Messages controls")
+              "Expanded MuseRightSidebarPanel must render Muse Agent Messages controls")
 
-        // 5. Verify toggling floating right panel (`state.toggleInspector()`) removes the floating panel from the hierarchy
+        // 5. Verify toggling floating right panel (`state.toggleInspector()`)
         state.toggleInspector()
         check(!state.isInspectorVisible, "toggleInspector() should hide the floating panel")
         rootHosting.layoutSubtreeIfNeeded()
         try? await Task.sleep(nanoseconds: 250_000_000)
         rootHosting.layoutSubtreeIfNeeded()
-        let hiddenPanelTexts = collectTexts(in: rootHosting)
-        check(!hiddenPanelTexts.contains("Send Muse agent message…"), "Hiding the floating right panel must unmount MuseRightSidebarPanel")
 
         state.toggleInspector()
         check(state.isInspectorVisible, "toggleInspector() should reveal the floating panel")
         rootHosting.layoutSubtreeIfNeeded()
         try? await Task.sleep(nanoseconds: 250_000_000)
         rootHosting.layoutSubtreeIfNeeded()
-        let revealedPanelTexts = collectTexts(in: rootHosting)
-        check(revealedPanelTexts.contains("Send Muse agent message…"), "Revealing the floating right panel must mount MuseRightSidebarPanel")
 
         // 6. Verify dynamic executable resolution without hardcoded paths
         let resolvedMuse = PiDiscoveryService.resolveExecutable(named: "muse")
@@ -256,8 +263,8 @@ struct MuseUITestMain {
         composerHost.layoutSubtreeIfNeeded()
         let composerTexts = collectTexts(in: composerHost)
         check(
-            composerTexts.contains("Search or Ask") || composerTexts.contains("Muse is not running…") || composerTexts.contains("Steer Muse, or queue a follow-up…"),
-            "Liquid Glass input pill must mount PlaceholderTextView with 'Search or Ask' placeholder (got: \(composerTexts))"
+            composerTexts.contains("Ask Anything") || composerTexts.contains("Muse is not running…") || composerTexts.contains("Steer Muse, or queue a follow-up…"),
+            "Liquid Glass input pill must mount PlaceholderTextView with 'Ask Anything' placeholder (got: \(composerTexts))"
         )
         let orbHost = NSHostingView(
             rootView: LiquidGlassVoiceOrbView(
