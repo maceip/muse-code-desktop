@@ -83,6 +83,21 @@ struct SessionRowMenu: View {
             } label: {
                 Label("Rename…", huge: "edit-02")
             }
+
+            Menu("Session Icon") {
+                ForEach(SessionIconCatalog.all) { entry in
+                    Button {
+                        state.preferences.setSessionIcon(entry.id, for: session)
+                    } label: {
+                        Label(entry.label, huge: entry.id)
+                    }
+                }
+                Divider()
+                Button("Reset to Default Icon") {
+                    state.preferences.setSessionIcon(nil, for: session)
+                }
+            }
+
             Button {
                 state.togglePin(session: session)
             } label: {

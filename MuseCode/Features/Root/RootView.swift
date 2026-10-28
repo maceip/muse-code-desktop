@@ -72,6 +72,7 @@ struct RootView: View {
             }
         }
         .overlay(alignment: .topLeading) { titlebarLeadingControls }
+        .overlay(alignment: .top) { titlebarCenterSearch }
         .overlay(alignment: .topTrailing) { titlebarTrailingControls }
         .ignoresSafeArea()
         // An empty toolbar keeps the window's unified titlebar band, which is
@@ -316,22 +317,21 @@ struct RootView: View {
         .allowsHitTesting(false)
     }
 
-    /// Search bar, workspace actions, notifications bell, and the floating right
-    /// panel toggle on the titlebar's trailing edge.
+    /// Centered search pill in the titlebar.
+    @ViewBuilder
+    private var titlebarCenterSearch: some View {
+        if state.phase == .ready, !state.isSettingsPresented {
+            TitlebarSearchPill(onOpenPalette: openPalette)
+                .padding(.top, WindowChromeMetrics.titlebarRowCenter - TitlebarIconButton.size / 2)
+        }
+    }
+
+    /// Notifications bell and the floating right panel toggle on the titlebar's
+    /// trailing edge.
     @ViewBuilder
     private var titlebarTrailingControls: some View {
         if state.phase == .ready, state.activeController != nil, !state.isSettingsPresented {
             HStack(spacing: 8) {
-                TitlebarSearchPill(onOpenPalette: openPalette)
-
-                SessionHeaderMenu(
-                    isPinned: fallbackDeletionCandidate?.isPinned ?? false,
-                    onCommand: perform,
-                    onTogglePin: {
-                        if let session = fallbackDeletionCandidate { state.togglePin(session: session) }
-                    }
-                )
-
                 TitlebarNotificationsButton(state: state)
 
                 TitlebarIconButton(
@@ -645,6 +645,7 @@ struct TitlebarIconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.35)
         .foregroundStyle(isActive || isHovering ? Color.primary : Color.secondary)
@@ -682,6 +683,7 @@ struct TitlebarNotificationsButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .foregroundStyle(state.isShowingNotifications ? Color.primary : Color.secondary)
         .onHover { isHovering = $0 }
         .help(state.isShowingNotifications ? "Hide notifications" : "Show notifications")
@@ -691,8 +693,8 @@ struct TitlebarNotificationsButton: View {
     }
 }
 
-/// Search bar pill in the titlebar between the session title and the trailing
-/// action buttons. Clicking opens the session/project/command search palette.
+/// Centered search bar pill in the titlebar with a crisp border.
+/// Clicking opens the session/project/command search palette.
 struct TitlebarSearchPill: View {
     var onOpenPalette: () -> Void
 
@@ -706,24 +708,25 @@ struct TitlebarSearchPill: View {
                 Text("Search…")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                Spacer(minLength: 10)
+                Spacer(minLength: 16)
                 Text("⇧⌘P")
                     .font(.system(size: 10.5, weight: .medium, design: .rounded))
                     .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 10)
-            .frame(width: 156, height: TitlebarIconButton.size - 2)
+            .padding(.horizontal, 12)
+            .frame(width: 240, height: TitlebarIconButton.size - 1)
             .background(
                 Capsule(style: .continuous)
-                    .fill(isHovering ? AppTheme.railSelection.opacity(0.65) : AppTheme.railSelection.opacity(0.35))
+                    .fill(isHovering ? AppTheme.railSelection.opacity(0.65) : AppTheme.railSelection.opacity(0.32))
             )
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(AppTheme.cardStroke, lineWidth: 1)
+                    .strokeBorder(Color.primary.opacity(isHovering ? 0.34 : 0.22), lineWidth: 1)
             )
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .onHover { isHovering = $0 }
         .help("Search sessions, projects, and commands (⇧⌘P)")
         .accessibilityLabel("Search")

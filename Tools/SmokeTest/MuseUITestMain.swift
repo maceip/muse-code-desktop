@@ -192,7 +192,49 @@ struct MuseUITestMain {
         check(resolvedMuse != nil, "PiDiscoveryService.resolveExecutable(named: \"muse\") must dynamically locate muse on PATH")
         check(HarnessDescriptor.descriptor(for: .museCode).fallbackBinaries.isEmpty, "HarnessDescriptor.museCode.fallbackBinaries must not contain hardcoded paths")
 
-        print("PASS: All Muse UI, layout, floating panel, dynamic PATH discovery, and backend state transitions verified.")
+        // 7. Verify Tachometer Credit Gauge (15k rpm full -> 500 rpm low)
+        check(MuseCreditBatteryButton.maxRPM == 15_000, "Tachometer max RPM must be 15,000")
+        check(MuseCreditBatteryButton.minRPM == 500, "Tachometer min RPM must be 500")
+        check(MuseCreditBatteryButton.formatRPM(15_000) == "15k rpm", "15,000 RPM must format as '15k rpm'")
+        check(MuseCreditBatteryButton.formatRPM(500) == "500 rpm", "500 RPM must format as '500 rpm'")
+        let tachoView = MuseCreditBatteryButton(controller: controller)
+        check(tachoView.currentRPM >= 500 && tachoView.currentRPM <= 15_000, "Tachometer currentRPM must be within 500...15000")
+
+        // 8. Verify SessionIcons catalog (16 icons) and 4–5 char shorthand persistence
+        check(SessionIconCatalog.all.count == 16, "SessionIconCatalog must provide 16 session icons")
+        for entry in SessionIconCatalog.all {
+            let img = NSImage.huge(entry.id)
+            check(img.size.width > 0, "SessionIcon asset '\(entry.id)' must load from Assets.xcassets/SessionIcons")
+        }
+        let sampleSession = SessionRef(
+            id: "test-session-shorthand",
+            sessionId: "test-session-shorthand",
+            filePath: nil,
+            name: "Building the new tachometer UI",
+            cwd: cwd,
+            createdAt: Date(),
+            updatedAt: Date(),
+            messageCount: 2,
+            firstUserMessage: "Building the new tachometer UI",
+            parentSession: nil,
+            isPinned: false,
+            isEphemeral: false,
+            harnessID: .museCode
+        )
+        let defaultShort = SessionIconCatalog.defaultShorthand(for: sampleSession)
+        check((4...5).contains(defaultShort.count), "Default session shorthand must be 4–5 characters (got '\(defaultShort)')")
+        state.preferences.setSessionIcon("session-rocket", for: sampleSession)
+        state.preferences.setSessionShorthand("TACHO", for: sampleSession)
+        check(state.preferences.resolvedSessionIcon(for: sampleSession) == "session-rocket", "Custom session icon must persist in PreferencesStore")
+        check(state.preferences.resolvedSessionShorthand(for: sampleSession) == "TACHO", "Custom 4–5 char shorthand must persist in PreferencesStore")
+        state.preferences.setSessionIcon(nil, for: sampleSession)
+        state.preferences.setSessionShorthand(nil, for: sampleSession)
+
+        // 9. Verify GlowingCaretView in PlaceholderTextView
+        let placeholderTV = PlaceholderTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 48))
+        check(placeholderTV.subviews.contains(where: { $0 is GlowingCaretView }), "PlaceholderTextView must contain GlowingCaretView")
+
+        print("PASS: All Muse UI, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, and backend state transitions verified.")
         exit(0)
     }
 }

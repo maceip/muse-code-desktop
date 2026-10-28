@@ -1,18 +1,15 @@
 //
 //  HugeIcon.swift
-//  PiCode
+//  MuseCode
 //
-//  Icons from Hugeicons (free "Stroke Rounded" set, MIT licensed):
-//  https://hugeicons.com
-//
-//  Only the glyphs this app uses are vendored, as template SVGs under
-//  Assets.xcassets/Hugeicons, so they tint with the surrounding foreground style.
+//  Icons from Hugeicons (free "Stroke Rounded" set, MIT licensed) and
+//  SessionIcons (curated session icon set under Assets.xcassets/SessionIcons).
 //
 
 import AppKit
 import SwiftUI
 
-/// A Hugeicons glyph drawn at a consistent, Dynamic Type-aware size.
+/// A Hugeicons or SessionIcons glyph drawn at a consistent, Dynamic Type-aware size.
 struct HugeIcon: View {
     var name: String
     /// Overrides the default size for large decorative glyphs (empty states).
@@ -28,9 +25,7 @@ struct HugeIcon: View {
     }
 }
 
-/// The Hugeicons glyph as an `Image`. The vendored assets carry an intrinsic
-/// size, so this also works inline in `Text` and as a `Label` icon AppKit draws
-/// into a menu.
+/// The Hugeicons or SessionIcons glyph as an `Image`.
 func hugeIconImage(_ name: String) -> Image {
     Image(nsImage: .huge(name))
 }
@@ -46,26 +41,34 @@ extension Label where Title == Text, Icon == Image {
 }
 
 extension NSImage {
-    /// The Hugeicons glyph as an `NSImage`, for AppKit surfaces such as menus.
+    /// Resolves a glyph from `Assets.xcassets/Hugeicons` or `Assets.xcassets/SessionIcons`.
     static func huge(_ name: String) -> NSImage {
-        if let image = NSImage(named: "Hugeicons/\(name)") {
-            image.isTemplate = true
-            return image
-        }
-        let svgRelative = "PiCode/Resources/Assets.xcassets/Hugeicons/\(name).imageset/\(name).svg"
-        let candidates = [
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(svgRelative),
-            URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("Resources/Assets.xcassets/Hugeicons/\(name).imageset/\(name).svg")
-        ]
-        for url in candidates where FileManager.default.fileExists(atPath: url.path) {
-            if let image = NSImage(contentsOf: url) {
+        for assetName in ["Hugeicons/\(name)", "SessionIcons/\(name)", name] {
+            if let image = NSImage(named: assetName) {
                 image.isTemplate = true
                 return image
             }
+        }
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let cwdRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("MuseCode")
+        for root in [repoRoot, cwdRoot] {
+            for folder in ["Hugeicons", "SessionIcons"] {
+                let svgURL = root
+                    .appendingPathComponent("Assets.xcassets/\(folder)/\(name).imageset/\(name).svg")
+                if FileManager.default.fileExists(atPath: svgURL.path),
+                   let image = NSImage(contentsOf: svgURL) {
+                    image.isTemplate = true
+                    return image
+                }
+            }
+        }
+        if let sfSymbol = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+            sfSymbol.isTemplate = true
+            return sfSymbol
         }
         let fallback = NSImage()
         fallback.isTemplate = true

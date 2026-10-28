@@ -319,14 +319,18 @@ struct ComposerView: View {
             Button {
                 send(delivery: .automatic)
             } label: {
-                HugeIcon(name: "arrow-up-01")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(canSend ? 1 : 0.55))
+                HugeIcon(name: "arrow-up-02", size: 15)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(canSend ? Color.white : Color.secondary)
                     .frame(width: 28, height: 28)
-                    .background(Circle().fill(AppTheme.accentBlue.opacity(canSend ? 1 : 0.38)))
+                    .background(
+                        Circle()
+                            .fill(canSend ? AppTheme.accentBlue : Color.primary.opacity(0.10))
+                    )
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
             .disabled(!canSend)
             .help("Send (⏎)")
         }
@@ -687,12 +691,15 @@ enum AttachmentLoader {
     }
 }
 
-// MARK: - Custom Credit & Token Tracker Pill (`muse usage --json` + Session Token Telemetry)
+// MARK: - Tachometer Credit & Capacity Gauge (15k RPM Full -> 500 RPM Low)
 
 struct MuseCreditBatteryButton: View {
     var controller: PiSessionController
     @State private var isPopoverPresented = false
     @Bindable private var usageService = MuseUsageService.shared
+
+    static let maxRPM: Int = 15_000
+    static let minRPM: Int = 500
 
     private var totalSessionTokens: Int {
         (controller.stats?.tokens.totalTokens ?? 0)
@@ -703,47 +710,48 @@ struct MuseCreditBatteryButton: View {
         usageService.allowancePercentage
     }
 
-    private var contextUsedPercent: Double? {
-        if let used = controller.contextUsagePercent, used > 0 {
-            return min(100, max(0, used))
-        }
-        if let window = controller.model?.contextWindow, window > 0, totalSessionTokens > 0 {
-            return min(100, (Double(totalSessionTokens) / Double(window)) * 100.0)
-        }
-        return nil
-    }
-
-    private var pillLabel: String {
+    /// Remaining capacity fraction (`1.0` = full credits / 15k rpm, `0.0` = almost out / 500 rpm).
+    var remainingFraction: Double {
         if let pct = allowancePercentage {
-            return "\(pct)%"
+            return min(1.0, max(0.0, Double(pct) / 100.0))
         }
+        if let usedPct = controller.contextUsagePercent, usedPct > 0 {
+            return min(1.0, max(0.0, 1.0 - (usedPct / 100.0)))
+        }
+        let capacity = max(1, controller.model?.contextWindow ?? 200_000)
         if totalSessionTokens > 0 {
-            return Format.tokens(totalSessionTokens)
+            let used = min(1.0, max(0.0, Double(totalSessionTokens) / Double(capacity)))
+            return 1.0 - used
         }
-        return "0 tok"
+        return 1.0
     }
 
-    private var fillFraction: CGFloat {
-        if let pct = allowancePercentage {
-            return CGFloat(max(0, min(100, pct))) / 100.0
-        }
-        if let used = contextUsedPercent {
-            return CGFloat(max(0, min(100, used))) / 100.0
-        }
-        return 0
+    /// Current tachometer RPM mapped linearly between `500 rpm` (almost out) and `15k rpm` (full).
+    var currentRPM: Int {
+        let span = Double(Self.maxRPM - Self.minRPM)
+        let raw = Double(Self.minRPM) + remainingFraction * span
+        return min(Self.maxRPM, max(Self.minRPM, Int(raw.rounded())))
     }
 
-    private var batteryTint: Color {
-        if let pct = allowancePercentage {
-            if pct <= 20 { return .red }
-            if pct <= 45 { return .orange }
-            return Color.primary
+    var rpmLabel: String {
+        Self.formatRPM(currentRPM)
+    }
+
+    static func formatRPM(_ rpm: Int) -> String {
+        if rpm >= 1_000 {
+            let k = Double(rpm) / 1_000.0
+            if abs(k.rounded() - k) < 0.05 {
+                return "\(Int(k.rounded()))k rpm"
+            }
+            return String(format: "%.1fk rpm", k)
         }
-        if let used = contextUsedPercent {
-            if used >= 85 { return .red }
-            if used >= 65 { return .orange }
-        }
-        return Color.primary
+        return "\(rpm) rpm"
+    }
+
+    private var gaugeColor: Color {
+        if currentRPM <= 2_000 { return .red }
+        if currentRPM <= 5_500 { return .orange }
+        return AppTheme.accentBlue
     }
 
     var body: some View {
@@ -751,48 +759,32 @@ struct MuseCreditBatteryButton: View {
             isPopoverPresented.toggle()
             Task { await usageService.refresh(installation: controller.museInstallation) }
         } label: {
-            HStack(spacing: 4) {
-                ZStack(alignment: .leading) {
-                    Capsule(style: .continuous)
-                        .fill(Color.primary.opacity(0.10))
+            HStack(spacing: 5) {
+                TachometerMiniDial(
+                    fraction: remainingFraction,
+                    tint: gaugeColor
+                )
+                .frame(width: 20, height: 15)
 
-                    GeometryReader { geo in
-                        let width = max(0, geo.size.width * fillFraction)
-                        if width > 0 {
-                            ZStack(alignment: .trailing) {
-                                Capsule(style: .continuous)
-                                    .fill(batteryTint.opacity(0.32))
-                                    .frame(width: width)
-
-                                BatteryHatchPattern()
-                                    .stroke(Color(nsColor: .windowBackgroundColor).opacity(0.42), lineWidth: 1.4)
-                                    .frame(width: min(width, 16), height: geo.size.height)
-                                    .clipped()
-                            }
-                        }
-                    }
-                    .clipShape(Capsule(style: .continuous))
-
-                    Capsule(style: .continuous)
-                        .strokeBorder(batteryTint.opacity(0.32), lineWidth: 1)
-
-                    Text(pillLabel)
-                        .font(.system(size: 10.5, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 7)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                }
-                .frame(minWidth: 48, idealWidth: 54, maxWidth: 64, minHeight: 18, maxHeight: 18)
-
-                HugeIcon(name: "arrow-up-01")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                Text(rpmLabel)
+                    .font(.system(size: 11, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(currentRPM <= 2_000 ? Color.red : Color.primary)
             }
+            .padding(.horizontal, 8)
             .frame(height: 24)
-            .contentShape(Rectangle())
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(0.07))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(gaugeColor.opacity(0.32), lineWidth: 1)
+            )
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help(allowancePercentage.map { "Muse Credit Allowance (\($0)% remaining)" } ?? "Session Token Usage (\(totalSessionTokens.formatted()) tokens)")
+        .focusEffectDisabled()
+        .help("Muse Credit Tachometer: \(currentRPM.formatted()) RPM (15k rpm full • 500 rpm low)")
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
             popoverContent
         }
@@ -810,27 +802,33 @@ struct MuseCreditBatteryButton: View {
         let contextWindow = controller.model?.contextWindow
         let isYoloEnabled = (controller.trustOverride ?? (controller.trustState != .untrusted))
 
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(allowancePercentage != nil ? "Muse Credit Allowance" : "Session Token Usage")
+                Text("Muse Credit Tachometer")
                     .font(.callout.weight(.semibold))
                 Spacer()
-                Text(pillLabel)
+                Text(rpmLabel.uppercased())
                     .font(.callout.monospacedDigit().weight(.bold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(gaugeColor)
             }
 
-            if fillFraction > 0 {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(Color.primary.opacity(0.08))
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(Color.accentColor)
-                            .frame(width: max(4, geo.size.width * fillFraction))
-                    }
-                }
-                .frame(height: 8)
+            TachometerLargeDial(
+                rpm: currentRPM,
+                fraction: remainingFraction,
+                tint: gaugeColor
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 92)
+            .padding(.vertical, 2)
+
+            HStack {
+                Text("500 rpm (Low)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("15k rpm (Full)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
 
             Divider()
@@ -912,17 +910,129 @@ struct MuseCreditBatteryButton: View {
     }
 }
 
-private struct BatteryHatchPattern: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let step: CGFloat = 4.0
-        var x: CGFloat = -rect.height
-        while x < rect.width + rect.height {
-            path.move(to: CGPoint(x: x, y: rect.maxY))
-            path.addLine(to: CGPoint(x: x + rect.height * 0.65, y: rect.minY))
-            x += step
+/// Compact tachometer dial with tick marks, arc, and needle for the composer bar.
+struct TachometerMiniDial: View {
+    var fraction: Double
+    var tint: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height - 2.5)
+            let radius = min(size.width / 2 - 1.5, size.height - 3.5)
+            let startDeg = 165.0
+            let endDeg = 375.0
+            let clamped = min(1.0, max(0.0, fraction))
+            let needleDeg = startDeg + clamped * (endDeg - startDeg)
+
+            var bgArc = Path()
+            bgArc.addArc(
+                center: center,
+                radius: radius,
+                startAngle: .degrees(startDeg),
+                endAngle: .degrees(endDeg),
+                clockwise: false
+            )
+            context.stroke(bgArc, with: .color(.primary.opacity(0.22)), style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
+
+            var activeArc = Path()
+            activeArc.addArc(
+                center: center,
+                radius: radius,
+                startAngle: .degrees(startDeg),
+                endAngle: .degrees(needleDeg),
+                clockwise: false
+            )
+            context.stroke(activeArc, with: .color(tint), style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+
+            // Needle
+            let rad = needleDeg * .pi / 180.0
+            let tip = CGPoint(
+                x: center.x + CGFloat(cos(rad)) * (radius - 1.0),
+                y: center.y + CGFloat(sin(rad)) * (radius - 1.0)
+            )
+            var needle = Path()
+            needle.move(to: center)
+            needle.addLine(to: tip)
+            context.stroke(needle, with: .color(.primary), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+
+            // Center pivot
+            let hubRect = CGRect(x: center.x - 1.8, y: center.y - 1.8, width: 3.6, height: 3.6)
+            context.fill(Path(ellipseIn: hubRect), with: .color(tint))
         }
-        return path
+    }
+}
+
+/// Full tachometer instrument dial shown in the credit gauge popover.
+struct TachometerLargeDial: View {
+    var rpm: Int
+    var fraction: Double
+    var tint: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height - 12)
+            let radius = min(size.width / 2 - 18, size.height - 18)
+            let startDeg = 165.0
+            let endDeg = 375.0
+            let spanDeg = endDeg - startDeg
+            let clamped = min(1.0, max(0.0, fraction))
+            let needleDeg = startDeg + clamped * spanDeg
+
+            // Background track
+            var track = Path()
+            track.addArc(center: center, radius: radius, startAngle: .degrees(startDeg), endAngle: .degrees(endDeg), clockwise: false)
+            context.stroke(track, with: .color(.primary.opacity(0.14)), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+
+            // Low-credit warning zone (500 - 2.5k RPM)
+            var redZone = Path()
+            redZone.addArc(center: center, radius: radius, startAngle: .degrees(startDeg), endAngle: .degrees(startDeg + spanDeg * 0.16), clockwise: false)
+            context.stroke(redZone, with: .color(.red.opacity(0.45)), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+
+            // Active RPM arc
+            var active = Path()
+            active.addArc(center: center, radius: radius, startAngle: .degrees(startDeg), endAngle: .degrees(needleDeg), clockwise: false)
+            context.stroke(active, with: .color(tint), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+
+            // Tick marks
+            let tickCount = 15
+            for i in 0...tickCount {
+                let t = Double(i) / Double(tickCount)
+                let deg = startDeg + t * spanDeg
+                let rad = deg * .pi / 180.0
+                let isMajor = i % 5 == 0
+                let innerR = radius - (isMajor ? 11 : 7)
+                let outerR = radius - 3
+                let p1 = CGPoint(x: center.x + CGFloat(cos(rad)) * innerR, y: center.y + CGFloat(sin(rad)) * innerR)
+                let p2 = CGPoint(x: center.x + CGFloat(cos(rad)) * outerR, y: center.y + CGFloat(sin(rad)) * outerR)
+                var tick = Path()
+                tick.move(to: p1)
+                tick.addLine(to: p2)
+                context.stroke(
+                    tick,
+                    with: .color(.primary.opacity(isMajor ? 0.55 : 0.28)),
+                    style: StrokeStyle(lineWidth: isMajor ? 1.8 : 1.0, lineCap: .round)
+                )
+            }
+
+            // Needle
+            let rad = needleDeg * .pi / 180.0
+            let tip = CGPoint(
+                x: center.x + CGFloat(cos(rad)) * (radius - 8),
+                y: center.y + CGFloat(sin(rad)) * (radius - 8)
+            )
+            var needle = Path()
+            needle.move(to: center)
+            needle.addLine(to: tip)
+            context.stroke(needle, with: .color(.primary), style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+
+            let hub = CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9)
+            context.fill(Path(ellipseIn: hub), with: .color(tint))
+        }
+        .overlay(alignment: .bottom) {
+            Text("\(rpm.formatted()) RPM")
+                .font(.system(size: 11, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -967,11 +1077,12 @@ struct MuseVoiceSTTButton: View {
             .padding(.horizontal, stt.isRecording ? 6 : 0)
             .background(
                 Capsule(style: .continuous)
-                    .fill(stt.isRecording ? Color.red.opacity(0.14) : Color.primary.opacity(0.06))
+                    .fill(stt.isRecording ? Color.red.opacity(0.14) : Color.clear)
             )
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .help(stt.isRecording ? "Stop recording & transcribe via `muse voice transcribe`" : "Voice input via Muse built-in STT (`muse voice transcribe`)")
         .contextMenu {
             Button("Transcribe Audio Clip (.wav / .m4a)…") {

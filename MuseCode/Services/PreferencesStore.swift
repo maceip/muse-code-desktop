@@ -87,6 +87,10 @@ final class PreferencesStore {
     /// keyed by canonical project path. Stored as JSON in `UserDefaults` rather
     /// than as three parallel arrays so the three fields can never drift apart.
     private(set) var projectSettingsByPath: [String: ProjectSettings]
+    /// User-selected session icons from `Assets.xcassets/SessionIcons`, keyed by `session.id`.
+    private(set) var sessionIconsByKey: [String: String]
+    /// User-selected 4–5 character session shorthand labels, keyed by `session.id`.
+    private(set) var sessionShorthandsByKey: [String: String]
 
     private let defaults: UserDefaults
 
@@ -122,6 +126,8 @@ final class PreferencesStore {
         } else {
             projectSettingsByPath = [:]
         }
+        sessionIconsByKey = defaults.dictionary(forKey: Keys.sessionIcons) as? [String: String] ?? [:]
+        sessionShorthandsByKey = defaults.dictionary(forKey: Keys.sessionShorthands) as? [String: String] ?? [:]
     }
 
     func persist() {
@@ -150,6 +156,53 @@ final class PreferencesStore {
         } else if let data = try? JSONEncoder.piCode.encode(projectSettingsByPath) {
             defaults.set(data, forKey: Keys.projectSettings)
         }
+        defaults.set(sessionIconsByKey, forKey: Keys.sessionIcons)
+        defaults.set(sessionShorthandsByKey, forKey: Keys.sessionShorthands)
+    }
+
+    // MARK: - Per-session Icon & Shorthand
+
+    func customSessionIcon(for session: SessionRef) -> String? {
+        sessionIconsByKey[session.id]
+    }
+
+    func resolvedSessionIcon(for session: SessionRef) -> String {
+        if let custom = sessionIconsByKey[session.id],
+           SessionIconCatalog.all.contains(where: { $0.id == custom }) {
+            return custom
+        }
+        return SessionIconCatalog.defaultIcon(for: session)
+    }
+
+    func setSessionIcon(_ iconID: String?, for session: SessionRef) {
+        if let iconID, !iconID.isEmpty {
+            sessionIconsByKey[session.id] = iconID
+        } else {
+            sessionIconsByKey.removeValue(forKey: session.id)
+        }
+        persist()
+    }
+
+    func customSessionShorthand(for session: SessionRef) -> String? {
+        sessionShorthandsByKey[session.id]
+    }
+
+    func resolvedSessionShorthand(for session: SessionRef) -> String {
+        if let custom = sessionShorthandsByKey[session.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !custom.isEmpty {
+            return String(custom.prefix(5)).uppercased()
+        }
+        return SessionIconCatalog.defaultShorthand(for: session)
+    }
+
+    func setSessionShorthand(_ shorthand: String?, for session: SessionRef) {
+        let trimmed = shorthand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmed.isEmpty {
+            sessionShorthandsByKey[session.id] = String(trimmed.prefix(5)).uppercased()
+        } else {
+            sessionShorthandsByKey.removeValue(forKey: session.id)
+        }
+        persist()
     }
 
     // MARK: - Per-project settings
@@ -195,5 +248,135 @@ final class PreferencesStore {
         static let reducedMotion = "reducedMotionOverride"
         static let transcriptOffscreenScreens = "transcriptKeptScreens"
         static let projectSettings = "projectSettings"
+        static let sessionIcons = "sessionIconsByKey"
+        static let sessionShorthands = "sessionShorthandsByKey"
+    }
+}
+
+// MARK: - Curated Session Icon Set (`Assets.xcassets/SessionIcons`) & 4–5 Char Shorthand
+
+enum SessionIconCatalog {
+    struct Entry: Identifiable, Equatable {
+        let id: String
+        let label: String
+    }
+
+    static let all: [Entry] = [
+        Entry(id: "session-code", label: "Code"),
+        Entry(id: "session-spark", label: "Agent"),
+        Entry(id: "session-terminal", label: "Terminal"),
+        Entry(id: "session-layers", label: "UI & Layers"),
+        Entry(id: "session-bug", label: "Debug & Fix"),
+        Entry(id: "session-git", label: "Git & Branch"),
+        Entry(id: "session-rocket", label: "Build & Ship"),
+        Entry(id: "session-shield", label: "Audit & Test"),
+        Entry(id: "session-cpu", label: "System & CPU"),
+        Entry(id: "session-database", label: "Data & Store"),
+        Entry(id: "session-globe", label: "Web & Net"),
+        Entry(id: "session-bolt", label: "Fast Task"),
+        Entry(id: "session-cube", label: "Module"),
+        Entry(id: "session-compass", label: "Explore"),
+        Entry(id: "session-flame", label: "Performance"),
+        Entry(id: "session-lock", label: "Security")
+    ]
+
+    /// Picks a deterministic default icon from `Assets.xcassets/SessionIcons` for a session.
+    static func defaultIcon(for session: SessionRef) -> String {
+        let lower = session.displayName.lowercased()
+        if lower.contains("bug") || lower.contains("fix") || lower.contains("error") || lower.contains("crash") {
+            return "session-bug"
+        }
+        if lower.contains("git") || lower.contains("merge") || lower.contains("rebase") || lower.contains("branch") || lower.contains("remote") {
+            return "session-git"
+        }
+        if lower.contains("ui") || lower.contains("view") || lower.contains("panel") || lower.contains("sidebar") || lower.contains("icon") || lower.contains("design") || lower.contains("screenshot") {
+            return "session-layers"
+        }
+        if lower.contains("test") || lower.contains("audit") || lower.contains("verify") || lower.contains("fake") {
+            return "session-shield"
+        }
+        if lower.contains("build") || lower.contains("deploy") || lower.contains("release") || lower.contains("launch") {
+            return "session-rocket"
+        }
+        if lower.contains("dns") || lower.contains("web") || lower.contains("http") || lower.contains("net") || lower.contains("mail") {
+            return "session-globe"
+        }
+        if lower.contains("db") || lower.contains("sql") || lower.contains("data") || lower.contains("disk") || lower.contains("store") {
+            return "session-database"
+        }
+        if lower.contains("ssh") || lower.contains("cli") || lower.contains("bash") || lower.contains("shell") || lower.contains("server") {
+            return "session-terminal"
+        }
+        if lower.contains("auth") || lower.contains("trust") || lower.contains("lock") || lower.contains("security") {
+            return "session-lock"
+        }
+        if lower.contains("perf") || lower.contains("fast") || lower.contains("speed") {
+            return "session-flame"
+        }
+        // Deterministic fallback across all 16 icons in Assets.xcassets/SessionIcons
+        var hash: UInt64 = 5381
+        for byte in session.id.utf8 {
+            hash = ((hash << 5) &+ hash) &+ UInt64(byte)
+        }
+        return all[Int(hash % UInt64(all.count))].id
+    }
+
+    private static let stopWords: Set<String> = [
+        "the", "a", "an", "in", "on", "at", "to", "for", "of", "with", "from", "by",
+        "and", "or", "but", "is", "are", "was", "were", "be", "been", "this", "that",
+        "these", "those", "it", "its", "my", "our", "your", "we", "you", "i", "me",
+        "please", "can", "could", "would", "should", "need", "make", "do", "deal",
+        "ok", "okay", "hey", "hi", "ensure", "when", "see", "pretty", "big", "just",
+        "users", "mac", "documents", "following", "changes", "update", "replace"
+    ]
+
+    /// Generates a readable 4–5 character shorthand string for a session.
+    static func defaultShorthand(for session: SessionRef) -> String {
+        let raw = session.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tokens = raw
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { token in
+                guard token.count >= 2 else { return false }
+                let lower = token.lowercased()
+                if stopWords.contains(lower) { return false }
+                // Skip pure timestamps/numbers like "2026", "10", "28", "13"
+                if token.allSatisfy(\.isNumber) { return false }
+                return true
+            }
+
+        if let first = tokens.first {
+            let upper = first.uppercased()
+            if (4...5).contains(upper.count) {
+                return upper
+            }
+            if upper.count > 5 {
+                return abbreviateWord(upper)
+            }
+            // First token is 2–3 chars; combine with second token if available
+            if tokens.count >= 2 {
+                let combined = (upper + tokens[1].uppercased())
+                return String(combined.prefix(5))
+            }
+            return upper.padding(toLength: min(4, max(upper.count, 4)), withPad: " ", startingAt: 0)
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        // Fallback to project directory name (4–5 chars)
+        let proj = URL(fileURLWithPath: session.cwd).lastPathComponent.uppercased()
+            .filter { $0.isLetter || $0.isNumber }
+        if proj.count >= 4 {
+            return String(proj.prefix(5))
+        }
+        return proj.isEmpty ? "MUSE" : proj
+    }
+
+    private static func abbreviateWord(_ word: String) -> String {
+        // Common developer stems look cleanest as their first 5 characters (e.g. BUILD, MERGE, TACHO, PANEL, MODEL, SUPER)
+        let commonPrefixes = ["BUILD", "MERGE", "REBAS", "REFAC", "AUDIT", "CLEAN", "SCRN", "SDBAR", "PANEL", "MODEL", "AGENT", "VOICE", "TACHO", "REMOT", "CLOUD", "SERVR", "THEME", "SETUP", "DEBUG"]
+        for prefix in commonPrefixes where word.hasPrefix(prefix.prefix(4)) {
+            return String(word.prefix(5))
+        }
+        return String(word.prefix(5))
     }
 }

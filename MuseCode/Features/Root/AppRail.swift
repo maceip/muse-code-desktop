@@ -1,20 +1,20 @@
 //
 //  AppRail.swift
-//  PiCode
+//  MuseCode
 //
-//  The narrow icon rail on the window's leading edge: the app's destinations
-//  (home, history, packages, more), and the user's own badge at the bottom,
-//  which opens Settings.
-//
-//  It is drawn on the window chrome rather than inside the content card, so it
-//  reads as the window's frame and stays put when the sidebar folds away.
+//  The narrow icon rail on the window's leading edge when the sidebar is collapsed:
+//  - Top: Muse app icon (replaces the + and search buttons in rail mode)
+//  - Middle: Session tiles with a customizable icon from `Assets.xcassets/SessionIcons`
+//    and a 4–5 character shorthand string
+//  - Bottom: Settings gear button (no ellipsis menu)
 //
 
+import AppKit
 import SwiftUI
 
 enum AppRailMetrics {
-    static let width: CGFloat = 52
-    static let buttonSize: CGFloat = 36
+    static let width: CGFloat = 56
+    static let buttonSize: CGFloat = 40
     static let iconSize: CGFloat = 17
 }
 
@@ -24,7 +24,7 @@ struct AppRail: View {
     var onOpenSettings: () -> Void
 
     /// Recent sessions across all projects so the collapsed rail shows clickable
-    /// icons for sessions when the sidepanel is hidden.
+    /// session icons + 4–5 char shorthands when the sidepanel is hidden.
     private var railSessions: [SessionRef] {
         var result: [SessionRef] = []
         if let controller = state.activeController,
@@ -59,31 +59,21 @@ struct AppRail: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            RailButton(
-                systemImage: "add-01",
-                help: "New chat (⌘N)",
-                isSelected: false
-            ) {
+            MuseAppRailHeaderButton {
                 state.isSettingsPresented = false
                 Task { await state.newChatInCurrentProject() }
             }
 
-            RailButton(
-                systemImage: "search-01",
-                help: "Search sessions and commands (⇧⌘P)",
-                isSelected: false,
-                action: onOpenPalette
-            )
-
             Rectangle()
                 .fill(AppTheme.cardStroke)
-                .frame(width: 22, height: 1)
+                .frame(width: 24, height: 1)
                 .padding(.vertical, 2)
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 6) {
                     ForEach(railSessions) { session in
                         SessionRailButton(
+                            state: state,
                             session: session,
                             isSelected: !state.isSettingsPresented && state.selectedSessionKey == session.controllerKey,
                             isRunning: state.isRunning(session)
@@ -98,8 +88,6 @@ struct AppRail: View {
 
             Spacer(minLength: 0)
 
-            moreMenu
-
             UpdateButton(updater: state.updater)
 
             RailButton(
@@ -111,34 +99,50 @@ struct AppRail: View {
             )
             .padding(.bottom, 14)
         }
-        .padding(.top, 2)
+        .padding(.top, 4)
         .frame(width: AppRailMetrics.width)
         .frame(maxHeight: .infinity)
     }
+}
 
-    /// The commands that are about the app rather than about a chat.
-    private var moreMenu: some View {
-        Menu {
-            Button(PaletteCommand.addProject.title) { state.run(.addProject) }
-            Button(PaletteCommand.refreshSessions.title) { state.run(.refreshSessions) }
-            Divider()
-            Button(PaletteCommand.revealPiDirectory.title) { state.run(.revealPiDirectory) }
-            Button(PaletteCommand.checkForPiUpdates.title) { state.run(.checkForPiUpdates) }
-            Divider()
-            Button("Settings…", action: onOpenSettings)
-        } label: {
-            // A menu's label is snapshotted as a template image, so the glyph is
-            // wrapped in `Text` to survive it (see `ProjectRow`).
-            Text(hugeIconImage("more-horizontal"))
-                .font(.system(size: AppRailMetrics.iconSize, weight: .regular))
-                .frame(width: AppRailMetrics.buttonSize, height: AppRailMetrics.buttonSize)
-                .contentShape(Rectangle())
+/// Top brand icon in `AppRail` mode (replaces the old `+` and `Search` buttons).
+struct MuseAppRailHeaderButton: View {
+    var action: () -> Void
+    @State private var isHovering = false
+
+    private var appIconImage: NSImage {
+        if let icon = NSApp.applicationIconImage, icon.size.width > 0 {
+            return icon
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .foregroundStyle(.secondary)
-        .help("More")
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let iconURL = repoRoot
+            .appendingPathComponent("Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png")
+        if let diskIcon = NSImage(contentsOf: iconURL) {
+            return diskIcon
+        }
+        return NSImage()
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(nsImage: appIconImage)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 36, height: 36)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .scaleEffect(isHovering ? 1.04 : 1.0)
+                .animation(.easeOut(duration: 0.14), value: isHovering)
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onHover { isHovering = $0 }
+        .help("Muse — New chat (⌘N)")
+        .accessibilityLabel("Muse")
     }
 }
 
@@ -170,6 +174,7 @@ struct UpdateButton: View {
                 .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
             .disabled(updater.isBusy)
             .padding(.bottom, 8)
             .help(helpText(release))
@@ -209,16 +214,17 @@ struct RailButton: View {
                     HugeIcon(name: systemImage, size: AppRailMetrics.iconSize)
                 }
             }
-                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                .frame(width: AppRailMetrics.buttonSize, height: AppRailMetrics.buttonSize)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(isSelected ? AppTheme.railSelection
-                              : (isHovering && isEnabled ? AppTheme.railSelection.opacity(0.6) : .clear))
-                )
-                .contentShape(Rectangle())
+            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+            .frame(width: AppRailMetrics.buttonSize, height: AppRailMetrics.buttonSize)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isSelected ? AppTheme.railSelection
+                          : (isHovering && isEnabled ? AppTheme.railSelection.opacity(0.6) : .clear))
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .opacity(isEnabled ? 1 : 0.45)
         .onHover { isHovering = $0 }
         .help(help)
@@ -226,27 +232,26 @@ struct RailButton: View {
     }
 }
 
-/// A session icon in the collapsed AppRail when the sidebar is hidden.
+/// A session tile in the collapsed `AppRail`: renders the session's icon from
+/// `Assets.xcassets/SessionIcons` and a 4–5 character shorthand string, with an
+/// interactive popover & context menu so the user can pick any icon from the set
+/// or customize the 4–5 character shorthand.
 struct SessionRailButton: View {
+    @Bindable var state: AppState
     var session: SessionRef
     var isSelected: Bool
     var isRunning: Bool
     var action: () -> Void
 
     @State private var isHovering = false
+    @State private var isCustomizePopoverPresented = false
 
-    private var badgeInitials: String {
-        let raw = session.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let words = raw
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-        if words.count >= 2,
-           let first = words[0].first,
-           let second = words[1].first {
-            return String([first, second]).uppercased()
-        }
-        let prefix = String(raw.prefix(2)).uppercased()
-        return prefix.isEmpty ? "M" : prefix
+    private var iconName: String {
+        state.preferences.resolvedSessionIcon(for: session)
+    }
+
+    private var shorthand: String {
+        state.preferences.resolvedSessionShorthand(for: session)
     }
 
     var body: some View {
@@ -256,16 +261,18 @@ struct SessionRailButton: View {
                     if isRunning {
                         ProgressView().controlSize(.small)
                     } else {
-                        VStack(spacing: 1) {
-                            HugeIcon(name: session.isPinned ? "bookmark-02" : "message-multiple-01", size: 14)
-                            Text(badgeInitials)
-                                .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                        VStack(spacing: 2) {
+                            HugeIcon(name: iconName, size: 15)
+                            Text(shorthand)
+                                .font(.system(size: 8.5, weight: .bold, design: .rounded).monospaced())
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                                .padding(.horizontal, 2)
                         }
                     }
                 }
                 .foregroundStyle(isSelected ? Color.white : (isHovering ? Color.primary : Color.secondary))
-                .frame(width: AppRailMetrics.buttonSize, height: AppRailMetrics.buttonSize)
+                .frame(width: 44, height: AppRailMetrics.buttonSize)
                 .background(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(isSelected ? AppTheme.accentBlue
@@ -282,8 +289,122 @@ struct SessionRailButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .onHover { isHovering = $0 }
-        .help(session.displayName)
-        .accessibilityLabel("Session: \(session.displayName)")
+        .help("\(session.displayName) (\(shorthand)) — Right-click to change icon or shorthand")
+        .accessibilityLabel("Session: \(session.displayName) (\(shorthand))")
+        .contextMenu {
+            Button {
+                isCustomizePopoverPresented = true
+            } label: {
+                Label("Choose Icon & Shorthand…", huge: iconName)
+            }
+
+            Menu("Quick Icon") {
+                ForEach(SessionIconCatalog.all) { entry in
+                    Button {
+                        state.preferences.setSessionIcon(entry.id, for: session)
+                    } label: {
+                        Label(entry.label, huge: entry.id)
+                    }
+                }
+            }
+
+            Divider()
+
+            SessionRowMenu(state: state, session: session, isEphemeral: session.isEphemeral)
+        }
+        .popover(isPresented: $isCustomizePopoverPresented, arrowEdge: .trailing) {
+            SessionBadgePickerPopover(
+                state: state,
+                session: session,
+                isPresented: $isCustomizePopoverPresented
+            )
+        }
+    }
+}
+
+/// Interactive popover allowing the user to pick a session icon from
+/// `Assets.xcassets/SessionIcons` and customize the 4–5 character shorthand string.
+struct SessionBadgePickerPopover: View {
+    @Bindable var state: AppState
+    var session: SessionRef
+    @Binding var isPresented: Bool
+
+    @State private var shorthandDraft: String = ""
+
+    private var selectedIcon: String {
+        state.preferences.resolvedSessionIcon(for: session)
+    }
+
+    private let columns = Array(repeating: GridItem(.fixed(42), spacing: 8), count: 4)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Session Icon & Shorthand")
+                    .font(.system(size: 12.5, weight: .semibold))
+                Spacer()
+                Button("Reset") {
+                    state.preferences.setSessionIcon(nil, for: session)
+                    state.preferences.setSessionShorthand(nil, for: session)
+                    shorthandDraft = state.preferences.resolvedSessionShorthand(for: session)
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Shorthand (4–5 chars)")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    TextField("4–5 chars", text: $shorthandDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .onChange(of: shorthandDraft) { _, newValue in
+                            let cleaned = String(newValue.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(5))
+                            if cleaned != newValue {
+                                shorthandDraft = cleaned
+                            }
+                            state.preferences.setSessionShorthand(cleaned, for: session)
+                        }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Icon Set")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(SessionIconCatalog.all) { entry in
+                        let isSelected = selectedIcon == entry.id
+                        Button {
+                            state.preferences.setSessionIcon(entry.id, for: session)
+                        } label: {
+                            VStack(spacing: 2) {
+                                HugeIcon(name: entry.id, size: 17)
+                            }
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .frame(width: 40, height: 36)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(isSelected ? AppTheme.accentBlue : AppTheme.railSelection.opacity(0.35))
+                            )
+                            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .help(entry.label)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 220)
+        .onAppear {
+            shorthandDraft = state.preferences.resolvedSessionShorthand(for: session)
+        }
     }
 }
