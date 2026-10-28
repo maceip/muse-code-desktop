@@ -327,6 +327,13 @@ enum MuseSessionHistory {
                  "subagent.control.wait_parked":
                 let rec = payload["record"] ?? payload
                 guard let subId = rec.string("subagent_id"), !subId.isEmpty else { break }
+                let rawRole = (rec.string("role") ?? rec.string("agent_path") ?? "").lowercased()
+                let rawObj = (rec.string("objective") ?? "").lowercased()
+                if rawRole.contains("reminder") || rawObj.contains("reminder observer") {
+                    subagentsById.removeValue(forKey: subId)
+                    subagentOrder.removeAll { $0 == subId }
+                    break
+                }
                 upsertSubagent(subId) { info in
                     if let date = recordDate { info.updatedAt = date }
                     if let cmdId = rec.string("command_id") ?? rec.string("spawn_command_id"), !cmdId.isEmpty {
@@ -404,42 +411,8 @@ enum MuseSessionHistory {
                     ))
                 }
 
-            case "runtime.session.task":
-                let taskId = payload.string("task_id") ?? ""
-                guard !taskId.isEmpty, let ev = payload["event"], let kind = ev.string("kind") else { break }
-                let taskKind = ev.string("task_kind") ?? "task"
-                if taskKind == "session_name.allocate" { break }
-                upsertTask(taskId, defaultKind: taskKind, defaultTitle: taskKind) { task in
-                    if let date = recordDate { task.timestamp = date }
-                    switch kind {
-                    case "proposed", "accepted", "scheduled", "started":
-                        task.status = .running
-                    case "completed":
-                        task.status = .completed
-                    case "failed", "cancelled":
-                        task.status = .failed
-                    default:
-                        break
-                    }
-                }
-
             case "runtime.session":
                 let sessionKind = payload.string("kind")
-                if sessionKind == "task",
-                   let taskId = payload.string("task_id"),
-                   let ev = payload["event"],
-                   let kind = ev.string("kind") {
-                    let taskKind = ev.string("task_kind") ?? "task"
-                    if taskKind != "session_name.allocate" {
-                        upsertTask(taskId, defaultKind: taskKind, defaultTitle: taskKind) { task in
-                            if let date = recordDate { task.timestamp = date }
-                            if kind == "completed" { task.status = .completed }
-                            else if kind == "failed" || kind == "cancelled" { task.status = .failed }
-                        }
-                    }
-                    return
-                }
-
                 guard sessionKind == "run",
                       let event = payload["event"],
                       let eventKind = event.string("kind") else { return }
@@ -570,7 +543,7 @@ enum MuseSessionHistory {
                                 ))
                             }
 
-                        case "bash", "monitor", "cron_create", "work_list", "work_status", "workflow":
+                        case "monitor", "cron_create":
                             let cmd = argsValue.string("description")
                                 ?? argsValue.string("command")
                                 ?? name
@@ -582,16 +555,25 @@ enum MuseSessionHistory {
                                 task.timestamp = recordDate
                             }
 
-                        case "write_file", "edit_file":
+                        case "write_file":
                             if let filePath = argsValue.string("path"), !filePath.isEmpty {
-                                let fileName = (filePath as NSString).lastPathComponent
-                                upsertArtifact(filePath, makeDefault: {
+                                let resolvedPath: String
+                                if (filePath as NSString).isAbsolutePath {
+                                    resolvedPath = filePath
+                                } else if let cwd = summary.cwd, !cwd.isEmpty {
+                                    resolvedPath = (cwd as NSString).appendingPathComponent(filePath)
+                                } else {
+                                    resolvedPath = filePath
+                                }
+                                guard FileManager.default.fileExists(atPath: resolvedPath) else { break }
+                                let fileName = (resolvedPath as NSString).lastPathComponent
+                                upsertArtifact(resolvedPath, makeDefault: {
                                     MuseArtifactInfo(
-                                        id: filePath,
-                                        kind: name == "write_file" ? .file : .edit,
+                                        id: resolvedPath,
+                                        kind: .file,
                                         title: fileName.isEmpty ? filePath : fileName,
-                                        path: filePath,
-                                        preview: filePath,
+                                        path: resolvedPath,
+                                        preview: resolvedPath,
                                         toolCallId: callId,
                                         timestamp: recordDate
                                     )
@@ -603,11 +585,16 @@ enum MuseSessionHistory {
 
                         case "write_todos", "update_goal":
                             let title = name == "write_todos" ? "Task Plan & Todos" : "Session Goal"
-                            let preview: String
+                            let markdown: String
                             if let todos = argsValue.array("todos") {
-                                preview = todos.compactMap { $0.string("text") }.joined(separator: " • ")
+                                markdown = todos.compactMap { item -> String? in
+                                    guard let text = item.string("text"), !text.isEmpty else { return nil }
+                                    let status = item.string("status") ?? "pending"
+                                    let check = (status == "completed" || status == "done") ? "x" : " "
+                                    return "- [\(check)] \(text) _(\(status))_"
+                                }.joined(separator: "\n")
                             } else {
-                                preview = argsValue.string("goal") ?? title
+                                markdown = argsValue.string("goal") ?? title
                             }
                             upsertArtifact(name, makeDefault: {
                                 MuseArtifactInfo(
@@ -615,12 +602,12 @@ enum MuseSessionHistory {
                                     kind: .plan,
                                     title: title,
                                     path: nil,
-                                    preview: preview.oneLinePreview(limit: 120),
+                                    preview: markdown,
                                     toolCallId: callId,
                                     timestamp: recordDate
                                 )
                             }, update: { art in
-                                art.preview = preview.oneLinePreview(limit: 120)
+                                art.preview = markdown
                                 art.toolCallId = callId
                                 art.timestamp = recordDate
                             })
@@ -747,12 +734,13 @@ enum MuseSessionHistory {
             let promptTitle = childSummary.firstUserMessage ?? "Subagent \(childId.prefix(8))"
             let lastAssistant = childSummary.messages.last(where: \.isAssistant)?.textContent
             let isReminder = promptTitle.lowercased().contains("reminder observer")
+            if isReminder { continue }
             summary.subagents.append(MuseSubagentInfo(
                 id: childId,
                 childSessionId: childId,
                 commandId: nil,
-                role: isReminder ? "reminder" : "subagent",
-                title: isReminder ? "Goal & Verification Observer" : promptTitle.oneLinePreview(limit: 72),
+                role: "subagent",
+                title: promptTitle.oneLinePreview(limit: 72),
                 objective: promptTitle,
                 status: .completed,
                 summary: lastAssistant?.oneLinePreview(limit: 200),

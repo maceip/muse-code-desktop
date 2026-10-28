@@ -49,7 +49,7 @@ final class HarnessInstallService {
     func install(_ descriptor: HarnessDescriptor, using method: HarnessInstallMethod) async -> Bool {
         guard !isInstalling(descriptor.id) else { return false }
 
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shell = PiDiscoveryService.userLoginShell()
         runs[descriptor.id] = Run(
             harnessID: descriptor.id,
             methodLabel: method.label,

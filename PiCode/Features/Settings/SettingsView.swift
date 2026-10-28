@@ -275,9 +275,15 @@ struct ComposerSettings: View {
                     Dropdown(
                         selection: Binding(
                             get: { state.preferences.defaultThinkingLevel ?? "" },
-                            set: { state.preferences.defaultThinkingLevel = $0.isEmpty ? nil : $0; state.preferences.persist() }
+                            set: {
+                                state.preferences.defaultThinkingLevel = $0.isEmpty ? nil : $0
+                                state.preferences.persist()
+                                if !$0.isEmpty {
+                                    MuseRuntime.writeUserSettings(model: nil, reasoningEffort: $0)
+                                }
+                            }
                         ),
-                        values: ["", "off", "low", "medium", "high"],
+                        values: [""] + MuseRuntime.efforts,
                         label: { $0.isEmpty ? "Muse's default" : $0 }
                     )
                 }
@@ -290,6 +296,9 @@ struct ComposerSettings: View {
                                     state.preferences.defaultModelByHarness[controller.harness.id.rawValue] = $0.isEmpty ? nil : $0
                                     state.preferences.defaultModelQualifiedID = $0.isEmpty ? nil : $0
                                     state.preferences.persist()
+                                    if !$0.isEmpty {
+                                        MuseRuntime.writeUserSettings(model: $0, reasoningEffort: nil)
+                                    }
                                 }
                             ),
                             options: [.init(label: "Muse's default", value: "")]

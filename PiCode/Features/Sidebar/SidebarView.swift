@@ -231,6 +231,7 @@ struct SidebarView: View {
     var onOpenSettings: () -> Void
 
     @State private var isNewChatHovering = false
+    @State private var isSettingsHovering = false
     /// The projects whose chat lists are past `SidebarStyle.visibleRowLimit`: a
     /// project's list is capped until its own "Show more…" is clicked, and folding
     /// the project drops it from here again, so reopening one shows the first ten
@@ -258,6 +259,7 @@ struct SidebarView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            sidebarFooter
         }
         .frame(maxHeight: .infinity)
         // The column's own fill: the system material in the light appearance, the
@@ -308,6 +310,35 @@ struct SidebarView: View {
         .sidebarRow(fill: isNewChatHovering ? SidebarStyle.rowHighlightFill : .clear)
         .onHover { isNewChatHovering = $0 }
         .help("Start a chat in the current project (⌘N)")
+    }
+
+    private var sidebarFooter: some View {
+        Button(action: onOpenSettings) {
+            HStack(spacing: SidebarStyle.iconTextSpacing) {
+                HugeIcon(name: "settings-02")
+                    .font(.system(size: SidebarStyle.projectIconSize + 2, weight: .regular))
+                    .frame(width: SidebarStyle.projectIconSize,
+                           height: SidebarStyle.projectIconSize,
+                           alignment: .leading)
+                Text("Settings")
+                    .font(SidebarStyle.rowFont)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, SidebarStyle.trafficLightColumn)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: SidebarStyle.rowHighlightRadius, style: .continuous)
+                    .fill(isSettingsHovering ? SidebarStyle.rowHighlightFill : .clear)
+                    .padding(.horizontal, SidebarStyle.rowHighlightInset)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isSettingsHovering = $0 }
+        .padding(.bottom, 8)
+        .help("Settings (⌘,)")
+        .accessibilityLabel("Settings")
     }
 
     // MARK: - List

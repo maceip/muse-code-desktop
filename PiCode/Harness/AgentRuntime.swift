@@ -67,6 +67,7 @@ enum AgentRuntimeFactory {
         sessionFile: String?,
         systemPrompt: String?,
         model: String?,
+        thinkingLevel: String? = nil,
         trustArguments: [String],
         extraArguments: [String],
         environment: [String: String]
@@ -78,6 +79,7 @@ enum AgentRuntimeFactory {
             sessionFile: sessionFile,
             systemPrompt: systemPrompt,
             model: model,
+            thinkingLevel: thinkingLevel,
             trustArguments: trustArguments,
             extraArguments: extraArguments,
             environment: environment

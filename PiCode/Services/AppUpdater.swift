@@ -134,7 +134,7 @@ final class AppUpdater {
             }
             let extracted = work.appendingPathComponent("extracted", isDirectory: true)
             try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
-            try await Self.shell("/usr/bin/ditto", ["-x", "-k", zip.path, extracted.path])
+            try await Self.shell("ditto", ["-x", "-k", zip.path, extracted.path])
 
             guard let newApp = try FileManager.default.contentsOfDirectory(at: extracted, includingPropertiesForKeys: nil)
                 .first(where: { $0.pathExtension == "app" })
@@ -143,9 +143,9 @@ final class AppUpdater {
             guard Bundle(url: newApp)?.bundleIdentifier == Bundle.main.bundleIdentifier else {
                 throw UpdateError("The download is a different app.")
             }
-            try await Self.shell("/usr/bin/codesign", ["--verify", "--deep", "--strict", newApp.path])
+            try await Self.shell("codesign", ["--verify", "--deep", "--strict", newApp.path])
             // Downloaded by us, but be explicit so Gatekeeper never prompts on relaunch.
-            _ = try? await Self.shell("/usr/bin/xattr", ["-dr", "com.apple.quarantine", newApp.path])
+            _ = try? await Self.shell("xattr", ["-dr", "com.apple.quarantine", newApp.path])
 
             try launchSwapScript(newApp: newApp, destination: destination, work: work)
             NSApp.terminate(nil)
@@ -186,7 +186,7 @@ final class AppUpdater {
         try handle.close()
 
         if let expected = release.sha256, expected.count == 64 {
-            let actual = try await Self.shell("/usr/bin/shasum", ["-a", "256", file.path])
+            let actual = try await Self.shell("shasum", ["-a", "256", file.path])
                 .split(separator: " ").first.map(String.init)
             guard actual == expected else { throw UpdateError("Checksum mismatch.") }
         }
@@ -196,24 +196,25 @@ final class AppUpdater {
     /// so it outlives the app.
     private func launchSwapScript(newApp: URL, destination: URL, work: URL) throws {
         let script = work.appendingPathComponent("swap.sh")
+        let shPath = PiDiscoveryService.resolveExecutable(named: "sh")?.path ?? PiDiscoveryService.userLoginShell()
         let body = """
-        #!/bin/sh
+        #!\(shPath)
         PID="$1"; NEW="$2"; DEST="$3"; WORK="$4"
         while kill -0 "$PID" 2>/dev/null; do sleep 0.2; done
         BACKUP="$DEST.old"
         rm -rf "$BACKUP"
         mv "$DEST" "$BACKUP" || exit 1
-        if /usr/bin/ditto "$NEW" "$DEST"; then
+        if ditto "$NEW" "$DEST"; then
             rm -rf "$BACKUP"
         else
             rm -rf "$DEST"; mv "$BACKUP" "$DEST"
         fi
-        /usr/bin/open "$DEST"
+        open "$DEST"
         rm -rf "$WORK"
         """
         try body.write(to: script, atomically: true, encoding: .utf8)
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.executableURL = URL(fileURLWithPath: shPath)
         process.arguments = [script.path, String(ProcessInfo.processInfo.processIdentifier),
                              newApp.path, destination.path, work.path]
         process.standardOutput = FileHandle.nullDevice
@@ -270,11 +271,15 @@ final class AppUpdater {
     }
 
     @discardableResult
-    nonisolated private static func shell(_ path: String, _ arguments: [String]) async throws -> String {
+    nonisolated private static func shell(_ command: String, _ arguments: [String]) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global().async {
+                guard let execURL = PiDiscoveryService.resolveExecutable(named: command) else {
+                    continuation.resume(throwing: UpdateError("\(command) not found on PATH."))
+                    return
+                }
                 let process = Process()
-                process.executableURL = URL(fileURLWithPath: path)
+                process.executableURL = execURL
                 process.arguments = arguments
                 let out = Pipe(), err = Pipe()
                 process.standardOutput = out
@@ -288,7 +293,7 @@ final class AppUpdater {
                         continuation.resume(returning: String(decoding: output, as: UTF8.self))
                     } else {
                         let message = String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                        continuation.resume(throwing: UpdateError(message.isEmpty ? "\(path) failed." : message))
+                        continuation.resume(throwing: UpdateError(message.isEmpty ? "\(command) failed." : message))
                     }
                 } catch {
                     continuation.resume(throwing: error)

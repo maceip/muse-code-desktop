@@ -80,10 +80,7 @@ enum TranscriptStyle {
     }
 
     static func userBubbleFill(_ scheme: ColorScheme) -> Color {
-        switch scheme {
-        case .dark: return Color(.sRGB, red: 0.20, green: 0.42, blue: 0.68, opacity: 0.40)
-        default: return Color(.sRGB, red: 0.906, green: 0.953, blue: 1.0, opacity: 1)
-        }
+        AppTheme.accentBlue
     }
 }
 
@@ -96,6 +93,7 @@ struct TranscriptRowView: View {
     @State private var hoveredAction: String?
     @State private var isEditing = false
     @State private var isShowingFullUserText = false
+    @State private var isShowingFullAssistantText = false
 
     var body: some View {
         Group {
@@ -141,14 +139,15 @@ struct TranscriptRowView: View {
         return VStack(alignment: .trailing, spacing: 0) {
             Text(preview.map { $0 + "…" } ?? item.text)
                 .font(TranscriptStyle.text)
+                .foregroundStyle(Color.white)
                 .lineSpacing(TranscriptStyle.lineSpacing)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
                 .background(TranscriptStyle.userBubbleFill(colorScheme),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 // The spec calls for a compact prompt bubble on the trailing edge,
                 // so the bubble hugs its text and is capped rather than spanning
                 // the transcript.
@@ -159,16 +158,10 @@ struct TranscriptRowView: View {
             // that size is a long main-thread layout on open and on every resize.
             // It is drawn folded, with the whole message one click away.
             if preview != nil || isShowingFullUserText {
-                Button {
+                seeMorePillButton(isExpanded: isShowingFullUserText) {
                     isShowingFullUserText.toggle()
-                } label: {
-                    Label(isShowingFullUserText ? "Show less" : "Show full message",
-                          huge: isShowingFullUserText ? "arrow-up-01" : "arrow-down-01")
-                        .font(Typography.body)
-                        .foregroundStyle(Color.accentColor)
                 }
-                .buttonStyle(.light)
-                .padding(.top, 6)
+                .padding(.top, 8)
             }
 
             // The actions are built only while the pointer is on the message,
@@ -240,8 +233,42 @@ struct TranscriptRowView: View {
     /// token/cost/stop-reason line — `toolUse` was the last of those and the least
     /// useful: it named the mechanism of the turn in the middle of the answer.
     private var assistantRow: some View {
-        MarkdownView(text: item.text, isStreaming: item.isStreaming)
-            .equatable()
+        let preview = (isShowingFullAssistantText || item.isStreaming)
+            ? nil
+            : TranscriptStyle.collapsedPreview(of: item.text, lineLimit: 24, byteLimit: 3_600)
+        return VStack(alignment: .leading, spacing: 10) {
+            MarkdownView(text: preview.map { $0 + "\n…" } ?? item.text, isStreaming: item.isStreaming)
+                .equatable()
+
+            if preview != nil || isShowingFullAssistantText {
+                HStack {
+                    Spacer(minLength: 0)
+                    seeMorePillButton(isExpanded: isShowingFullAssistantText) {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            isShowingFullAssistantText.toggle()
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    private func seeMorePillButton(isExpanded: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Text(isExpanded ? "Show less" : "See more")
+                    .font(.system(size: 12, weight: .semibold))
+                HugeIcon(name: isExpanded ? "arrow-up-01" : "arrow-down-01", size: 12)
+            }
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(Capsule(style: .continuous).fill(AppTheme.accentBlue))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Tool result without a call
@@ -295,7 +322,7 @@ struct TranscriptRowView: View {
                 .foregroundStyle(AppTheme.errorCardIcon)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Pi reported an error")
+                Text("Muse reported an error")
                     .font(Typography.noticeSemibold)
                 Text(item.errorMessage ?? item.text)
                     .font(Typography.notice)

@@ -10,7 +10,7 @@
 import Foundation
 
 struct GitStatusService {
-    var executable: URL = URL(fileURLWithPath: "/usr/bin/git")
+    var executable: URL? = PiDiscoveryService.resolveExecutable(named: "git")
     /// Diff output is truncated for display; the full text stays available
     /// through "Show All".
     var maxDiffBytes = 2 * 1024 * 1024
@@ -200,10 +200,13 @@ struct GitStatusService {
     // MARK: - Process
 
     private func git(_ arguments: [String]) async -> PiDiscoveryService.CommandResult {
-        await withCheckedContinuation { continuation in
+        guard let gitURL = executable ?? PiDiscoveryService.resolveExecutable(named: "git") else {
+            return PiDiscoveryService.CommandResult(stdout: "", stderr: "git executable not found on PATH", exitCode: -1)
+        }
+        return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
-                process.executableURL = self.executable
+                process.executableURL = gitURL
                 process.arguments = arguments
                 process.standardInput = FileHandle.nullDevice
                 let out = Pipe()

@@ -5,6 +5,7 @@
 //  Resolves the user's installed `muse` executable and its login-shell PATH.
 //
 
+import Darwin
 import Foundation
 
 enum PiDiscoveryResult: Equatable {
@@ -13,35 +14,71 @@ enum PiDiscoveryResult: Equatable {
 }
 
 struct PiDiscoveryService {
+    /// Resolves the current user's login shell from `$SHELL` or the POSIX account database (`getpwuid`).
+    static func userLoginShell() -> String {
+        if let envShell = ProcessInfo.processInfo.environment["SHELL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !envShell.isEmpty {
+            return envShell
+        }
+        if let pw = getpwuid(getuid()), let shellPtr = pw.pointee.pw_shell {
+            let pwShell = String(cString: shellPtr).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !pwShell.isEmpty {
+                return pwShell
+            }
+        }
+        return "sh"
+    }
+
+    /// Queries POSIX `_CS_PATH` so no system PATH directories are hardcoded.
+    static func posixSystemPath() -> String {
+        let length = confstr(_CS_PATH, nil, 0)
+        guard length > 0 else { return ProcessInfo.processInfo.environment["PATH"] ?? "" }
+        var buffer = [CChar](repeating: 0, count: length)
+        confstr(_CS_PATH, &buffer, length)
+        return String(cString: buffer)
+    }
+
+    /// Ordered, deduplicated search directories from the login shell PATH, process environment PATH, and POSIX `_CS_PATH`.
+    static func searchDirectories(shellPath: String? = nil) -> [String] {
+        let envPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let sysPath = posixSystemPath()
+        let combined = [shellPath ?? "", envPath, sysPath].joined(separator: ":")
+        var seen = Set<String>()
+        var result: [String] = []
+        for raw in combined.split(separator: ":") {
+            let dir = String(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !dir.isEmpty, seen.insert(dir).inserted else { continue }
+            result.append(dir)
+        }
+        return result
+    }
+
+    /// Dynamically resolves any executable by name across the user's PATH without hardcoding binary paths.
+    static func resolveExecutable(named binaryName: String, shellPath: String? = nil) -> URL? {
+        for dir in searchDirectories(shellPath: shellPath) {
+            let candidate = URL(fileURLWithPath: dir, isDirectory: true)
+                .appendingPathComponent(binaryName)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
     /// PATH used to launch Muse: the login-shell PATH with the executable's own
     /// directory first.
     static func launchEnvironment(executable: URL, shellPath: String?) -> [String: String] {
-        let fallback = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         let directory = executable.deletingLastPathComponent().path
-        let entries = (shellPath ?? fallback)
-            .split(separator: ":")
-            .map(String.init)
-            .filter { !$0.isEmpty && $0 != directory }
+        let entries = searchDirectories(shellPath: shellPath)
+            .filter { $0 != directory }
         let path = ([directory] + entries).joined(separator: ":")
         return ["PATH": path]
-    }
-
-    /// Candidates used when the login shell cannot answer.
-    static var fallbackCandidates: [String] {
-        let home = NSHomeDirectory()
-        return [
-            "\(home)/.local/bin/muse",
-            "/opt/homebrew/bin/muse",
-            "/usr/local/bin/muse",
-            "\(home)/.bun/bin/muse",
-            "/usr/bin/muse"
-        ]
     }
 
     var timeout: TimeInterval = 20
 
     func discover() async -> PiDiscoveryResult {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shell = Self.userLoginShell()
         let shellPath = await loginShellPath(shell: shell)
 
         var searched: [String] = []
@@ -62,7 +99,10 @@ struct PiDiscoveryService {
             detail = "The login shell did not report a `muse` executable."
         }
 
-        for candidate in Self.fallbackCandidates {
+        let candidates = Self.searchDirectories(shellPath: shellPath).map {
+            URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent("muse").path
+        }
+        for candidate in candidates {
             guard !searched.contains(candidate) else { continue }
             searched.append(candidate)
             guard FileManager.default.isExecutableFile(atPath: candidate) else { continue }
@@ -70,7 +110,7 @@ struct PiDiscoveryService {
                 path: candidate,
                 shellPath: shellPath,
                 shell: shell,
-                origin: "fallback scan"
+                origin: "PATH scan"
             ) {
                 return .found(installation)
             }

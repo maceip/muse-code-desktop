@@ -157,6 +157,8 @@ final class AppState {
         case extensions
         /// Detailed view of a spawned Muse subagent.
         case subagent(MuseSubagentInfo)
+        /// Persisted session plan or todo list (`write_todos` / `update_goal`).
+        case plan(title: String, content: String)
     }
 
     var inspectorArtifact: InspectorArtifact?
@@ -236,6 +238,12 @@ final class AppState {
 
     func openSubagentInInspector(_ subagent: MuseSubagentInfo) {
         inspectorArtifact = .subagent(subagent)
+        isNotificationsVisible = false
+        isInspectorVisible = true
+    }
+
+    func openPlanInInspector(title: String, content: String) {
+        inspectorArtifact = .plan(title: title, content: content)
         isNotificationsVisible = false
         isInspectorVisible = true
     }

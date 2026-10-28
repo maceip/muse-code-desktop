@@ -566,11 +566,6 @@ struct TreePane: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)
-            Button("Fork…") { state.run(.forkLatest) }
-                .buttonStyle(.settingsPill)
-                .disabled(controller.forkPoints.isEmpty)
-            Button("Clone") { Task { await controller.cloneSession() } }
-                .buttonStyle(.settingsPill)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -625,11 +620,6 @@ struct TreeNodeRow: View {
         .padding(.vertical, 2)
         .onHover { isHovering = $0 }
         .contextMenu {
-            if node.entry.type == "message" {
-                Button("Fork from This Message") {
-                    Task { await controller.fork(fromEntryId: node.entry.id) }
-                }
-            }
             Button("Copy Entry ID") { state.copyToPasteboard(node.entry.id) }
             if let parentId = node.entry.parentId {
                 Button("Copy Parent ID") { state.copyToPasteboard(parentId) }
@@ -679,8 +669,6 @@ struct ContextPane: View {
                 if !controller.queue.isEmpty {
                     queueSection
                 }
-
-                modeSection
 
                 if !controller.extensionStatuses.isEmpty || !controller.extensionWidgets.isEmpty {
                     extensionSection
@@ -817,39 +805,6 @@ struct ContextPane: View {
                     .controlSize(.small)
             }
         }
-    }
-
-    private var modeSection: some View {
-        InspectorSection(title: "Modes", systemImage: "toggle-off") {
-            LabeledContent("Steering") {
-                Dropdown(
-                    selection: Binding(
-                        get: { controller.state?.steeringMode ?? "one-at-a-time" },
-                        set: { value in Task { await controller.setSteeringMode(value) } }
-                    ),
-                    options: [.init(label: "One at a time", value: "one-at-a-time"), .init(label: "All", value: "all")]
-                )
-            }
-            LabeledContent("Follow-up") {
-                Dropdown(
-                    selection: Binding(
-                        get: { controller.state?.followUpMode ?? "one-at-a-time" },
-                        set: { value in Task { await controller.setFollowUpMode(value) } }
-                    ),
-                    options: [.init(label: "One at a time", value: "one-at-a-time"), .init(label: "All", value: "all")]
-                )
-            }
-            Toggle("Auto-compaction", isOn: Binding(
-                get: { controller.state?.autoCompactionEnabled ?? true },
-                set: { value in Task { await controller.setAutoCompaction(value) } }
-            ))
-            Toggle("Auto-retry", isOn: Binding(
-                get: { controller.state?.autoRetryEnabled ?? true },
-                set: { value in Task { await controller.setAutoRetry(value) } }
-            ))
-        }
-        .toggleStyle(.switch)
-        .controlSize(.small)
     }
 
     private var extensionSection: some View {

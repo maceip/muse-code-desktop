@@ -56,7 +56,6 @@ extension HarnessDescriptor {
     }
 
     static let museDescriptor: HarnessDescriptor = {
-        let home = NSHomeDirectory()
         return HarnessDescriptor(
             id: .museCode,
             displayName: "Muse",
@@ -79,12 +78,7 @@ extension HarnessDescriptor {
                 .completionSignal
             ],
             documentationURL: nil,
-            fallbackBinaries: [
-                "\(home)/.local/bin/muse",
-                "/opt/homebrew/bin/muse",
-                "/usr/local/bin/muse",
-                "/usr/bin/muse"
-            ],
+            fallbackBinaries: [],
             hasAdapter: true,
             supportNote: "Driven over `muse exec --json`, with sessions indexed from `~/.local/share/muse/sessions` and configuration in `~/.config/muse`."
         )

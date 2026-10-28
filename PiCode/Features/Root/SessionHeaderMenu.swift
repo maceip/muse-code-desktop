@@ -22,14 +22,10 @@ struct SessionHeaderMenu: View {
             Divider()
 
             Button { onCommand(.newSession) } label: { Label("New chat", huge: "add-01") }
-            Menu {
-                Button("Fork from last message…") { onCommand(.forkLatest) }
-                Button("Clone this chat") { onCommand(.cloneSession) }
-            } label: { Label("Fork", huge: "git-branch") }
 
             Divider()
 
-            Button { onCommand(.exportSession) } label: { Label("Export as HTML…", huge: "arrow-up-right-01") }
+            Button { onCommand(.exportSession) } label: { Label("Export Session…", huge: "arrow-up-right-01") }
             Menu {
                 Button("Copy transcript") { onCommand(.copyTranscript) }
                 Button("Copy last response") { onCommand(.copyLastResponse) }

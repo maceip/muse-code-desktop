@@ -69,7 +69,7 @@ enum HarnessInstallEnvironment {
     /// before a stale system Node prevents both npm `unsupported engine` errors
     /// and failures when the installed CLI later runs its `/usr/bin/env node`
     /// shebang.
-    static func preferredNodeBinDirectory() -> String? {
+    static func preferredNodeBinDirectory(shellPath: String? = nil) -> String? {
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let nvmRoot = home.appendingPathComponent(".nvm/versions/node", isDirectory: true)
         let nvmBins = ((try? FileManager.default.contentsOfDirectory(
@@ -91,16 +91,10 @@ enum HarnessInstallEnvironment {
 
         if let newest = nvmBins.last?.path { return newest }
 
-        let otherBins = [
-            home.appendingPathComponent(".volta/bin", isDirectory: true).path,
-            "/opt/homebrew/opt/node/bin",
-            "/usr/local/opt/node/bin"
-        ]
-        return otherBins.first {
-            FileManager.default.isExecutableFile(
-                atPath: URL(fileURLWithPath: $0).appendingPathComponent("node").path
-            )
+        if let resolvedNode = PiDiscoveryService.resolveExecutable(named: "node", shellPath: shellPath) {
+            return resolvedNode.deletingLastPathComponent().path
         }
+        return nil
     }
 
     private static func compareVersions(_ lhs: [Int], _ rhs: [Int]) -> Bool {

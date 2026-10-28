@@ -50,7 +50,7 @@ struct InspectorView: View {
             }
         }
         .frame(maxHeight: .infinity)
-        .background(AppTheme.background)
+        .background(AppTheme.elevated)
     }
 }
 
@@ -70,7 +70,7 @@ struct MuseRightSidebarPanel: View {
                 .frame(minHeight: 210, idealHeight: 245, maxHeight: 300)
         }
         .padding(10)
-        .background(AppTheme.background)
+        .background(AppTheme.elevated)
     }
 }
 
@@ -173,7 +173,7 @@ struct MuseOverviewCard: View {
                         }
 
                         overviewNavRow(
-                            icon: "sparkles",
+                            icon: "puzzle",
                             title: "Extensions",
                             showsChevron: true
                         ) {
@@ -438,7 +438,9 @@ struct MuseOverviewCard: View {
 
     private func artifactRow(_ artifact: MuseArtifactInfo) -> some View {
         Button {
-            if let path = artifact.path {
+            if artifact.kind == .plan {
+                state.openPlanInInspector(title: artifact.title, content: artifact.preview ?? artifact.title)
+            } else if let path = artifact.path {
                 let resolved = (path as NSString).isAbsolutePath
                     ? path
                     : (controller.projectPath as NSString).appendingPathComponent(path)
@@ -497,21 +499,24 @@ struct MuseAgentMessagesCard: View {
 
                 Spacer(minLength: 0)
 
-                if !controller.subagents.isEmpty {
+                let peerSessions = state.projects.flatMap(\.sessions).filter {
+                    $0.sessionId != nil && $0.sessionId != controller.sessionId
+                }
+                if !peerSessions.isEmpty {
                     Menu {
-                        ForEach(controller.subagents) { subagent in
-                            Button(subagent.title) {
-                                targetRecipient = subagent.childSessionId ?? subagent.id
+                        ForEach(peerSessions) { peer in
+                            Button(peer.displayName) {
+                                targetRecipient = peer.sessionId ?? peer.displayName
                             }
                         }
                     } label: {
-                        HugeIcon(name: "user-group", size: 13)
+                        HugeIcon(name: "user-multiple", size: 13)
                             .foregroundStyle(.secondary)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
-                    .help("Pick a subagent recipient")
+                    .help("Pick a target Muse session")
                 }
 
                 Button {
@@ -567,7 +572,7 @@ struct MuseAgentMessagesCard: View {
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
                     TextField(
-                        controller.subagents.first?.childSessionId ?? controller.sessionId ?? "session or subagent id",
+                        "target session id or name",
                         text: $targetRecipient
                     )
                     .textFieldStyle(.plain)
@@ -592,7 +597,7 @@ struct MuseAgentMessagesCard: View {
                                 .foregroundStyle(.white)
                                 .frame(width: 20, height: 20)
                                 .background(
-                                    Circle().fill(canSend ? Color.accentColor : Color.secondary.opacity(0.35))
+                                    Circle().fill(canSend ? AppTheme.accentBlue : Color.secondary.opacity(0.35))
                                 )
                         }
                     }
@@ -616,12 +621,7 @@ struct MuseAgentMessagesCard: View {
     }
 
     private var resolvedRecipient: String {
-        let trimmed = targetRecipient.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-        return controller.subagents.first?.childSessionId
-            ?? controller.subagents.first?.id
-            ?? controller.sessionId
-            ?? ""
+        targetRecipient.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var canSend: Bool {
@@ -648,7 +648,7 @@ struct MuseAgentMessagesCard: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 HugeIcon(
-                    name: msg.direction == .incoming ? "arrow-down-left-01" : "arrow-up-right-01",
+                    name: msg.direction == .incoming ? "arrow-left-01" : "arrow-up-right-01",
                     size: 11
                 )
                 .foregroundStyle(msg.direction == .incoming ? Color.accentColor : Color.secondary)
@@ -726,7 +726,7 @@ struct MuseExtensionsPane: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if skills.skills.isEmpty {
                 EmptyStateView(
-                    systemImage: "sparkles",
+                    systemImage: "puzzle",
                     title: "No Muse skills found",
                     message: "Install skills in ~/.config/muse/skills or .muse/skills."
                 )
@@ -789,7 +789,7 @@ struct MuseSubagentDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                InspectorSection(title: "Subagent", systemImage: "user-group") {
+                InspectorSection(title: "Subagent", systemImage: "user-multiple") {
                     KeyValueRow(key: "Title", value: subagent.title)
                     KeyValueRow(key: "Role", value: subagent.role)
                     KeyValueRow(key: "Status", value: subagent.status.rawValue)
@@ -1047,7 +1047,7 @@ struct ArtifactHeader: View {
         case .tool(let id):
             guard let item = item(id), item.kind == .toolCall else { return nil }
             return item.toolFilePath
-        case .review, .files, .extensions, .subagent:
+        case .review, .files, .extensions, .subagent, .plan:
             return nil
         }
     }
@@ -1071,6 +1071,8 @@ struct ArtifactHeader: View {
             return "Extensions"
         case .subagent(let subagent):
             return subagent.title
+        case .plan(let title, _):
+            return title
         }
     }
 
@@ -1079,8 +1081,9 @@ struct ArtifactHeader: View {
         case .change, .review: return "edit-02"
         case .file: return "note-01"
         case .files: return "folder-02"
-        case .extensions: return "sparkles"
-        case .subagent: return "user-group"
+        case .extensions: return "puzzle"
+        case .subagent: return "user-multiple"
+        case .plan: return "task-add-01"
         case .tool(let id):
             guard let item = item(id) else { return "wrench-01" }
             return QuietFamily.of(item)?.systemImage ?? "wrench-01"
@@ -1088,7 +1091,8 @@ struct ArtifactHeader: View {
     }
 
     private func item(_ id: String) -> TranscriptItem? {
-        controller.items.first { $0.id == id }
+        controller.items.first { $0.id == id || $0.toolCallId == id }
+            ?? controller.allItems.first { $0.id == id || $0.toolCallId == id }
     }
 }
 
@@ -1103,7 +1107,8 @@ struct ArtifactContentView: View {
     var body: some View {
         switch artifact {
         case .tool(let id):
-            if let item = controller.items.first(where: { $0.id == id }) {
+            if let item = controller.items.first(where: { $0.id == id || $0.toolCallId == id })
+                ?? controller.allItems.first(where: { $0.id == id || $0.toolCallId == id }) {
                 InspectorToolArtifactView(item: item, wrapsText: wrapsText)
             } else {
                 EmptyStateView(
@@ -1124,6 +1129,13 @@ struct ArtifactContentView: View {
             MuseExtensionsPane(controller: controller)
         case .subagent(let subagent):
             MuseSubagentDetailView(state: state, subagent: subagent, controller: controller)
+        case .plan(_, let content):
+            ScrollView {
+                MarkdownView(text: content, isStreaming: false)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(AppTheme.background)
         }
     }
 }

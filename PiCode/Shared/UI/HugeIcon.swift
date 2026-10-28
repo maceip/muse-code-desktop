@@ -32,7 +32,7 @@ struct HugeIcon: View {
 /// size, so this also works inline in `Text` and as a `Label` icon AppKit draws
 /// into a menu.
 func hugeIconImage(_ name: String) -> Image {
-    Image("Hugeicons/\(name)")
+    Image(nsImage: .huge(name))
 }
 
 extension Label where Title == Text, Icon == Image {
@@ -48,8 +48,27 @@ extension Label where Title == Text, Icon == Image {
 extension NSImage {
     /// The Hugeicons glyph as an `NSImage`, for AppKit surfaces such as menus.
     static func huge(_ name: String) -> NSImage {
-        let image = NSImage(named: "Hugeicons/\(name)") ?? NSImage()
-        image.isTemplate = true
-        return image
+        if let image = NSImage(named: "Hugeicons/\(name)") {
+            image.isTemplate = true
+            return image
+        }
+        let svgRelative = "PiCode/Resources/Assets.xcassets/Hugeicons/\(name).imageset/\(name).svg"
+        let candidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(svgRelative),
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/Assets.xcassets/Hugeicons/\(name).imageset/\(name).svg")
+        ]
+        for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+            if let image = NSImage(contentsOf: url) {
+                image.isTemplate = true
+                return image
+            }
+        }
+        let fallback = NSImage()
+        fallback.isTemplate = true
+        return fallback
     }
 }

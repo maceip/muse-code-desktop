@@ -301,7 +301,7 @@ struct ComposerView: View {
                 Task {
                     // The documented Stop: clear the queue, put what was queued
                     // back in the box, then abort. `⌘.` in the menu is the
-                    // hard stop that leaves the queue to Pi.
+                    // hard stop that leaves the queue to Muse.
                     await controller.interrupt()
                     text = controller.drafts.text(for: controller.draftKey)
                 }
@@ -310,7 +310,7 @@ struct ComposerView: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.accentColor))
+                    .background(Circle().fill(AppTheme.accentBlue))
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -323,7 +323,7 @@ struct ComposerView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(canSend ? 1 : 0.55))
                     .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.accentColor.opacity(canSend ? 1 : 0.4)))
+                    .background(Circle().fill(AppTheme.accentBlue.opacity(canSend ? 1 : 0.38)))
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -687,30 +687,62 @@ enum AttachmentLoader {
     }
 }
 
-// MARK: - Custom Credit Tracker Battery Icon (`muse usage --json` + Session Allowance)
+// MARK: - Custom Credit & Token Tracker Pill (`muse usage --json` + Session Token Telemetry)
 
 struct MuseCreditBatteryButton: View {
     var controller: PiSessionController
     @State private var isPopoverPresented = false
     @Bindable private var usageService = MuseUsageService.shared
 
-    private var percentage: Int {
-        let totalTokens = (controller.stats?.tokens.totalTokens ?? 0)
+    private var totalSessionTokens: Int {
+        (controller.stats?.tokens.totalTokens ?? 0)
             + controller.subagents.reduce(0) { $0 + $1.totalTokens }
-        return usageService.batteryPercentage(
-            contextUsagePercent: controller.contextUsagePercent,
-            sessionTokens: totalTokens,
-            contextWindow: controller.model?.contextWindow
-        )
+    }
+
+    private var allowancePercentage: Int? {
+        usageService.allowancePercentage
+    }
+
+    private var contextUsedPercent: Double? {
+        if let used = controller.contextUsagePercent, used > 0 {
+            return min(100, max(0, used))
+        }
+        if let window = controller.model?.contextWindow, window > 0, totalSessionTokens > 0 {
+            return min(100, (Double(totalSessionTokens) / Double(window)) * 100.0)
+        }
+        return nil
+    }
+
+    private var pillLabel: String {
+        if let pct = allowancePercentage {
+            return "\(pct)%"
+        }
+        if totalSessionTokens > 0 {
+            return Format.tokens(totalSessionTokens)
+        }
+        return "0 tok"
     }
 
     private var fillFraction: CGFloat {
-        CGFloat(max(0, min(100, percentage))) / 100.0
+        if let pct = allowancePercentage {
+            return CGFloat(max(0, min(100, pct))) / 100.0
+        }
+        if let used = contextUsedPercent {
+            return CGFloat(max(0, min(100, used))) / 100.0
+        }
+        return 0
     }
 
     private var batteryTint: Color {
-        if percentage <= 20 { return .red }
-        if percentage <= 45 { return .orange }
+        if let pct = allowancePercentage {
+            if pct <= 20 { return .red }
+            if pct <= 45 { return .orange }
+            return Color.primary
+        }
+        if let used = contextUsedPercent {
+            if used >= 85 { return .red }
+            if used >= 65 { return .orange }
+        }
         return Color.primary
     }
 
@@ -721,23 +753,22 @@ struct MuseCreditBatteryButton: View {
         } label: {
             HStack(spacing: 4) {
                 ZStack(alignment: .leading) {
-                    // Outer battery pill background
                     Capsule(style: .continuous)
                         .fill(Color.primary.opacity(0.10))
 
-                    // Diagonal hatch / stripe pattern inside battery
                     GeometryReader { geo in
                         let width = max(0, geo.size.width * fillFraction)
-                        ZStack(alignment: .trailing) {
-                            Capsule(style: .continuous)
-                                .fill(batteryTint.opacity(0.88))
-                                .frame(width: width)
+                        if width > 0 {
+                            ZStack(alignment: .trailing) {
+                                Capsule(style: .continuous)
+                                    .fill(batteryTint.opacity(0.32))
+                                    .frame(width: width)
 
-                            // Diagonal hatch stripes on the right edge like the screenshot's [100%///] pill
-                            BatteryHatchPattern()
-                                .stroke(Color(nsColor: .windowBackgroundColor).opacity(0.42), lineWidth: 1.4)
-                                .frame(width: min(width, 16), height: geo.size.height)
-                                .clipped()
+                                BatteryHatchPattern()
+                                    .stroke(Color(nsColor: .windowBackgroundColor).opacity(0.42), lineWidth: 1.4)
+                                    .frame(width: min(width, 16), height: geo.size.height)
+                                    .clipped()
+                            }
                         }
                     }
                     .clipShape(Capsule(style: .continuous))
@@ -745,12 +776,13 @@ struct MuseCreditBatteryButton: View {
                     Capsule(style: .continuous)
                         .strokeBorder(batteryTint.opacity(0.32), lineWidth: 1)
 
-                    Text("\(percentage)%")
+                    Text(pillLabel)
                         .font(.system(size: 10.5, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(percentage > 45 ? Color(nsColor: .windowBackgroundColor) : .primary)
-                        .padding(.horizontal, 6)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 7)
+                        .frame(maxWidth: .infinity, alignment: .center)
                 }
-                .frame(width: 44, height: 18)
+                .frame(minWidth: 48, idealWidth: 54, maxWidth: 64, minHeight: 18, maxHeight: 18)
 
                 HugeIcon(name: "arrow-up-01")
                     .font(.system(size: 9, weight: .semibold))
@@ -760,7 +792,7 @@ struct MuseCreditBatteryButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Muse Credit & Context Battery (\(percentage)% remaining)")
+        .help(allowancePercentage.map { "Muse Credit Allowance (\($0)% remaining)" } ?? "Session Token Usage (\(totalSessionTokens.formatted()) tokens)")
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
             popoverContent
         }
@@ -775,29 +807,31 @@ struct MuseCreditBatteryButton: View {
         let outputTokens = controller.stats?.tokens.output ?? 0
         let cachedTokens = controller.stats?.tokens.cacheRead ?? 0
         let subagentTokens = controller.subagents.reduce(0) { $0 + $1.totalTokens }
-        let contextWindow = controller.model?.contextWindow ?? 1_007_997
+        let contextWindow = controller.model?.contextWindow
+        let isYoloEnabled = (controller.trustOverride ?? (controller.trustState != .untrusted))
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Muse Credit & Context Battery")
+                Text(allowancePercentage != nil ? "Muse Credit Allowance" : "Session Token Usage")
                     .font(.callout.weight(.semibold))
                 Spacer()
-                Text("\(percentage)%")
+                Text(pillLabel)
                     .font(.callout.monospacedDigit().weight(.bold))
-                    .foregroundStyle(percentage <= 20 ? .red : (percentage <= 45 ? .orange : .green))
+                    .foregroundStyle(.primary)
             }
 
-            // Visual battery bar in popover
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.primary.opacity(0.08))
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(percentage <= 20 ? Color.red : (percentage <= 45 ? Color.orange : Color.accentColor))
-                        .frame(width: max(4, geo.size.width * fillFraction))
+            if fillFraction > 0 {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color.primary.opacity(0.08))
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color.accentColor)
+                            .frame(width: max(4, geo.size.width * fillFraction))
+                    }
                 }
+                .frame(height: 8)
             }
-            .frame(height: 8)
 
             Divider()
 
@@ -808,7 +842,21 @@ struct MuseCreditBatteryButton: View {
                 if subagentTokens > 0 {
                     KeyValueRow(key: "Subagent tokens", value: "\(subagentTokens.formatted())", isMonospaced: true)
                 }
-                KeyValueRow(key: "Context capacity", value: "\((totalTokens + subagentTokens).formatted()) / \(contextWindow.formatted())", isMonospaced: true)
+                if let contextWindow, contextWindow > 0 {
+                    KeyValueRow(key: "Context capacity", value: "\((totalTokens + subagentTokens).formatted()) / \(contextWindow.formatted())", isMonospaced: true)
+                } else {
+                    KeyValueRow(key: "Total session tokens", value: "\((totalTokens + subagentTokens).formatted())", isMonospaced: true)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                KeyValueRow(
+                    key: "Execution mode",
+                    value: isYoloEnabled ? "YOLO (no sandbox / no prompts)" : "Restricted (--no-approve)",
+                    isMonospaced: false
+                )
             }
 
             if let snapshot = usageService.latestSnapshot {
@@ -818,9 +866,14 @@ struct MuseCreditBatteryButton: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(snapshot.allowanceSummary ?? "Meta Muse Subscription")
-                            .font(.caption.weight(.medium))
-                        if let hint = snapshot.hint ?? snapshot.reason {
+                        if let allowance = snapshot.allowanceRemainingPercent {
+                            Text(snapshot.allowanceSummary ?? "Allowance: \(Int(allowance.rounded()))% remaining")
+                                .font(.caption.weight(.medium))
+                        } else {
+                            Text("muse usage: \(snapshot.reason ?? "no allowance reported")")
+                                .font(.caption.weight(.medium))
+                        }
+                        if let hint = snapshot.hint {
                             Text(hint)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
@@ -846,9 +899,12 @@ struct MuseCreditBatteryButton: View {
                 }
                 .buttonStyle(.settingsPill)
                 Spacer()
-                Text("YOLO • Parallel Tools • Subagents")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                if let modelId = controller.model?.id {
+                    Text(modelId)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(14)

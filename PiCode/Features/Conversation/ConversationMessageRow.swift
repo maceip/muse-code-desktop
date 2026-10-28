@@ -63,10 +63,8 @@ private struct TranscriptResponseFooter: View {
 
     var body: some View {
         let responseText = response.text
-        let responseEntryID = response.entryID
         let responseHoverID = response.hoverID
         let copyActionID = responseHoverID.map { "copy-\($0)" }
-        let branchActionID = responseHoverID.map { "branch-\($0)" }
 
         if !response.isLastTurn || !controller.runtime.isBusy {
             // Built only while the turn is hovered, on a line of fixed height,
@@ -85,23 +83,6 @@ private struct TranscriptResponseFooter: View {
                     .onHover { hover.actionID = $0 ? copyActionID : nil }
                     .help("Copy")
                     .accessibilityLabel("Copy")
-
-                    // Retain this response by forking
-                    // before the following user prompt,
-                    // or cloning the latest turn.
-                    if let entryId = responseEntryID {
-                        Button {
-                            Task { await controller.branch(afterUserEntryId: entryId) }
-                        } label: {
-                            HugeIcon(name: "git-branch")
-                                .font(.system(size: 13))
-                        }
-                        .foregroundStyle(hover.actionID == branchActionID ? Color.white : Color.secondary)
-                        .onHover { hover.actionID = $0 ? branchActionID : nil }
-                        .help("Start a new Pi branch from this response")
-                        .accessibilityLabel("Branch from response")
-                        .disabled(controller.runtime.isBusy || controller.isChangingBranch)
-                    }
                 }
                 .buttonStyle(.plain)
 
@@ -118,11 +99,6 @@ private struct TranscriptResponseFooter: View {
             .contextMenu {
                 Button("Copy Response") {
                     WorkspaceLauncher.copyToPasteboard(responseText)
-                }
-                if let entryId = responseEntryID {
-                    Button("Branch from This Response…") {
-                        Task { await controller.branch(afterUserEntryId: entryId) }
-                    }
                 }
             }
         }

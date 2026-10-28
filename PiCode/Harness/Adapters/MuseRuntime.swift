@@ -14,6 +14,10 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
 
     let trustArguments: [String]
     private var currentTask: Process?
+    private var currentBashProcess: Process?
+    private var isRunningTurn = false
+    private var steeringQueue: [(prompt: String, images: [PiImagePayload])] = []
+    private var followUpQueue: [(prompt: String, images: [PiImagePayload])] = []
     private var currentSessionID: String?
     private var selectedModel: String
     private var selectedThinkingLevel: String
@@ -40,7 +44,7 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
                   environment: [String: String]) {
         self.trustArguments = []
         let configured = Self.readUserSettings()
-        self.selectedModel = Self.normalizeModelID(model) ?? configured.model ?? "muse-wonder-full-1.0"
+        self.selectedModel = Self.normalizeModelID(model) ?? configured.model ?? "default"
         self.selectedThinkingLevel = configured.reasoningEffort ?? "high"
         super.init(
             descriptor: descriptor,
@@ -65,13 +69,17 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
          sessionFile: String?,
          systemPrompt: String?,
          model: String?,
+         thinkingLevel: String? = nil,
          trustArguments: [String],
          extraArguments: [String],
          environment: [String: String]) {
         self.trustArguments = trustArguments
         let configured = Self.readUserSettings()
-        self.selectedModel = Self.normalizeModelID(model) ?? configured.model ?? "muse-wonder-full-1.0"
-        self.selectedThinkingLevel = configured.reasoningEffort ?? "high"
+        self.selectedModel = Self.normalizeModelID(model) ?? configured.model ?? "default"
+        let trimmedThinking = thinkingLevel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.selectedThinkingLevel = (trimmedThinking?.isEmpty == false ? trimmedThinking : nil)
+            ?? configured.reasoningEffort
+            ?? "high"
         super.init(
             descriptor: descriptor,
             installation: installation,
@@ -143,8 +151,47 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
     }
 
     override func stop() {
+        steeringQueue.removeAll()
+        followUpQueue.removeAll()
         currentTask?.terminate()
         currentTask = nil
+        currentBashProcess?.terminate()
+        currentBashProcess = nil
+        isRunningTurn = false
+    }
+
+    private func enqueueOrStart(prompt: String, images: [PiImagePayload], asSteering: Bool) {
+        if isRunningTurn {
+            if asSteering {
+                steeringQueue.append((prompt: prompt, images: images))
+                currentTask?.terminate()
+            } else {
+                followUpQueue.append((prompt: prompt, images: images))
+            }
+            return
+        }
+        isRunningTurn = true
+        Task.detached { [weak self] in
+            await self?.runTurnLoop(initialPrompt: prompt, initialImages: images)
+        }
+    }
+
+    private func runTurnLoop(initialPrompt: String, initialImages: [PiImagePayload]) async {
+        var nextItem: (prompt: String, images: [PiImagePayload])? = (initialPrompt, initialImages)
+        while let current = nextItem {
+            recordUser(current.prompt)
+            userMessages += 1
+            appendRuntimeEntry(message: AgentWire.userMessage(current.prompt))
+            await runTurn(prompt: current.prompt, images: current.images)
+            if !steeringQueue.isEmpty {
+                nextItem = steeringQueue.removeFirst()
+            } else if !followUpQueue.isEmpty {
+                nextItem = followUpQueue.removeFirst()
+            } else {
+                nextItem = nil
+            }
+        }
+        isRunningTurn = false
     }
 
     override func send(_ command: RPCCommand, timeout: TimeInterval) async throws -> RPCResponse {
@@ -152,15 +199,16 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             onPayloadRecord?("→ \(JSONScanner.serialize(command.json(id: "muse")))")
         }
         switch command {
-        case .prompt(let message, _, _),
-             .steer(let message, _),
-             .followUp(let message, _):
-            recordUser(message)
-            userMessages += 1
-            appendRuntimeEntry(message: AgentWire.userMessage(message))
-            Task.detached { [weak self] in
-                await self?.runTurn(prompt: message)
-            }
+        case .prompt(let message, let images, let behavior):
+            enqueueOrStart(prompt: message, images: images, asSteering: behavior == .steer)
+            return response(command)
+
+        case .steer(let message, let images):
+            enqueueOrStart(prompt: message, images: images, asSteering: true)
+            return response(command)
+
+        case .followUp(let message, let images):
+            enqueueOrStart(prompt: message, images: images, asSteering: false)
             return response(command)
 
         case .abort:
@@ -179,6 +227,7 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
                 selectedThinkingLevel = perModelEffort
                 stateFields.thinkingLevel = perModelEffort
             }
+            Self.writeUserSettings(model: selectedModel, reasoningEffort: selectedThinkingLevel)
             stateFields.model = resolveModelObject(for: selectedModel)
             return response(command, data: .object(["model": stateFields.model?.jsonValue ?? .null]))
 
@@ -188,12 +237,14 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             let currentIdx = models.firstIndex(where: { $0.id == selectedModel }) ?? -1
             let next = models[(currentIdx + 1) % models.count]
             selectedModel = next.id
+            Self.writeUserSettings(model: selectedModel, reasoningEffort: selectedThinkingLevel)
             stateFields.model = next
             return response(command, data: .object(["model": next.jsonValue]))
 
         case .setThinkingLevel(let level):
             selectedThinkingLevel = level
             stateFields.thinkingLevel = level
+            Self.writeUserSettings(model: selectedModel, reasoningEffort: selectedThinkingLevel)
             return response(command)
 
         case .cycleThinkingLevel:
@@ -201,10 +252,46 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             let next = Self.efforts[(current + 1) % Self.efforts.count]
             selectedThinkingLevel = next
             stateFields.thinkingLevel = next
+            Self.writeUserSettings(model: selectedModel, reasoningEffort: selectedThinkingLevel)
             return response(command, data: .object(["level": .string(next)]))
 
         case .getCommands:
-            return response(command, data: .object(["commands": .array([])]))
+            let skills = await MuseSkillsService.loadSkills(workspace: projectPath, installation: installation)
+            let commandObjects: [JSONValue] = skills.filter(\.isEnabled).map { skill in
+                .object([
+                    "name": .string(skill.name),
+                    "description": .string(skill.description),
+                    "source": .string("skill"),
+                    "path": .string(skill.path)
+                ])
+            }
+            return response(command, data: .object(["commands": .array(commandObjects)]))
+
+        case .exportHTML(let outputPath):
+            let targetPath = outputPath ?? URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("muse-session-\(currentSessionID ?? "export").html").path
+            if let sid = currentSessionID, !sid.isEmpty {
+                let jsonPath = targetPath.hasSuffix(".json") ? targetPath : targetPath + ".muse.json"
+                let res = await PiDiscoveryService().run(
+                    executable: installation.executableURL,
+                    arguments: ["export", sid, "--output", jsonPath],
+                    directory: URL(fileURLWithPath: projectPath),
+                    environment: environment
+                )
+                if res.exitCode == 0, targetPath.hasSuffix(".json") {
+                    return response(command, data: .object(["path": .string(jsonPath)]))
+                }
+            }
+            let items = TranscriptBuilder.items(messages: messages)
+            let text = TranscriptExporter.plainText(items)
+            let html = """
+            <!doctype html>
+            <html><head><meta charset="utf-8"><title>\(stateFields.sessionName ?? "Muse Session")</title>
+            <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#181818;color:#eee;max-width:820px;margin:32px auto;padding:0 20px;line-height:1.6}pre{white-space:pre-wrap;background:#212121;padding:16px;border-radius:10px}</style>
+            </head><body><h1>\(stateFields.sessionName ?? "Muse Session")</h1><pre>\(text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;"))</pre></body></html>
+            """
+            try? html.write(toFile: targetPath, atomically: true, encoding: .utf8)
+            return response(command, data: .object(["path": .string(targetPath)]))
 
         case .getSessionStats:
             return response(command, data: statsJSON())
@@ -232,20 +319,11 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             return response(command, data: .object(data))
 
         case .getForkMessages:
-            let forkMsgs: [JSONValue] = entries.compactMap { entry in
-                guard entry.string("type") == "message",
-                      let msg = entry["message"],
-                      msg.string("role") == "user",
-                      let id = entry.string("id") else { return nil }
-                let text = PiMessage(raw: msg).textContent
-                return .object([
-                    "entryId": .string(id),
-                    "text": .string(text)
-                ])
-            }
-            return response(command, data: .object(["messages": .array(forkMsgs)]))
+            return response(command, data: .object(["messages": .array([])]))
 
         case .newSession:
+            steeringQueue.removeAll()
+            followUpQueue.removeAll()
             messages.removeAll()
             entries.removeAll()
             currentSessionID = nil
@@ -260,6 +338,8 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             return response(command, data: .object(["cancelled": .bool(false)]))
 
         case .switchSession(let path):
+            steeringQueue.removeAll()
+            followUpQueue.removeAll()
             let summary = await Task.detached(priority: .userInitiated) {
                 MuseSessionHistory.loadSummary(at: path)
             }.value
@@ -294,11 +374,27 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             return response(command, data: .object([
                 "output": .string(result.output),
                 "exitCode": .number(Double(result.exitCode)),
-                "cancelled": .bool(false),
+                "cancelled": .bool(result.cancelled),
                 "truncated": .bool(false)
             ]))
 
-        case .abortBash, .clearQueue, .abortRetry:
+        case .abortBash:
+            currentBashProcess?.terminate()
+            currentBashProcess = nil
+            return response(command)
+
+        case .clearQueue:
+            let steered = steeringQueue.map { JSONValue.string($0.prompt) }
+            let followed = followUpQueue.map { JSONValue.string($0.prompt) }
+            steeringQueue.removeAll()
+            followUpQueue.removeAll()
+            return response(command, data: .object([
+                "steering": .array(steered),
+                "followUp": .array(followed)
+            ]))
+
+        case .abortRetry:
+            stop()
             return response(command)
 
         default:
@@ -308,25 +404,30 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
 
     // MARK: - Turn Execution
 
-    private func runTurn(prompt: String) async {
+    private func runTurn(prompt: String, images: [PiImagePayload] = []) async {
         currentText = ""
         currentThinking = ""
         currentTurnModel = selectedModel == "default" ? nil : selectedModel
         activeToolNames.removeAll()
         turnToolCalls.removeAll()
 
+        let isUntrustedOverride = trustArguments.contains("--no-approve")
         var arguments = [
             "exec",
             "--json",
             "--workspace", projectPath,
-            "--yolo",
-            "--disable-sandbox",
-            "--disable-approval",
-            "--approval-mode", "never",
             "--parallel-tool-calls",
-            "--subagent-worktree-isolation",
-            "--trust-workspace"
+            "--subagent-worktree-isolation"
         ]
+        if !isUntrustedOverride {
+            arguments += [
+                "--yolo",
+                "--disable-sandbox",
+                "--disable-approval",
+                "--approval-mode", "never",
+                "--trust-workspace"
+            ]
+        }
         if let sessionID = currentSessionID, !sessionID.isEmpty {
             arguments += ["--session-id", sessionID]
         }
@@ -336,13 +437,40 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
         if !selectedThinkingLevel.isEmpty {
             arguments += ["--reasoning-effort", selectedThinkingLevel]
         }
+
+        var tempImageURLs: [URL] = []
+        defer {
+            for url in tempImageURLs {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        for image in images {
+            if let data = Data(base64Encoded: image.data) {
+                let ext = image.mimeType.contains("png") ? "png" : (image.mimeType.contains("webp") ? "webp" : "jpg")
+                let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent("muse-img-\(UUID().uuidString).\(ext)")
+                if (try? data.write(to: tempURL)) != nil {
+                    tempImageURLs.append(tempURL)
+                    arguments += ["--image", tempURL.path]
+                }
+            }
+        }
+
         for flag in extraArguments where !arguments.contains(flag) {
             if flag == "--no-parallel-tool-calls" {
                 arguments.removeAll { $0 == "--parallel-tool-calls" }
             }
             arguments.append(flag)
         }
-        arguments += ["--", prompt]
+        let effectivePrompt: String
+        if let sys = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sys.isEmpty,
+           currentSessionID == nil {
+            effectivePrompt = "<system_instructions>\n\(sys)\n</system_instructions>\n\n\(prompt)"
+        } else {
+            effectivePrompt = prompt
+        }
+        arguments += ["--", effectivePrompt]
 
         let process = Process()
         process.executableURL = installation.executableURL
@@ -625,9 +753,9 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             provider: "meta",
             reasoning: true,
             thinkingEfforts: Self.efforts,
-            images: false,
-            contextWindow: 1_007_997,
-            maxTokens: 128_000
+            images: true,
+            contextWindow: nil,
+            maxTokens: nil
         ))
     }
 
@@ -665,7 +793,7 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
                         provider: provider,
                         reasoning: !efforts.isEmpty,
                         thinkingEfforts: efforts.isEmpty ? Self.efforts : efforts,
-                        images: false,
+                        images: true,
                         contextWindow: contextLimit,
                         maxTokens: outputLimit
                     ))
@@ -673,35 +801,16 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             }
         }
 
-        let fallbacks: [(id: String, name: String)] = [
-            ("muse-wonder-full-1.0", "muse-wonder-full-1.0"),
-            ("muse-wonder-1.0", "muse-wonder-1.0"),
-            ("muse-spark-1.3", "muse-spark-1.3"),
-            ("muse-spark-1.2", "muse-spark-1.2")
-        ]
-        for item in fallbacks where seen.insert(item.id).inserted {
-            models.append(AgentWire.model(
-                id: item.id,
-                name: item.name,
-                provider: "meta",
-                reasoning: true,
-                thinkingEfforts: Self.efforts,
-                images: false,
-                contextWindow: 1_007_997,
-                maxTokens: 128_000
-            ))
-        }
-
-        if !selectedModel.isEmpty, seen.insert(selectedModel).inserted {
+        if !selectedModel.isEmpty, selectedModel != "default", seen.insert(selectedModel).inserted {
             models.insert(AgentWire.model(
                 id: selectedModel,
                 name: selectedModel,
                 provider: "meta",
                 reasoning: true,
                 thinkingEfforts: Self.efforts,
-                images: false,
-                contextWindow: 1_007_997,
-                maxTokens: 128_000
+                images: true,
+                contextWindow: nil,
+                maxTokens: nil
             ), at: 0)
         }
 
@@ -709,9 +818,7 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
     }
 
     private func statsJSON() -> JSONValue {
-        let contextWindow = stateFields.model?.contextWindow ?? 1_007_997
         let usedTokens = usageTotals.totalTokens
-        let percent = contextWindow > 0 ? min(100.0, (Double(usedTokens) / Double(contextWindow)) * 100.0) : 0.0
         var object: [String: JSONValue] = [
             "userMessages": .number(Double(userMessages)),
             "assistantMessages": .number(Double(assistantMessages)),
@@ -725,30 +832,50 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
                 "cacheWrite": .number(Double(usageTotals.cacheWrite)),
                 "total": .number(Double(usageTotals.totalTokens))
             ]),
-            "cost": .number(usageTotals.cost),
-            "contextUsage": .object([
+            "cost": .number(usageTotals.cost)
+        ]
+        if let contextWindow = stateFields.model?.contextWindow, contextWindow > 0 {
+            let percent = min(100.0, (Double(usedTokens) / Double(contextWindow)) * 100.0)
+            object["contextUsage"] = .object([
                 "tokens": .number(Double(usedTokens)),
                 "contextWindow": .number(Double(contextWindow)),
                 "percent": .number(percent)
             ])
-        ]
+        }
         if let id = stateFields.sessionId { object["sessionId"] = .string(id) }
         if let file = stateFields.sessionFile { object["sessionFile"] = .string(file) }
         return .object(object)
     }
 
-    private func runLocalBash(_ command: String) async -> (output: String, exitCode: Int32) {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let result = await PiDiscoveryService().run(
-            executable: URL(fileURLWithPath: shell),
-            arguments: ["-lc", command],
-            directory: URL(fileURLWithPath: projectPath),
-            environment: environment
-        )
-        let combined = [result.stdout, result.stderr]
+    private func runLocalBash(_ command: String) async -> (output: String, exitCode: Int32, cancelled: Bool) {
+        let shell = PiDiscoveryService.userLoginShell()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shell)
+        process.arguments = ["-lc", command]
+        process.currentDirectoryURL = URL(fileURLWithPath: projectPath)
+        var merged = ProcessInfo.processInfo.environment
+        for (k, v) in environment { merged[k] = v }
+        process.environment = merged
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        process.standardInput = FileHandle.nullDevice
+        currentBashProcess = process
+        defer { currentBashProcess = nil }
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return (error.localizedDescription, 1, false)
+        }
+        let outText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let errText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let combined = [outText, errText]
             .filter { !$0.isEmpty }
-            .joined(separator: result.stdout.hasSuffix("\n") || result.stdout.isEmpty ? "" : "\n")
-        return (combined, result.exitCode)
+            .joined(separator: outText.hasSuffix("\n") || outText.isEmpty ? "" : "\n")
+        let wasCancelled = process.terminationReason == .uncaughtSignal
+        return (combined, process.terminationStatus, wasCancelled)
     }
 
     private static func extractToolOutput(from rawText: String) -> (output: String, isError: Bool) {
@@ -835,6 +962,37 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             modelEfforts: efforts,
             contributorModeEnabled: json.bool("contributor_mode_enabled") ?? false
         )
+    }
+
+    static func writeUserSettings(model: String?, reasoningEffort: String?) {
+        let fileURL = PiPaths.settingsFile
+        var root: [String: JSONValue] = [:]
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONCoding.decode(data),
+           case .object(let dict) = decoded {
+            root = dict
+        }
+        let cleanModel = normalizeModelID(model)
+        if let cleanModel, !cleanModel.isEmpty, cleanModel != "default" {
+            root["model"] = .string(cleanModel)
+        }
+        if let reasoningEffort, !reasoningEffort.isEmpty {
+            root["reasoning_effort"] = .string(reasoningEffort)
+            var perModel: [String: JSONValue] = [:]
+            if case .object(let existing)? = root["model_reasoning_efforts"] {
+                perModel = existing
+            }
+            if let cleanModel, !cleanModel.isEmpty, cleanModel != "default" {
+                perModel[cleanModel] = .string(reasoningEffort)
+            }
+            root["model_reasoning_efforts"] = .object(perModel)
+        }
+        try? FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let serialized = JSONScanner.serialize(.object(root))
+        try? serialized.write(to: fileURL, atomically: true, encoding: .utf8)
     }
 
     private static func encodeTreeNode(_ node: PiTreeNode) -> JSONValue {

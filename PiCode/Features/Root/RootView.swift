@@ -34,16 +34,23 @@ struct RootView: View {
     @State private var sidebarWidthAtDragStart: CGFloat?
     @State private var composerFocusTick = 0
     @State private var sheet: RootSheet?
-    @State private var inspectorWidth: CGFloat = 360
+    @State private var inspectorWidth: CGFloat = 328
     @State private var inspectorWidthAtDragStart: CGFloat?
+
+    private var showsAppRail: Bool {
+        !isSidebarVisible || state.isSettingsPresented
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            AppRail(
-                state: state,
-                onOpenPalette: openPalette,
-                onOpenSettings: { state.openSettings(tab: state.settingsTab) }
-            )
+            if showsAppRail {
+                AppRail(
+                    state: state,
+                    onOpenPalette: openPalette,
+                    onOpenSettings: { state.openSettings(tab: state.settingsTab) }
+                )
+                .transition(.move(edge: .leading).combined(with: .opacity))
+            }
             Group {
                 if state.isSettingsPresented {
                     settingsCard
@@ -51,9 +58,11 @@ struct RootView: View {
                     contentCard
                 }
             }
+                .padding(.leading, showsAppRail ? 0 : WindowChromeMetrics.cardInset)
                 .padding(.trailing, WindowChromeMetrics.cardInset)
                 .padding(.bottom, WindowChromeMetrics.cardInset)
         }
+        .animation(.easeInOut(duration: 0.2), value: showsAppRail)
         .padding(.top, WindowChromeMetrics.titlebarHeight)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
@@ -221,49 +230,65 @@ struct RootView: View {
 
     // MARK: - Titlebar
 
-    /// Back / forward and the sidebar toggle, just past the traffic lights, then
-    /// the chat's title after a rule that lines up with the sidebar's edge.
+    /// Sidebar toggle, Back / Forward navigation, and the active project/session
+    /// title, placed at the leading edge of the main detail pane (past the
+    /// expanded sidebar boundary when open, or past the traffic lights when hidden).
     @ViewBuilder
     private var titlebarLeadingControls: some View {
         if !state.isSettingsPresented {
             let buttonTop = WindowChromeMetrics.titlebarRowCenter - TitlebarIconButton.size / 2
-            ZStack(alignment: .topLeading) {
+            HStack(spacing: 6) {
+                if isSidebarVisible {
+                    Rectangle()
+                        .fill(AppTheme.cardStroke)
+                        .frame(width: 1, height: 18)
+                        .padding(.trailing, 2)
+                }
+
                 HStack(spacing: 2) {
-                    TitlebarIconButton(systemImage: "layout-align-left", help: "Toggle sidebar (⌃⌘S)") {
+                    TitlebarIconButton(
+                        systemImage: "layout-align-left",
+                        help: isSidebarVisible ? "Hide sidebar (⌃⌘S)" : "Show sidebar (⌃⌘S)",
+                        isActive: isSidebarVisible
+                    ) {
                         toggleSidebar()
                     }
                     TitlebarIconButton(systemImage: "arrow-left-01", help: "Back", isEnabled: state.canGoBack) {
                         Task { await state.goBack() }
                     }
-                    TitlebarIconButton(systemImage: "arrow-right-01", help: "Forward", isEnabled: state.canGoForward) {
-                        Task { await state.goForward() }
+                    if state.canGoForward {
+                        TitlebarIconButton(systemImage: "arrow-right-01", help: "Forward", isEnabled: state.canGoForward) {
+                            Task { await state.goForward() }
+                        }
                     }
                 }
-                .padding(.leading, WindowChromeMetrics.sidebarToggleLeading)
-                .padding(.top, buttonTop)
 
                 if state.phase == .ready, let controller = state.activeController {
                     titlebarTitle(controller)
-                        .padding(.leading, titleLeading)
-                        .padding(.trailing, titleTrailingReserve)
-                        .frame(height: WindowChromeMetrics.titlebarHeight)
                 }
+
+                Spacer(minLength: 8)
             }
+            .padding(.leading, controlsLeading)
+            .padding(.trailing, titleTrailingReserve)
+            .padding(.top, buttonTop)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+            .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
         }
     }
 
-    /// Where the title starts: past the sidebar's trailing edge when the sidebar
-    /// is open (so the rule sits on the column boundary), else past the buttons.
-    private var titleLeading: CGFloat {
+    /// Where the detail pane's titlebar controls start: aligned with the
+    /// sidebar's trailing divider when the sidebar is expanded (and AppRail has
+    /// vanished), or right past the traffic lights when the sidebar is hidden.
+    private var controlsLeading: CGFloat {
         if isSidebarVisible {
-            return AppRailMetrics.width + sidebarWidth + 1 + 14
+            return WindowChromeMetrics.cardInset + sidebarWidth
         }
-        return WindowChromeMetrics.sidebarToggleLeading + 3 * TitlebarIconButton.size + 12
+        return WindowChromeMetrics.sidebarToggleLeading
     }
 
-    /// Room kept free for the trailing controls.
-    private var titleTrailingReserve: CGFloat { 150 }
+    /// Room kept free for the trailing search pill and action controls.
+    private var titleTrailingReserve: CGFloat { 310 }
 
     /// The conversation's own title when it has one — its name, else the opening
     /// message the sidebar shows — and the project's name only before either exists.
@@ -278,7 +303,7 @@ struct RootView: View {
     }
 
     private func titlebarTitle(_ controller: PiSessionController) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             HugeIcon(name: "folder-02")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
@@ -286,27 +311,19 @@ struct RootView: View {
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 0)
         }
-        .frame(maxHeight: .infinity)
-        .overlay(alignment: .leading) {
-            if isSidebarVisible {
-                Rectangle()
-                    .fill(AppTheme.cardStroke)
-                    .frame(width: 1, height: 20)
-                    .offset(x: -14 - 1)
-                    .transition(.opacity)
-            }
-        }
+        .padding(.leading, 4)
         .allowsHitTesting(false)
     }
 
-    /// The project's workspace actions and the right panel's toggle, on the
-    /// card's trailing edge.
+    /// Search bar, workspace actions, notifications bell, and the floating right
+    /// panel toggle on the titlebar's trailing edge.
     @ViewBuilder
     private var titlebarTrailingControls: some View {
         if state.phase == .ready, state.activeController != nil, !state.isSettingsPresented {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
+                TitlebarSearchPill(onOpenPalette: openPalette)
+
                 SessionHeaderMenu(
                     isPinned: fallbackDeletionCandidate?.isPinned ?? false,
                     onCommand: perform,
@@ -319,10 +336,12 @@ struct RootView: View {
 
                 TitlebarIconButton(
                     systemImage: "layout-align-right",
-                    help: state.isInspectorVisible ? "Hide the inspector (⌥⌘I)" : "Show the inspector (⌥⌘I)",
+                    help: state.isInspectorVisible ? "Hide floating panel (⌥⌘I)" : "Show floating panel (⌥⌘I)",
                     isActive: state.isInspectorVisible && !state.isNotificationsVisible
                 ) {
-                    state.toggleInspector()
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        state.toggleInspector()
+                    }
                 }
             }
             .padding(.trailing, WindowChromeMetrics.cardInset + 8)
@@ -332,33 +351,52 @@ struct RootView: View {
 
     // MARK: - Detail pane
 
-    /// The conversation and, when it is open, the inspector beside it. The two
-    /// share the card's height, so opening the panel never resizes or shifts the
-    /// sidebar or the transcript.
+    /// The conversation occupies 100% of the detail pane width; when the right
+    /// panel (`Overview` + `Muse Agent Messages`) is revealed via the top-right
+    /// sidebar button, it floats as an overlay over the trailing side of the
+    /// conversation view instead of taking a full layout column.
     private var detailPane: some View {
-        HStack(spacing: 0) {
+        ZStack(alignment: .topTrailing) {
             detail
                 .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                .layoutPriority(0)
 
             if state.isInspectorVisible {
                 HStack(spacing: 0) {
-                    paneDivider { translation in
-                        if inspectorWidthAtDragStart == nil {
-                            inspectorWidthAtDragStart = inspectorWidth
+                    Color.clear
+                        .frame(width: 6)
+                        .contentShape(Rectangle())
+                        .onHover { inside in
+                            if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
                         }
-                        let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
-                        inspectorWidth = min(560, max(280, startingWidth - translation))
-                    } onEnded: {
-                        inspectorWidthAtDragStart = nil
-                    }
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    if inspectorWidthAtDragStart == nil {
+                                        inspectorWidthAtDragStart = inspectorWidth
+                                    }
+                                    let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
+                                    inspectorWidth = min(480, max(280, startingWidth - value.translation.width))
+                                }
+                                .onEnded { _ in
+                                    inspectorWidthAtDragStart = nil
+                                }
+                        )
 
                     InspectorView(state: state)
                         .frame(width: inspectorWidth)
                         .frame(maxHeight: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(AppTheme.cardStroke, lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.45), radius: 18, x: -4, y: 8)
                 }
-                .layoutPriority(1)
-                .transition(.move(edge: .trailing))
+                .padding(.top, 10)
+                .padding(.trailing, 12)
+                .padding(.bottom, 12)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .zIndex(2)
             }
         }
         .clipped()
@@ -448,18 +486,6 @@ struct RootView: View {
         case .renameSession:
             guard let controller else { return }
             sheet = .rename(controller.sessionName ?? controller.displayTitle)
-        case .cloneSession:
-            Task { await controller?.cloneSession() }
-
-        case .forkLatest:
-            guard controller != nil else { return }
-            sheet = .fork
-
-        case .compactContext:
-            Task { await controller?.compact() }
-
-        case .compactWithInstructions:
-            sheet = .compact
 
         case .exportSession:
             Task { await exportSession(controller) }
@@ -662,5 +688,44 @@ struct TitlebarNotificationsButton: View {
         .accessibilityLabel(state.unreadNotificationCount > 0
             ? "Notifications, \(state.unreadNotificationCount) unread"
             : "Notifications")
+    }
+}
+
+/// Search bar pill in the titlebar between the session title and the trailing
+/// action buttons. Clicking opens the session/project/command search palette.
+struct TitlebarSearchPill: View {
+    var onOpenPalette: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onOpenPalette) {
+            HStack(spacing: 6) {
+                HugeIcon(name: "search-01", size: 13)
+                    .foregroundStyle(.secondary)
+                Text("Search…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 10)
+                Text("⇧⌘P")
+                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 156, height: TitlebarIconButton.size - 2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isHovering ? AppTheme.railSelection.opacity(0.65) : AppTheme.railSelection.opacity(0.35))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(AppTheme.cardStroke, lineWidth: 1)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("Search sessions, projects, and commands (⇧⌘P)")
+        .accessibilityLabel("Search")
     }
 }

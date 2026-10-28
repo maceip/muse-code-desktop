@@ -56,6 +56,10 @@ enum AppTheme {
     static let prominentPillFill = adaptive(dark: 0xFFFFFF, light: NSColor(white: 0.1, alpha: 1))
     static let prominentPillText = adaptive(dark: 0x111111, light: NSColor(white: 1, alpha: 1))
 
+    /// Sparing Meta/Muse accent blue (#0077FF) for user prompt bubbles,
+    /// "See more" expansion pills, and the active send/stop action button.
+    static let accentBlue = Color(nsColor: NSColor(rgb: 0x0077FF))
+
     /// The cards on a settings page: a step above the page in the dark
     /// appearance, white with a hairline in the light one.
     static let settingsCard = adaptive(dark: 0x212121, light: NSColor(white: 1, alpha: 1))

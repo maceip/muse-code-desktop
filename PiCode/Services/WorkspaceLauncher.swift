@@ -23,12 +23,13 @@ enum WorkspaceLauncher {
 
         let scriptURL = sandbox.appendingPathComponent("PiCode-\(UUID().uuidString.prefix(8)).command")
         let escaped = directory.replacingOccurrences(of: "'", with: "'\\''")
+        let loginShell = PiDiscoveryService.userLoginShell()
         let script = """
-        #!/bin/zsh
+        #!\(loginShell)
         # Written by PiCode so Terminal opens in the project directory.
         rm -f "$0"
         cd '\(escaped)' || exit 1
-        exec "${SHELL:-/bin/zsh}" -l
+        exec "${SHELL:-\(loginShell)}" -l
         """
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)

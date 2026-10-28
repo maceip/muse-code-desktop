@@ -65,16 +65,6 @@ struct PiCodeCommands: Commands {
             Button(PaletteCommand.renameSession.title) { state.run(.renameSession) }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(state.activeController == nil)
-            Button(PaletteCommand.cloneSession.title) { state.run(.cloneSession) }
-                .disabled(state.activeController == nil)
-            Button(PaletteCommand.forkLatest.title) { state.run(.forkLatest) }
-                .disabled(state.activeController == nil)
-            Divider()
-            Button(PaletteCommand.compactContext.title) { state.run(.compactContext) }
-                .keyboardShortcut("k", modifiers: .command)
-                .disabled(state.activeController == nil)
-            Button(PaletteCommand.compactWithInstructions.title) { state.run(.compactWithInstructions) }
-                .disabled(state.activeController == nil)
             Divider()
             Button(PaletteCommand.exportSession.title) { state.run(.exportSession) }
                 .keyboardShortcut("e", modifiers: [.command, .shift])

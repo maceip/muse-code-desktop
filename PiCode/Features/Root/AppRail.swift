@@ -23,15 +23,82 @@ struct AppRail: View {
     var onOpenPalette: () -> Void
     var onOpenSettings: () -> Void
 
+    /// Recent sessions across all projects so the collapsed rail shows clickable
+    /// icons for sessions when the sidepanel is hidden.
+    private var railSessions: [SessionRef] {
+        var result: [SessionRef] = []
+        if let controller = state.activeController,
+           controller.sessionFile == nil,
+           let key = state.selectedSessionKey,
+           key.hasPrefix("new:") {
+            result.append(SessionRef(
+                id: controller.draftKey,
+                sessionId: controller.sessionId,
+                filePath: nil,
+                name: controller.sessionName ?? controller.projectName,
+                cwd: controller.projectPath,
+                createdAt: Date(),
+                updatedAt: Date(),
+                messageCount: controller.items.count,
+                firstUserMessage: controller.items.first(where: { $0.kind == .user })?.text,
+                parentSession: nil,
+                isPinned: false,
+                isEphemeral: true,
+                harnessID: controller.harness.id
+            ))
+        }
+        let persisted = state.projects
+            .flatMap(\.sessions)
+            .sorted { lhs, rhs in
+                if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
+                return lhs.updatedAt > rhs.updatedAt
+            }
+        result.append(contentsOf: persisted.prefix(12))
+        return result
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            RailButton(systemImage: "home-07", help: "Home", isSelected: !state.isSettingsPresented) {
+            RailButton(
+                systemImage: "add-01",
+                help: "New chat (⌘N)",
+                isSelected: false
+            ) {
                 state.isSettingsPresented = false
+                Task { await state.newChatInCurrentProject() }
             }
-            RailButton(systemImage: "clock-01", help: "Search history (⇧⌘P)", isSelected: false, action: onOpenPalette)
-            moreMenu
+
+            RailButton(
+                systemImage: "search-01",
+                help: "Search sessions and commands (⇧⌘P)",
+                isSelected: false,
+                action: onOpenPalette
+            )
+
+            Rectangle()
+                .fill(AppTheme.cardStroke)
+                .frame(width: 22, height: 1)
+                .padding(.vertical, 2)
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 6) {
+                    ForEach(railSessions) { session in
+                        SessionRailButton(
+                            session: session,
+                            isSelected: !state.isSettingsPresented && state.selectedSessionKey == session.controllerKey,
+                            isRunning: state.isRunning(session)
+                        ) {
+                            state.isSettingsPresented = false
+                            Task { await state.open(session: session) }
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
 
             Spacer(minLength: 0)
+
+            moreMenu
 
             UpdateButton(updater: state.updater)
 
@@ -156,5 +223,67 @@ struct RailButton: View {
         .onHover { isHovering = $0 }
         .help(help)
         .accessibilityLabel(help)
+    }
+}
+
+/// A session icon in the collapsed AppRail when the sidebar is hidden.
+struct SessionRailButton: View {
+    var session: SessionRef
+    var isSelected: Bool
+    var isRunning: Bool
+    var action: () -> Void
+
+    @State private var isHovering = false
+
+    private var badgeInitials: String {
+        let raw = session.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = raw
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        if words.count >= 2,
+           let first = words[0].first,
+           let second = words[1].first {
+            return String([first, second]).uppercased()
+        }
+        let prefix = String(raw.prefix(2)).uppercased()
+        return prefix.isEmpty ? "M" : prefix
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if isRunning {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        VStack(spacing: 1) {
+                            HugeIcon(name: session.isPinned ? "bookmark-02" : "message-multiple-01", size: 14)
+                            Text(badgeInitials)
+                                .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .foregroundStyle(isSelected ? Color.white : (isHovering ? Color.primary : Color.secondary))
+                .frame(width: AppRailMetrics.buttonSize, height: AppRailMetrics.buttonSize)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(isSelected ? AppTheme.accentBlue
+                              : (isHovering ? AppTheme.railSelection.opacity(0.65) : AppTheme.railSelection.opacity(0.22)))
+                )
+
+                if isRunning {
+                    Circle()
+                        .fill(AppTheme.accentBlue)
+                        .frame(width: 7, height: 7)
+                        .offset(x: -2, y: -2)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(session.displayName)
+        .accessibilityLabel("Session: \(session.displayName)")
     }
 }

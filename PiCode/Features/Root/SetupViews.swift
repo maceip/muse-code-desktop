@@ -130,7 +130,7 @@ struct PiSetupView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         InstallStep(
                             number: 1,
-                            title: "Ensure `muse` is on your PATH (e.g. ~/.local/bin/muse)",
+                            title: "Ensure `muse` is on your shell PATH",
                             command: "muse --version"
                         )
                         InstallStep(

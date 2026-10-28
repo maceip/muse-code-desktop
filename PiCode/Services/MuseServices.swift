@@ -31,33 +31,18 @@ final class MuseUsageService {
     private(set) var latestSnapshot: MuseUsageSnapshot?
     private(set) var isRefreshing = false
 
-    /// Computes the 0...100 battery level shown in the Composer credit tracker.
-    /// Uses the server subscription allowance from `muse usage --json` when
-    /// reported, and otherwise drains proportionally to the session's consumed
-    /// context/token budget so the battery reflects real token consumption.
-    func batteryPercentage(
-        contextUsagePercent: Double?,
-        sessionTokens: Int,
-        contextWindow: Int?
-    ) -> Int {
-        if let allowance = latestSnapshot?.allowanceRemainingPercent {
-            return max(0, min(100, Int(allowance.rounded())))
-        }
-        if let usedPercent = contextUsagePercent, usedPercent > 0 {
-            let remaining = 100.0 - usedPercent
-            return max(1, min(100, Int(remaining.rounded())))
-        }
-        if sessionTokens > 0 {
-            let window = Double(contextWindow ?? 1_007_997)
-            let usedFraction = min(0.99, Double(sessionTokens) / max(1.0, window))
-            return max(1, min(100, Int(((1.0 - usedFraction) * 100.0).rounded())))
-        }
-        return 100
+    /// Returns the server-reported allowance remaining percentage (`0...100`)
+    /// from `muse usage --json`, or `nil` when the server reports no allowance
+    /// (`"allowance": null`). Never fabricates a percentage from local context.
+    var allowancePercentage: Int? {
+        guard let allowance = latestSnapshot?.allowanceRemainingPercent else { return nil }
+        return max(0, min(100, Int(allowance.rounded())))
     }
 
     func refresh(installation: PiInstallation?) async {
         guard !isRefreshing else { return }
-        let executable = installation?.executableURL ?? Self.defaultMuseURL()
+        guard let resolved = await Self.resolveInstallation(installation) else { return }
+        let executable = resolved.executableURL
         guard FileManager.default.isExecutableFile(atPath: executable.path) else { return }
 
         isRefreshing = true
@@ -65,7 +50,7 @@ final class MuseUsageService {
 
         let env = PiDiscoveryService.launchEnvironment(
             executable: executable,
-            shellPath: installation?.shellPath
+            shellPath: resolved.shellPath
         )
         let result = await PiDiscoveryService().run(
             executable: executable,
@@ -101,17 +86,19 @@ final class MuseUsageService {
         )
     }
 
-    nonisolated static func defaultMuseURL() -> URL {
-        let home = NSHomeDirectory()
-        let candidates = [
-            "\(home)/.local/bin/muse",
-            "/opt/homebrew/bin/muse",
-            "/usr/local/bin/muse"
-        ]
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
-            return URL(fileURLWithPath: path)
+    private static var cachedDiscoveredInstallation: PiInstallation?
+
+    static func resolveInstallation(_ provided: PiInstallation?) async -> PiInstallation? {
+        if let provided { return provided }
+        if let cached = cachedDiscoveredInstallation,
+           FileManager.default.isExecutableFile(atPath: cached.executableURL.path) {
+            return cached
         }
-        return URL(fileURLWithPath: "\(home)/.local/bin/muse")
+        if case .found(let found) = await PiDiscoveryService().discover() {
+            cachedDiscoveredInstallation = found
+            return found
+        }
+        return nil
     }
 }
 
@@ -200,7 +187,11 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
     }
 
     func transcribeFile(at fileURL: URL, installation: PiInstallation?) async -> String? {
-        let executable = installation?.executableURL ?? MuseUsageService.defaultMuseURL()
+        guard let resolved = await MuseUsageService.resolveInstallation(installation) else {
+            lastError = "Muse CLI executable not found."
+            return nil
+        }
+        let executable = resolved.executableURL
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             lastError = "Muse CLI executable not found."
             return nil
@@ -212,7 +203,7 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
 
         let env = PiDiscoveryService.launchEnvironment(
             executable: executable,
-            shellPath: installation?.shellPath
+            shellPath: resolved.shellPath
         )
         let result = await PiDiscoveryService().run(
             executable: executable,
@@ -265,7 +256,8 @@ final class MuseSkillsService {
     }
 
     static func loadSkills(workspace: String?, installation: PiInstallation?) async -> [MuseSkillItem] {
-        let executable = installation?.executableURL ?? MuseUsageService.defaultMuseURL()
+        guard let resolved = await MuseUsageService.resolveInstallation(installation) else { return [] }
+        let executable = resolved.executableURL
         guard FileManager.default.isExecutableFile(atPath: executable.path) else { return [] }
 
         var args = ["skills", "list"]
@@ -274,7 +266,7 @@ final class MuseSkillsService {
         }
         let env = PiDiscoveryService.launchEnvironment(
             executable: executable,
-            shellPath: installation?.shellPath
+            shellPath: resolved.shellPath
         )
         let result = await PiDiscoveryService().run(
             executable: executable,
@@ -299,7 +291,8 @@ final class MuseSkillsService {
     }
 
     static func setSkillEnabled(_ skill: MuseSkillItem, enabled: Bool, workspace: String?, installation: PiInstallation?) async -> Bool {
-        let executable = installation?.executableURL ?? MuseUsageService.defaultMuseURL()
+        guard let resolved = await MuseUsageService.resolveInstallation(installation) else { return false }
+        let executable = resolved.executableURL
         guard FileManager.default.isExecutableFile(atPath: executable.path) else { return false }
 
         var args = ["skills", enabled ? "enable" : "disable", skill.name, "--scope", skill.scope]
@@ -308,7 +301,7 @@ final class MuseSkillsService {
         }
         let env = PiDiscoveryService.launchEnvironment(
             executable: executable,
-            shellPath: installation?.shellPath
+            shellPath: resolved.shellPath
         )
         let result = await PiDiscoveryService().run(
             executable: executable,
@@ -323,15 +316,64 @@ final class MuseSkillsService {
 // MARK: - Muse Cross-Session Agent Messaging (`muse session-message`)
 
 enum MuseSessionMessageService {
+    static func listMessages(installation: PiInstallation?) async -> [MuseAgentMessageInfo] {
+        guard let resolved = await MuseUsageService.resolveInstallation(installation) else {
+            return []
+        }
+        let executable = resolved.executableURL
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            return []
+        }
+
+        let env = PiDiscoveryService.launchEnvironment(
+            executable: executable,
+            shellPath: resolved.shellPath
+        )
+        let result = await PiDiscoveryService().run(
+            executable: executable,
+            arguments: ["session-message", "list", "--json"],
+            directory: URL(fileURLWithPath: NSHomeDirectory()),
+            environment: env
+        )
+        guard result.exitCode == 0 else { return [] }
+        let out = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = out.data(using: .utf8),
+              let json = try? JSONCoding.decode(data) else {
+            return []
+        }
+        let records = json.array("messages") ?? json.array("items") ?? (json.arrayValue ?? [])
+        return records.compactMap { item in
+            let id = item.string("message_id") ?? item.string("id") ?? UUID().uuidString
+            let body = item.string("body") ?? item.string("text") ?? ""
+            guard !body.isEmpty else { return nil }
+            let sender = item.string("sender") ?? item.string("sender_session_name") ?? item.string("sender_session_id") ?? "peer"
+            let target = item.string("target") ?? item.string("target_session_id") ?? "session"
+            let policy = item.string("status") ?? item.string("delivery_policy")
+            return MuseAgentMessageInfo(
+                id: id,
+                direction: .incoming,
+                sender: sender,
+                target: target,
+                workspaceLabel: item.string("workspace_label"),
+                body: body,
+                timestamp: nil,
+                deliveryPolicy: policy
+            )
+        }
+    }
+
     static func sendMessage(target: String, body: String, installation: PiInstallation?) async -> (success: Bool, detail: String) {
-        let executable = installation?.executableURL ?? MuseUsageService.defaultMuseURL()
+        guard let resolved = await MuseUsageService.resolveInstallation(installation) else {
+            return (false, "Muse CLI executable not found.")
+        }
+        let executable = resolved.executableURL
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             return (false, "Muse CLI executable not found.")
         }
 
         let env = PiDiscoveryService.launchEnvironment(
             executable: executable,
-            shellPath: installation?.shellPath
+            shellPath: resolved.shellPath
         )
 
         return await Task.detached(priority: .userInitiated) {

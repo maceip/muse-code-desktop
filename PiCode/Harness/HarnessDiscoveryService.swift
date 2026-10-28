@@ -24,12 +24,9 @@ struct HarnessDiscoveryService {
     /// PATH used to launch a harness: the login-shell PATH with the executable's
     /// own directory first, so the Node/Bun runtime it was installed with wins.
     static func launchEnvironment(executable: URL, shellPath: String?) -> [String: String] {
-        let fallback = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         let directory = executable.deletingLastPathComponent().path
-        let runtimeDirectory = HarnessInstallEnvironment.preferredNodeBinDirectory()
-        let entries = (shellPath ?? fallback)
-            .split(separator: ":")
-            .map(String.init)
+        let runtimeDirectory = HarnessInstallEnvironment.preferredNodeBinDirectory(shellPath: shellPath)
+        let entries = PiDiscoveryService.searchDirectories(shellPath: shellPath)
             .filter { !$0.isEmpty && $0 != directory && $0 != runtimeDirectory }
         let path = ([directory] + [runtimeDirectory].compactMap { $0 } + entries)
             .joined(separator: ":")
@@ -37,7 +34,7 @@ struct HarnessDiscoveryService {
     }
 
     func discover() async -> HarnessDiscoveryResult {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shell = PiDiscoveryService.userLoginShell()
         let shellPath = await loginShellPath(shell: shell)
 
         var searched: [String] = []
@@ -145,20 +142,7 @@ struct HarnessDiscoveryService {
     /// directory the login shell reported, so a later `bun install -g` (for
     /// example) is visible without relaunching PiCode.
     private func fallbackCandidates(shellPath: String?) -> [String] {
-        let home = NSHomeDirectory()
-        let userBinDirectories = [
-            "\(home)/.bun/bin",
-            "\(home)/.local/bin",
-            "\(home)/.npm-global/bin",
-            "\(home)/.volta/bin",
-            "\(home)/.yarn/bin",
-            "\(home)/.config/yarn/global/node_modules/.bin",
-            "\(home)/Library/pnpm"
-        ]
-        let shellBinDirectories = (shellPath ?? "")
-            .split(separator: ":")
-            .map(String.init)
-        let discovered = (userBinDirectories + shellBinDirectories)
+        let discovered = PiDiscoveryService.searchDirectories(shellPath: shellPath)
             .map { URL(fileURLWithPath: $0).appendingPathComponent(descriptor.binaryName).path }
         return (descriptor.fallbackBinaries + discovered + nvmCandidates())
             .reduce(into: []) { paths, path in

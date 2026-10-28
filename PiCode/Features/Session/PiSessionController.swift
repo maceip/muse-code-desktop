@@ -81,6 +81,7 @@ final class PiSessionController {
     private var baseMessages: [PiMessage] = []
     private var baseItems: [TranscriptItem] = []
     private var allBaseItems: [TranscriptItem] = []
+    var allItems: [TranscriptItem] { allBaseItems.isEmpty ? items : allBaseItems }
     private var visibleTranscriptItemLimit = 80
     private let transcriptPageItemCount = 80
     /// How much earlier history one scroll-up page adds. Smaller than the first
@@ -249,16 +250,18 @@ final class PiSessionController {
             body: trimmedBody,
             installation: installation
         )
-        agentMessages.append(MuseAgentMessageInfo(
-            id: UUID().uuidString,
-            direction: .outgoing,
-            sender: sessionName ?? "this session",
-            target: trimmedTarget,
-            workspaceLabel: projectName,
-            body: trimmedBody,
-            timestamp: Date(),
-            deliveryPolicy: result.success ? "delivered" : "queued"
-        ))
+        if result.success {
+            agentMessages.append(MuseAgentMessageInfo(
+                id: UUID().uuidString,
+                direction: .outgoing,
+                sender: sessionName ?? "this session",
+                target: trimmedTarget,
+                workspaceLabel: projectName,
+                body: trimmedBody,
+                timestamp: Date(),
+                deliveryPolicy: "delivered"
+            ))
+        }
         return result
     }
 
@@ -319,6 +322,7 @@ final class PiSessionController {
             model: sessionFile == nil
                 ? modelOverride ?? preferences.defaultModelByHarness[harness.id.rawValue]
                 : nil,
+            thinkingLevel: sessionFile == nil ? preferences.defaultThinkingLevel : nil,
             trustArguments: trustLaunchArguments(),
             extraArguments: preferences.extraLaunchArguments
                 .split(whereSeparator: \.isWhitespace)
@@ -1044,7 +1048,12 @@ final class PiSessionController {
     }
 
     func refreshMuseTelemetry() async {
+        let cliMessages = await MuseSessionMessageService.listMessages(installation: installation)
         guard let path = sessionFile else {
+            var existingMsgIds = Set(agentMessages.map(\.id))
+            for msg in cliMessages where existingMsgIds.insert(msg.id).inserted {
+                agentMessages.append(msg)
+            }
             rebuildLiveMuseTelemetry()
             return
         }
@@ -1052,7 +1061,12 @@ final class PiSessionController {
         subagents = summary.subagents
         backgroundTasks = summary.backgroundTasks
         sessionArtifacts = summary.artifacts
-        agentMessages = summary.agentMessages
+        var combinedMessages = summary.agentMessages
+        var existingMsgIds = Set(combinedMessages.map(\.id))
+        for msg in cliMessages where existingMsgIds.insert(msg.id).inserted {
+            combinedMessages.append(msg)
+        }
+        agentMessages = combinedMessages
         subagentCount = subagents.count
         rebuildLiveMuseTelemetry()
     }
@@ -1069,7 +1083,8 @@ final class PiSessionController {
             let toolName = item.toolName ?? ""
             let args = item.toolArguments
 
-            if ["bash", "monitor", "cron_create", "work_list", "work_status", "workflow"].contains(toolName),
+            let isAsyncTool = ["monitor", "cron_create"].contains(toolName)
+            if isAsyncTool,
                existingTaskIds.insert(callId).inserted {
                 let title = args?.string("description")
                     ?? item.commandText
@@ -1094,20 +1109,25 @@ final class PiSessionController {
                 ))
             }
 
-            if ["write_file", "edit_file"].contains(toolName),
-               let path = item.toolFilePath ?? args?.string("path"),
-               !path.isEmpty,
-               existingArtifacts.insert(path).inserted {
-                let name = (path as NSString).lastPathComponent
-                sessionArtifacts.append(MuseArtifactInfo(
-                    id: path,
-                    kind: toolName == "write_file" ? .file : .edit,
-                    title: name.isEmpty ? path : name,
-                    path: path,
-                    preview: path,
-                    toolCallId: callId,
-                    timestamp: item.timestamp
-                ))
+            if toolName == "write_file",
+               let rawPath = item.toolFilePath ?? args?.string("path"),
+               !rawPath.isEmpty {
+                let resolved = (rawPath as NSString).isAbsolutePath
+                    ? rawPath
+                    : (projectPath as NSString).appendingPathComponent(rawPath)
+                if FileManager.default.fileExists(atPath: resolved),
+                   existingArtifacts.insert(resolved).inserted {
+                    let name = (resolved as NSString).lastPathComponent
+                    sessionArtifacts.append(MuseArtifactInfo(
+                        id: resolved,
+                        kind: .file,
+                        title: name.isEmpty ? rawPath : name,
+                        path: resolved,
+                        preview: resolved,
+                        toolCallId: callId,
+                        timestamp: item.timestamp
+                    ))
+                }
             }
 
             if toolName == "subagent_spawn" {

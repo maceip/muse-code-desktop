@@ -14,10 +14,6 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
     case addProject
     case refreshSessions
     case renameSession
-    case cloneSession
-    case forkLatest
-    case compactContext
-    case compactWithInstructions
     case exportSession
     case deleteSession
 
@@ -50,11 +46,7 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
         case .addProject: return "Open Project Folder…"
         case .refreshSessions: return "Reload Sessions"
         case .renameSession: return "Rename Session…"
-        case .cloneSession: return "Clone Current Branch"
-        case .forkLatest: return "Fork…"
-        case .compactContext: return "Compact Context"
-        case .compactWithInstructions: return "Compact with Instructions…"
-        case .exportSession: return "Export Session as HTML…"
+        case .exportSession: return "Export Session…"
         case .deleteSession: return "Delete Session…"
         case .focusComposer: return "Focus Composer"
         case .interrupt: return "Interrupt and Restore Queue"
@@ -82,9 +74,6 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
         case .addProject: return "folder-add"
         case .refreshSessions: return "refresh"
         case .renameSession: return "edit-02"
-        case .cloneSession: return "copy-01"
-        case .forkLatest: return "git-branch"
-        case .compactContext, .compactWithInstructions: return "shrink"
         case .exportSession: return "arrow-up-right-01"
         case .deleteSession: return "delete-01"
         case .focusComposer: return "edit-02"
@@ -122,8 +111,7 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
     /// Actions that require Muse to be idle.
     var requiresIdleAgent: Bool {
         switch self {
-        case .compactContext, .compactWithInstructions, .deleteSession, .renameSession,
-             .cloneSession, .forkLatest, .exportSession, .newSession:
+        case .deleteSession, .renameSession, .exportSession, .newSession:
             return true
         default:
             return false
@@ -136,7 +124,6 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
         case .addProject: return "⇧⌘O"
         case .refreshSessions: return "⌘R"
         case .renameSession: return "⇧⌘R"
-        case .compactContext: return "⌘K"
         case .exportSession: return "⇧⌘E"
         case .focusComposer: return "⌘L"
         case .interrupt: return "esc"
@@ -152,8 +139,8 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
 
     var group: Group {
         switch self {
-        case .newSession, .addProject, .refreshSessions, .renameSession, .cloneSession,
-             .forkLatest, .compactContext, .compactWithInstructions, .exportSession, .deleteSession:
+        case .newSession, .addProject, .refreshSessions, .renameSession,
+             .exportSession, .deleteSession:
             return .session
         case .focusComposer, .interrupt, .abortRun, .cycleModel, .cycleThinkingLevel:
             return .run
