@@ -204,14 +204,38 @@ struct MuseUITestMain {
         check(resolvedMuse != nil, "PiDiscoveryService.resolveExecutable(named: \"muse\") must dynamically locate muse on PATH")
         check(HarnessDescriptor.descriptor(for: .museCode).fallbackBinaries.isEmpty, "HarnessDescriptor.museCode.fallbackBinaries must not contain hardcoded paths")
 
-        // 7. Verify Tachometer Credit Gauge renders icon-only (no text or border around icon)
+        // 7. Verify Tachometer Credit Gauge renders icon-only and tracks real `muse usage --json` RunUsageAllowance (`window` & `weekly`)
+        let sampleAllowanceJSON = """
+        {
+          "schemaVersion": 1,
+          "allowance": {
+            "tier": "pro",
+            "asOfMs": 1793220000000,
+            "window": { "usedPercent": 28.0, "resetsAtMs": 1793238000000 },
+            "weekly": { "usedPercent": 15.0, "resetsAtMs": 1793800000000 }
+          }
+        }
+        """
+        if let allowanceData = sampleAllowanceJSON.data(using: .utf8),
+           let decodedUsage = try? JSONCoding.decode(allowanceData) {
+            let parsedSnapshot = MuseUsageService.parseUsageResponse(decodedUsage)
+            check(parsedSnapshot.tier == "pro", "MuseUsageService must parse allowance.tier")
+            check(parsedSnapshot.window?.usedPercent == 28.0, "MuseUsageService must parse allowance.window.usedPercent")
+            check(parsedSnapshot.window?.remainingPercent == 72.0, "MuseUsageService must compute 72% window remaining")
+            check(parsedSnapshot.weekly?.usedPercent == 15.0, "MuseUsageService must parse allowance.weekly.usedPercent")
+            check(parsedSnapshot.weekly?.remainingPercent == 85.0, "MuseUsageService must compute 85% weekly remaining")
+            check(parsedSnapshot.allowanceRemainingPercent == 72.0, "MuseUsageService must report min(window, weekly) remaining percent (72%)")
+            if let allowanceObj = decodedUsage["allowance"] {
+                MuseUsageService.shared.ingestAllowanceJSON(allowanceObj)
+            }
+        }
         let tachoView = MuseCreditBatteryButton(controller: controller)
         let tachoHost = NSHostingView(rootView: tachoView)
         tachoHost.frame = NSRect(x: 0, y: 0, width: 40, height: 30)
         tachoHost.layoutSubtreeIfNeeded()
         let tachoTexts = collectTexts(in: tachoHost)
         check(tachoTexts.isEmpty, "MuseCreditBatteryButton must be icon-only with no text label (found: \(tachoTexts))")
-        check(tachoView.remainingFraction >= 0.0 && tachoView.remainingFraction <= 1.0, "Tachometer remainingFraction must be within 0.0...1.0")
+        check(abs(tachoView.remainingFraction - 0.72) < 0.01, "Tachometer remainingFraction must reflect ingested 72% allowance (got \(tachoView.remainingFraction))")
 
         // 8. Verify SessionIcons catalog (16 icons) and 4–5 char shorthand persistence
         check(SessionIconCatalog.all.count == 16, "SessionIconCatalog must provide 16 session icons")
@@ -247,7 +271,23 @@ struct MuseUITestMain {
         let placeholderTV = PlaceholderTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 48))
         check(placeholderTV.subviews.contains(where: { $0 is GlowingCaretView }), "PlaceholderTextView must contain GlowingCaretView")
 
-        // 10. Verify Liquid Glass Composer & 3D Morphing Voice Orb (`orb1.gif`)
+        // 10. Verify Liquid Glass Composer, Enter/Exit Choreography (`enter-anim.gif`), & 3D Morphing Voice Orb (`orb1.gif`)
+        // Also verify clicking the Muse icon (`newChatInCurrentProject()`) in a folder with 0 saved sessions never makes `activeController` nil
+        let emptyFolder = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("muse-empty-project-\(UUID().uuidString.prefix(6))").path
+        try? FileManager.default.createDirectory(atPath: emptyFolder, withIntermediateDirectories: true)
+        await state.startNewSession(projectPath: emptyFolder)
+        check(state.activeController != nil, "startNewSession on an empty folder must keep activeController non-nil")
+        await state.newChatInCurrentProject()
+        check(state.activeController != nil, "Clicking the Muse rail icon (newChatInCurrentProject) must never make activeController nil or hide the composer/right panel")
+
+        check(ComposerEnterExitPhase.hidden.topPillOpacity == 0.0, "Phase .hidden must hide top pill")
+        check(ComposerEnterExitPhase.pillWithBlurredCapsule.topPillOpacity == 1.0 && ComposerEnterExitPhase.pillWithBlurredCapsule.subcontainerScaleX == 0.44 && ComposerEnterExitPhase.pillWithBlurredCapsule.subcontainerInnerOpacity == 0.0,
+              "Phase .pillWithBlurredCapsule (Frame 02 of enter-anim.gif) must show full top pill and 0.44x blurred capsule subcontainer with hidden inner rows")
+        check(ComposerEnterExitPhase.subcontainerExpanding.subcontainerScaleX == 0.96 && ComposerEnterExitPhase.subcontainerExpanding.subcontainerInnerOpacity == 0.54,
+              "Phase .subcontainerExpanding (Frames 03-04 of enter-anim.gif) must expand subcontainer to 0.96x with 0.54 inner opacity")
+        check(ComposerEnterExitPhase.settled.subcontainerScaleX == 1.0 && ComposerEnterExitPhase.settled.subcontainerBlur == 0.0 && ComposerEnterExitPhase.settled.subcontainerInnerOpacity == 1.0,
+              "Phase .settled (Frame 05 of enter-anim.gif) must settle subcontainer at 1.0x scale and 0 blur")
+
         let composerHost = NSHostingView(
             rootView: ComposerView(
                 state: state,

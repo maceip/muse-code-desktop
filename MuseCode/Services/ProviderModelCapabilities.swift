@@ -26,11 +26,8 @@ enum ProviderModelCapabilities {
         }
 
         let id = modelID.lowercased()
-        return id.contains("deepseek-flash")
-            || id.contains("deepseek-pro")
-            || id.contains("deepseek-reasoner")
-            || id.contains("deepseek-r1")
-            || id.contains("/r1")
+        return id.contains("muse-wonder")
+            || id.contains("muse-spark")
             || id.contains("reasoning")
             || id.contains("reasoner")
     }

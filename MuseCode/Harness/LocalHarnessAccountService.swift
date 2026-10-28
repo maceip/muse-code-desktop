@@ -22,11 +22,12 @@ enum LocalHarnessAccountService {
            !dict.isEmpty {
             let model = (try? Data(contentsOf: settingsURL))
                 .flatMap { try? JSONCoding.decode($0) }?
-                .string("model") ?? "muse-wonder-full-1.0"
+                .string("model")
+            let modelDetail = model.map { " (\($0))" } ?? ""
             return LocalHarnessAccountStatus(
                 kind: .subscription,
                 title: "Authenticated",
-                detail: "Connected to Meta Muse (\(model)). Credentials stored in \(authURL.path.abbreviatingHomeDirectory)."
+                detail: "Connected to Meta Muse\(modelDetail). Credentials stored in \(authURL.path.abbreviatingHomeDirectory)."
             )
         }
 

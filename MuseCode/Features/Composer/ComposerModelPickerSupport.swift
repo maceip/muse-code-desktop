@@ -47,11 +47,8 @@ extension String {
     /// which already contain intentional capitalization.
     var pickerCapitalized: String {
         let brands = [
-            "openai": "OpenAI",
-            "openrouter": "OpenRouter",
-            "deepseek": "DeepSeek",
-            "xai": "xAI",
-            "lmstudio": "LM Studio"
+            "meta": "Meta",
+            "muse": "Muse"
         ]
         if let brand = brands[lowercased()] { return brand }
         guard self == lowercased() else { return self }

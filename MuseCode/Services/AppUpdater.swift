@@ -34,7 +34,7 @@ final class AppUpdater {
 
     private(set) var state: State = .idle
 
-    private let latestReleaseURL = URL(string: "https://api.github.com/repos/hieunc229/Pie/releases/latest")!
+    private let latestReleaseURL = URL(string: "https://api.github.com/repos/maceip/muse-code-desktop/releases/latest")!
     private let checkInterval: Duration = .seconds(6 * 3600)
     private var checkTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?

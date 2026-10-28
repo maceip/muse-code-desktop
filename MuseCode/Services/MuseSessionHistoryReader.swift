@@ -152,7 +152,7 @@ enum MuseSessionHistory {
 
     static func parseSummary(from rawLines: [Data.SubSequence], sessionFilePath: String? = nil) -> Summary {
         var summary = Summary()
-        var currentModel = "muse-wonder-full-1.0"
+        var currentModel = MuseRuntime.readUserSettings().model ?? "default"
         var currentProvider = "meta"
         var lastEntryId: String?
         var entryCounter = 0

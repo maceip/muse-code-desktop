@@ -572,6 +572,9 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             }
         }
         emit(.agentSettled)
+        Task { @MainActor in
+            await MuseUsageService.shared.refresh(installation: nil)
+        }
     }
 
     private func consume(line: String) {
@@ -579,6 +582,12 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
         guard let data = line.data(using: .utf8),
               let json = try? JSONCoding.decode(data) else {
             return
+        }
+
+        if let allowance = json["allowance"] ?? json["usage"]?["allowance"], !allowance.isNull {
+            Task { @MainActor in
+                MuseUsageService.shared.ingestAllowanceJSON(allowance)
+            }
         }
 
         if let sid = json.string("session_id"), !sid.isEmpty {
@@ -938,14 +947,14 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
         return nil
     }
 
-    private struct UserSettings {
+    struct UserSettings {
         var model: String?
         var reasoningEffort: String?
         var modelEfforts: [String: String] = [:]
         var contributorModeEnabled: Bool = false
     }
 
-    private static func readUserSettings() -> UserSettings {
+    static func readUserSettings() -> UserSettings {
         guard let data = try? Data(contentsOf: PiPaths.settingsFile),
               let json = try? JSONCoding.decode(data) else {
             return UserSettings()

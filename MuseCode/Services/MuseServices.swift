@@ -15,7 +15,20 @@ import Observation
 
 // MARK: - Credit & Allowance Battery Tracker (`muse usage --json`)
 
+struct MuseAllowanceWindow: Equatable, Sendable {
+    var usedPercent: Double
+    var resetsAt: Date?
+
+    var remainingPercent: Double {
+        max(0.0, min(100.0, 100.0 - usedPercent))
+    }
+}
+
 struct MuseUsageSnapshot: Equatable, Sendable {
+    var tier: String?
+    var asOf: Date?
+    var window: MuseAllowanceWindow?
+    var weekly: MuseAllowanceWindow?
     var allowanceRemainingPercent: Double?
     var allowanceSummary: String?
     var reason: String?
@@ -32,11 +45,115 @@ final class MuseUsageService {
     private(set) var isRefreshing = false
 
     /// Returns the server-reported allowance remaining percentage (`0...100`)
-    /// from `muse usage --json`, or `nil` when the server reports no allowance
-    /// (`"allowance": null`). Never fabricates a percentage from local context.
+    /// from `muse usage --json` (or live `muse exec --json` allowance events),
+    /// or `nil` when the server reports `"allowance": null`.
     var allowancePercentage: Int? {
         guard let allowance = latestSnapshot?.allowanceRemainingPercent else { return nil }
         return max(0, min(100, Int(allowance.rounded())))
+    }
+
+    /// Parses a full `muse usage --json` response object (`schemaVersion`, `allowance`, `reason`, `hint`).
+    static func parseUsageResponse(_ json: JSONValue, fetchedAt: Date = Date()) -> MuseUsageSnapshot {
+        if let allowance = json["allowance"], !allowance.isNull {
+            var snapshot = parseAllowanceObject(allowance, fetchedAt: fetchedAt)
+            snapshot.reason = json.string("reason")
+            snapshot.hint = json.string("hint")
+            return snapshot
+        }
+        return MuseUsageSnapshot(
+            tier: nil,
+            asOf: nil,
+            window: nil,
+            weekly: nil,
+            allowanceRemainingPercent: nil,
+            allowanceSummary: nil,
+            reason: json.string("reason"),
+            hint: json.string("hint"),
+            fetchedAt: fetchedAt
+        )
+    }
+
+    /// Parses a `RunUsageAllowance` object (`tier`, `asOfMs`/`as_of_ms`, `window`, `weekly`).
+    static func parseAllowanceObject(_ allowance: JSONValue, fetchedAt: Date = Date()) -> MuseUsageSnapshot {
+        let tier = allowance.string("tier")
+        let asOf: Date? = {
+            if let ms = allowance.double("asOfMs") ?? allowance.double("as_of_ms"), ms > 0 {
+                return Date(timeIntervalSince1970: ms / 1000.0)
+            }
+            return nil
+        }()
+
+        func parseWindow(_ obj: JSONValue?) -> MuseAllowanceWindow? {
+            guard let obj, !obj.isNull else { return nil }
+            let used: Double?
+            if let u = obj.double("usedPercent") ?? obj.double("used_percent") {
+                used = max(0.0, min(100.0, u))
+            } else if let rem = obj.double("remainingPercent") ?? obj.double("remaining_percent") {
+                used = max(0.0, min(100.0, 100.0 - rem))
+            } else {
+                used = nil
+            }
+            guard let used else { return nil }
+            let resetsAt: Date? = {
+                if let ms = obj.double("resetsAtMs") ?? obj.double("resets_at_ms"), ms > 0 {
+                    return Date(timeIntervalSince1970: ms / 1000.0)
+                }
+                return nil
+            }()
+            return MuseAllowanceWindow(usedPercent: used, resetsAt: resetsAt)
+        }
+
+        let window = parseWindow(allowance["window"])
+        let weekly = parseWindow(allowance["weekly"])
+
+        var remainingPercent: Double?
+        if let window, let weekly {
+            remainingPercent = min(window.remainingPercent, weekly.remainingPercent)
+        } else if let window {
+            remainingPercent = window.remainingPercent
+        } else if let weekly {
+            remainingPercent = weekly.remainingPercent
+        } else if let rem = allowance.double("remaining_percent") ?? allowance.double("remainingPercent") {
+            remainingPercent = max(0.0, min(100.0, rem))
+        } else if let used = allowance.double("used_percent") ?? allowance.double("usedPercent") {
+            remainingPercent = max(0.0, min(100.0, 100.0 - used))
+        } else if let rem = allowance.double("remaining"), let limit = allowance.double("limit"), limit > 0 {
+            remainingPercent = max(0.0, min(100.0, (rem / limit) * 100.0))
+        }
+
+        var parts: [String] = []
+        if let window {
+            parts.append("5h window: \(Int(window.remainingPercent.rounded()))% left")
+        }
+        if let weekly {
+            parts.append("Weekly: \(Int(weekly.remainingPercent.rounded()))% left")
+        }
+        let summary: String?
+        if !parts.isEmpty {
+            summary = parts.joined(separator: " · ")
+        } else {
+            summary = allowance.string("summary") ?? tier
+        }
+
+        return MuseUsageSnapshot(
+            tier: tier,
+            asOf: asOf,
+            window: window,
+            weekly: weekly,
+            allowanceRemainingPercent: remainingPercent,
+            allowanceSummary: summary,
+            reason: nil,
+            hint: nil,
+            fetchedAt: fetchedAt
+        )
+    }
+
+    func ingestAllowanceJSON(_ allowance: JSONValue) {
+        guard !allowance.isNull else { return }
+        let parsed = Self.parseAllowanceObject(allowance)
+        if parsed.allowanceRemainingPercent != nil || parsed.window != nil || parsed.weekly != nil {
+            latestSnapshot = parsed
+        }
     }
 
     func refresh(installation: PiInstallation?) async {
@@ -64,26 +181,7 @@ final class MuseUsageService {
             return
         }
 
-        var remainingPercent: Double?
-        var summary: String?
-        if let allowance = json["allowance"], !allowance.isNull {
-            if let rem = allowance.double("remaining_percent") ?? allowance.double("remainingPercent") {
-                remainingPercent = rem
-            } else if let used = allowance.double("used_percent") ?? allowance.double("usedPercent") {
-                remainingPercent = max(0, 100.0 - used)
-            } else if let rem = allowance.double("remaining"), let limit = allowance.double("limit"), limit > 0 {
-                remainingPercent = max(0, min(100, (rem / limit) * 100.0))
-            }
-            summary = allowance.string("summary") ?? allowance.string("tier")
-        }
-
-        latestSnapshot = MuseUsageSnapshot(
-            allowanceRemainingPercent: remainingPercent,
-            allowanceSummary: summary,
-            reason: json.string("reason"),
-            hint: json.string("hint"),
-            fetchedAt: Date()
-        )
+        latestSnapshot = Self.parseUsageResponse(json, fetchedAt: Date())
     }
 
     private static var cachedDiscoveredInstallation: PiInstallation?

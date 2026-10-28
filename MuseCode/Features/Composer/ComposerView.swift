@@ -83,6 +83,8 @@ struct ComposerView: View {
     @State private var isWaveIgniting = false
     @State private var isContractedToOrb = false
     @State private var isShowingVoiceErrorPopover = false
+    @State private var enterExitPhase: ComposerEnterExitPhase = .hidden
+    @State private var animationTask: Task<Void, Never>?
     @Bindable private var stt = MuseVoiceSTTService.shared
 
     private var isVoiceActive: Bool {
@@ -116,13 +118,27 @@ struct ComposerView: View {
 
             // Top Smoked Liquid Glass Input Pill — morphs into the 3D Liquid Glass Voice Orb when mic is active
             morphingTopInputOrOrb
+                .scaleEffect(
+                    x: enterExitPhase.topPillScaleX,
+                    y: enterExitPhase.topPillScaleY,
+                    anchor: .top
+                )
+                .blur(radius: enterExitPhase.topPillBlur)
+                .offset(y: enterExitPhase.topPillOffsetY)
+                .opacity(enterExitPhase.topPillOpacity)
 
-            // Bottom Frosted Liquid Glass Control Card — fades and scales out when morphed into the Voice Orb
+            // Bottom Frosted Liquid Glass Subcontainer — enters & exits via the staged capsule-blur-expand choreography (`enter-anim.gif`)
             if !isContractedToOrb {
                 liquidGlassControlCard
-                    .opacity(isWaveIgniting ? 0.0 : 1.0)
-                    .scaleEffect(isWaveIgniting ? 0.95 : 1.0, anchor: .top)
-                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
+                    .scaleEffect(
+                        x: isWaveIgniting ? 0.44 : enterExitPhase.subcontainerScaleX,
+                        y: isWaveIgniting ? 0.42 : enterExitPhase.subcontainerScaleY,
+                        anchor: .top
+                    )
+                    .offset(y: isWaveIgniting ? -8 : enterExitPhase.subcontainerOffsetY)
+                    .blur(radius: isWaveIgniting ? 12 : enterExitPhase.subcontainerBlur)
+                    .opacity(isWaveIgniting ? 0.0 : enterExitPhase.subcontainerOpacity)
+                    .transition(.museSubcontainerEnterExit)
             }
         }
         .animation(.spring(response: 0.44, dampingFraction: 0.80), value: isContractedToOrb)
@@ -135,6 +151,29 @@ struct ComposerView: View {
             if isVoiceActive {
                 isWaveIgniting = true
                 isContractedToOrb = true
+                enterExitPhase = .settled
+            } else {
+                playComposerEnterAnimation(withLeadingExit: false)
+            }
+        }
+        .onDisappear {
+            animationTask?.cancel()
+            enterExitPhase = .hidden
+        }
+        .onChange(of: ObjectIdentifier(controller)) { _, _ in
+            loadDraft()
+            if !isVoiceActive {
+                playComposerEnterAnimation(withLeadingExit: true)
+            }
+        }
+        .onChange(of: state.selectedSessionKey) { _, _ in
+            if !isVoiceActive {
+                playComposerEnterAnimation(withLeadingExit: true)
+            }
+        }
+        .onChange(of: state.composerEnterAnimationTick) { _, _ in
+            if !isVoiceActive {
+                playComposerEnterAnimation(withLeadingExit: true)
             }
         }
         .onChange(of: controller.draftKey) { _, _ in loadDraft() }
@@ -293,15 +332,90 @@ struct ComposerView: View {
                 MuseCreditBatteryButton(controller: controller, isGlassSurface: true)
             }
         }
+        .opacity(enterExitPhase.subcontainerInnerOpacity)
+        .blur(radius: enterExitPhase.subcontainerInnerBlur)
+        .offset(y: enterExitPhase.subcontainerInnerOffsetY)
         .padding(.horizontal, 18)
         .padding(.vertical, 13)
         .background(
             LiquidGlassCardBackground(
-                cornerRadius: 24,
+                cornerRadius: enterExitPhase == .pillWithBlurredCapsule ? 28 : 24,
                 isDarkTopPill: false,
                 isDropTargeted: isDropTargeted
             )
         )
+    }
+
+    // MARK: - Staged Enter & Exit Choreography (`enter-anim.gif`)
+
+    func playComposerEnterAnimation(withLeadingExit: Bool) {
+        animationTask?.cancel()
+        animationTask = Task { @MainActor in
+            if withLeadingExit && enterExitPhase != .hidden {
+                // Reverse exit stages (Frames 05 -> 03 -> 02 -> 01)
+                withAnimation(.easeIn(duration: 0.08)) {
+                    enterExitPhase = .subcontainerExpanding
+                }
+                try? await Task.sleep(nanoseconds: 75_000_000)
+                guard !Task.isCancelled else { return }
+
+                withAnimation(.easeIn(duration: 0.09)) {
+                    enterExitPhase = .pillWithBlurredCapsule
+                }
+                try? await Task.sleep(nanoseconds: 85_000_000)
+                guard !Task.isCancelled else { return }
+
+                withAnimation(.easeIn(duration: 0.07)) {
+                    enterExitPhase = .hidden
+                }
+                try? await Task.sleep(nanoseconds: 65_000_000)
+                guard !Task.isCancelled else { return }
+            } else {
+                enterExitPhase = .hidden
+            }
+
+            // Frame 02 (200ms): Top pill snaps in crisp at 100%; bottom subcontainer materializes
+            // as a compact, blurred dark glass capsule centered beneath the top pill.
+            withAnimation(.spring(response: 0.18, dampingFraction: 0.88)) {
+                enterExitPhase = .pillWithBlurredCapsule
+            }
+            try? await Task.sleep(nanoseconds: 95_000_000)
+            guard !Task.isCancelled else { return }
+
+            // Frames 03–04 (300–400ms): Bottom subcontainer expands outward & downward from `.top`
+            // to 96% with soft blur while inner rows fade in at 54% opacity.
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.84)) {
+                enterExitPhase = .subcontainerExpanding
+            }
+            try? await Task.sleep(nanoseconds: 135_000_000)
+            guard !Task.isCancelled else { return }
+
+            // Frame 05 (500ms+): Settles crisp at 100% scale, 0 blur, and 100% inner contrast.
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                enterExitPhase = .settled
+            }
+        }
+    }
+
+    func playComposerExitAnimation() {
+        animationTask?.cancel()
+        animationTask = Task { @MainActor in
+            withAnimation(.easeIn(duration: 0.08)) {
+                enterExitPhase = .subcontainerExpanding
+            }
+            try? await Task.sleep(nanoseconds: 75_000_000)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeIn(duration: 0.09)) {
+                enterExitPhase = .pillWithBlurredCapsule
+            }
+            try? await Task.sleep(nanoseconds: 85_000_000)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeIn(duration: 0.08)) {
+                enterExitPhase = .hidden
+            }
+        }
     }
 
     private var placeholder: String {
@@ -397,13 +511,15 @@ struct ComposerView: View {
     }
 
     private func collapseOrbBackToInputPill() {
+        enterExitPhase = .pillWithBlurredCapsule
         withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
             isContractedToOrb = false
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
-            withAnimation(.easeOut(duration: 0.20)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            withAnimation(.easeOut(duration: 0.18)) {
                 isWaveIgniting = false
             }
+            playComposerEnterAnimation(withLeadingExit: false)
         }
     }
 
@@ -854,16 +970,13 @@ enum AttachmentLoader {
     }
 }
 
-// MARK: - Tachometer Credit & Capacity Gauge (15k RPM Full -> 500 RPM Low)
+// MARK: - Credit & Capacity Tachometer Gauge (White Variable-Thickness Dial)
 
 struct MuseCreditBatteryButton: View {
     var controller: PiSessionController
     var isGlassSurface: Bool = true
     @State private var isPopoverPresented = false
     @Bindable private var usageService = MuseUsageService.shared
-
-    static let maxRPM: Int = 15_000
-    static let minRPM: Int = 500
 
     private var totalSessionTokens: Int {
         (controller.stats?.tokens.totalTokens ?? 0)
@@ -874,7 +987,9 @@ struct MuseCreditBatteryButton: View {
         usageService.allowancePercentage
     }
 
-    /// Remaining capacity fraction (`1.0` = full credits / 15k rpm, `0.0` = almost out / 500 rpm).
+    /// Remaining capacity fraction (`1.0` = full allowance/capacity, `0.0` = depleted).
+    /// Driven by `muse usage --json` (`window` & `weekly` allowance) when reported by the server,
+    /// or by the active model's real catalog `contextWindow` and session token count.
     var remainingFraction: Double {
         if let pct = allowancePercentage {
             return min(1.0, max(0.0, Double(pct) / 100.0))
@@ -882,42 +997,11 @@ struct MuseCreditBatteryButton: View {
         if let usedPct = controller.contextUsagePercent, usedPct > 0 {
             return min(1.0, max(0.0, 1.0 - (usedPct / 100.0)))
         }
-        let capacity = max(1, controller.model?.contextWindow ?? 200_000)
-        if totalSessionTokens > 0 {
+        if let capacity = controller.model?.contextWindow, capacity > 0, totalSessionTokens > 0 {
             let used = min(1.0, max(0.0, Double(totalSessionTokens) / Double(capacity)))
             return 1.0 - used
         }
         return 1.0
-    }
-
-    /// Current tachometer RPM mapped linearly between `500 rpm` (almost out) and `15k rpm` (full).
-    var currentRPM: Int {
-        let span = Double(Self.maxRPM - Self.minRPM)
-        let raw = Double(Self.minRPM) + remainingFraction * span
-        return min(Self.maxRPM, max(Self.minRPM, Int(raw.rounded())))
-    }
-
-    var rpmLabel: String {
-        Self.formatRPM(currentRPM)
-    }
-
-    static func formatRPM(_ rpm: Int) -> String {
-        if rpm >= 1_000 {
-            let k = Double(rpm) / 1_000.0
-            if abs(k.rounded() - k) < 0.05 {
-                return "\(Int(k.rounded()))k rpm"
-            }
-            return String(format: "%.1fk rpm", k)
-        }
-        return "\(rpm) rpm"
-    }
-
-    private var gaugeColor: Color {
-        if currentRPM <= 2_000 { return .red }
-        if currentRPM <= 5_500 { return .orange }
-        return isGlassSurface
-            ? Color(red: 0.25, green: 0.68, blue: 1.0)
-            : AppTheme.accentBlue
     }
 
     private var remainingPercentInt: Int {
@@ -931,7 +1015,6 @@ struct MuseCreditBatteryButton: View {
         } label: {
             TachometerMiniDial(
                 fraction: remainingFraction,
-                tint: gaugeColor,
                 isGlassSurface: isGlassSurface
             )
             .frame(width: 22, height: 16)
@@ -965,26 +1048,84 @@ struct MuseCreditBatteryButton: View {
                 Spacer()
                 Text("\(remainingPercentInt)%")
                     .font(.callout.monospacedDigit().weight(.bold))
-                    .foregroundStyle(gaugeColor)
+                    .foregroundStyle(.primary)
             }
 
             TachometerLargeDial(
-                rpm: currentRPM,
-                fraction: remainingFraction,
-                tint: gaugeColor
+                fraction: remainingFraction
             )
             .frame(maxWidth: .infinity)
             .frame(height: 92)
             .padding(.vertical, 2)
 
             HStack {
-                Text("Low")
+                Text("Thin / Low")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text("Full")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+
+            if let snapshot = usageService.latestSnapshot {
+                Divider()
+                VStack(alignment: .leading, spacing: 5) {
+                    if let window = snapshot.window {
+                        KeyValueRow(
+                            key: "5h window remaining",
+                            value: "\(Int(window.remainingPercent.rounded()))% (\(String(format: "%.1f%%", window.usedPercent)) used)",
+                            isMonospaced: true
+                        )
+                        if let resetsAt = window.resetsAt {
+                            KeyValueRow(
+                                key: "Window resets",
+                                value: resetsAt.formatted(date: .omitted, time: .shortened),
+                                isMonospaced: false
+                            )
+                        }
+                    }
+                    if let weekly = snapshot.weekly {
+                        KeyValueRow(
+                            key: "Weekly remaining",
+                            value: "\(Int(weekly.remainingPercent.rounded()))% (\(String(format: "%.1f%%", weekly.usedPercent)) used)",
+                            isMonospaced: true
+                        )
+                        if let resetsAt = weekly.resetsAt {
+                            KeyValueRow(
+                                key: "Weekly resets",
+                                value: resetsAt.formatted(date: .abbreviated, time: .shortened),
+                                isMonospaced: false
+                            )
+                        }
+                    }
+                    if let tier = snapshot.tier, !tier.isEmpty {
+                        KeyValueRow(key: "Subscription tier", value: tier, isMonospaced: false)
+                    }
+                    if snapshot.window == nil && snapshot.weekly == nil {
+                        if let allowance = snapshot.allowanceRemainingPercent {
+                            KeyValueRow(
+                                key: "Subscription allowance",
+                                value: "\(Int(allowance.rounded()))% remaining",
+                                isMonospaced: true
+                            )
+                        } else if snapshot.reason == "server_sent_no_usage" {
+                            KeyValueRow(
+                                key: "5h window status",
+                                value: "100% available (no usage in window yet)",
+                                isMonospaced: false
+                            )
+                        } else if let reason = snapshot.reason {
+                            KeyValueRow(key: "muse usage", value: reason, isMonospaced: false)
+                        }
+                    }
+                    if let hint = snapshot.hint {
+                        Text(hint)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
 
             Divider()
@@ -1013,30 +1154,6 @@ struct MuseCreditBatteryButton: View {
                 )
             }
 
-            if let snapshot = usageService.latestSnapshot {
-                Divider()
-                HStack(alignment: .top, spacing: 6) {
-                    HugeIcon(name: "flash")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        if let allowance = snapshot.allowanceRemainingPercent {
-                            Text(snapshot.allowanceSummary ?? "Allowance: \(Int(allowance.rounded()))% remaining")
-                                .font(.caption.weight(.medium))
-                        } else {
-                            Text("muse usage: \(snapshot.reason ?? "no allowance reported")")
-                                .font(.caption.weight(.medium))
-                        }
-                        if let hint = snapshot.hint {
-                            Text(hint)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-            }
-
             HStack {
                 Button {
                     Task { await usageService.refresh(installation: controller.museInstallation) }
@@ -1062,25 +1179,29 @@ struct MuseCreditBatteryButton: View {
             }
         }
         .padding(14)
-        .frame(width: 310)
+        .frame(width: 320)
     }
 }
 
-/// Compact tachometer dial with tick marks, arc, and needle for the composer bar.
+/// Compact white tachometer dial whose gauge stroke thins out as remaining credits decrease.
 struct TachometerMiniDial: View {
     var fraction: Double
-    var tint: Color
     var isGlassSurface: Bool = true
 
     var body: some View {
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height - 2.5)
-            let radius = min(size.width / 2 - 1.5, size.height - 3.5)
+            let radius = min(size.width / 2 - 2.0, size.height - 3.5)
             let startDeg = 165.0
             let endDeg = 375.0
+            let spanDeg = endDeg - startDeg
             let clamped = min(1.0, max(0.0, fraction))
-            let needleDeg = startDeg + clamped * (endDeg - startDeg)
+            let needleDeg = startDeg + clamped * spanDeg
 
+            let fgColor = isGlassSurface ? Color.white : Color.primary
+            let trackColor = isGlassSurface ? Color.white.opacity(0.22) : Color.primary.opacity(0.18)
+
+            // Subtle background track
             var bgArc = Path()
             bgArc.addArc(
                 center: center,
@@ -1091,21 +1212,41 @@ struct TachometerMiniDial: View {
             )
             context.stroke(
                 bgArc,
-                with: .color(isGlassSurface ? Color.white.opacity(0.28) : Color.primary.opacity(0.22)),
-                style: StrokeStyle(lineWidth: 2.0, lineCap: .round)
+                with: .color(trackColor),
+                style: StrokeStyle(lineWidth: 1.25, lineCap: .round)
             )
 
-            var activeArc = Path()
-            activeArc.addArc(
-                center: center,
-                radius: radius,
-                startAngle: .degrees(startDeg),
-                endAngle: .degrees(needleDeg),
-                clockwise: false
-            )
-            context.stroke(activeArc, with: .color(tint), style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+            // Active white arc whose thickness scales down as credits decrease
+            // (3.0pt when full -> 0.85pt when low, plus progressive taper along the arc)
+            if clamped > 0.005 {
+                let segments = 16
+                let minStroke: CGFloat = 0.85
+                let maxStrokeForFraction: CGFloat = minStroke + CGFloat(clamped) * 2.15
+                for i in 0..<segments {
+                    let t0 = Double(i) / Double(segments)
+                    let t1 = Double(i + 1) / Double(segments)
+                    let segStart = startDeg + (needleDeg - startDeg) * t0
+                    let segEnd = startDeg + (needleDeg - startDeg) * t1
+                    let segProgress = CGFloat((t0 + t1) * 0.5)
+                    let segWidth = minStroke + (maxStrokeForFraction - minStroke) * (0.35 + 0.65 * segProgress)
 
-            // Needle
+                    var segPath = Path()
+                    segPath.addArc(
+                        center: center,
+                        radius: radius,
+                        startAngle: .degrees(segStart),
+                        endAngle: .degrees(segEnd),
+                        clockwise: false
+                    )
+                    context.stroke(
+                        segPath,
+                        with: .color(fgColor.opacity(0.96)),
+                        style: StrokeStyle(lineWidth: segWidth, lineCap: .round)
+                    )
+                }
+            }
+
+            // Needle (also thins slightly as credits decrease)
             let rad = needleDeg * .pi / 180.0
             let tip = CGPoint(
                 x: center.x + CGFloat(cos(rad)) * (radius - 1.0),
@@ -1114,24 +1255,30 @@ struct TachometerMiniDial: View {
             var needle = Path()
             needle.move(to: center)
             needle.addLine(to: tip)
+            let needleWidth: CGFloat = 0.95 + CGFloat(clamped) * 0.65
             context.stroke(
                 needle,
-                with: .color(isGlassSurface ? Color.white.opacity(0.95) : Color.primary),
-                style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                with: .color(fgColor.opacity(0.95)),
+                style: StrokeStyle(lineWidth: needleWidth, lineCap: .round)
             )
 
             // Center pivot
-            let hubRect = CGRect(x: center.x - 1.8, y: center.y - 1.8, width: 3.6, height: 3.6)
-            context.fill(Path(ellipseIn: hubRect), with: .color(tint))
+            let hubRadius: CGFloat = 1.3 + CGFloat(clamped) * 0.5
+            let hubRect = CGRect(
+                x: center.x - hubRadius,
+                y: center.y - hubRadius,
+                width: hubRadius * 2,
+                height: hubRadius * 2
+            )
+            context.fill(Path(ellipseIn: hubRect), with: .color(fgColor))
         }
     }
 }
 
-/// Full tachometer instrument dial shown in the credit gauge popover.
+/// Full monochrome tachometer instrument dial shown in the credit gauge popover,
+/// with stroke thickness that tapers down as remaining credits decrease.
 struct TachometerLargeDial: View {
-    var rpm: Int
     var fraction: Double
-    var tint: Color
 
     var body: some View {
         Canvas { context, size in
@@ -1146,17 +1293,26 @@ struct TachometerLargeDial: View {
             // Background track
             var track = Path()
             track.addArc(center: center, radius: radius, startAngle: .degrees(startDeg), endAngle: .degrees(endDeg), clockwise: false)
-            context.stroke(track, with: .color(.primary.opacity(0.14)), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+            context.stroke(track, with: .color(.primary.opacity(0.16)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
 
-            // Low-credit warning zone (500 - 2.5k RPM)
-            var redZone = Path()
-            redZone.addArc(center: center, radius: radius, startAngle: .degrees(startDeg), endAngle: .degrees(startDeg + spanDeg * 0.16), clockwise: false)
-            context.stroke(redZone, with: .color(.red.opacity(0.45)), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+            // Active monochrome arc with variable thickness (8.5pt full -> 1.8pt low)
+            if clamped > 0.005 {
+                let segments = 28
+                let minStroke: CGFloat = 1.8
+                let maxStrokeForFraction: CGFloat = minStroke + CGFloat(clamped) * 6.7
+                for i in 0..<segments {
+                    let t0 = Double(i) / Double(segments)
+                    let t1 = Double(i + 1) / Double(segments)
+                    let segStart = startDeg + (needleDeg - startDeg) * t0
+                    let segEnd = startDeg + (needleDeg - startDeg) * t1
+                    let segProgress = CGFloat((t0 + t1) * 0.5)
+                    let segWidth = minStroke + (maxStrokeForFraction - minStroke) * (0.30 + 0.70 * segProgress)
 
-            // Active RPM arc
-            var active = Path()
-            active.addArc(center: center, radius: radius, startAngle: .degrees(startDeg), endAngle: .degrees(needleDeg), clockwise: false)
-            context.stroke(active, with: .color(tint), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                    var seg = Path()
+                    seg.addArc(center: center, radius: radius, startAngle: .degrees(segStart), endAngle: .degrees(segEnd), clockwise: false)
+                    context.stroke(seg, with: .color(.primary.opacity(0.92)), style: StrokeStyle(lineWidth: segWidth, lineCap: .round))
+                }
+            }
 
             // Tick marks
             let tickCount = 15
@@ -1188,16 +1344,150 @@ struct TachometerLargeDial: View {
             var needle = Path()
             needle.move(to: center)
             needle.addLine(to: tip)
-            context.stroke(needle, with: .color(.primary), style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+            let needleWidth: CGFloat = 1.4 + CGFloat(clamped) * 1.2
+            context.stroke(needle, with: .color(.primary), style: StrokeStyle(lineWidth: needleWidth, lineCap: .round))
 
-            let hub = CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9)
-            context.fill(Path(ellipseIn: hub), with: .color(tint))
+            let hubRadius: CGFloat = 3.2 + CGFloat(clamped) * 1.4
+            let hub = CGRect(x: center.x - hubRadius, y: center.y - hubRadius, width: hubRadius * 2, height: hubRadius * 2)
+            context.fill(Path(ellipseIn: hub), with: .color(.primary))
         }
         .overlay(alignment: .bottom) {
             Text("\(Int((fraction * 100.0).rounded()))%")
                 .font(.system(size: 11, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - Staged Enter & Exit Choreography Types (`enter-anim.gif`)
+
+enum ComposerEnterExitPhase: Int, Equatable {
+    /// Frame 00–01 & Frame 36+: Both the top chat input pill and bottom subcontainer are hidden.
+    case hidden = 0
+    /// Frame 02 (200ms): Top chat input pill is crisp at 100% size; bottom subcontainer is a small,
+    /// heavily blurred dark glass capsule centered directly beneath the top pill (`scaleX: 0.44, scaleY: 0.44, anchor: .top, blur: 12, opacity: 0.42`),
+    /// while its inner rows are hidden (`innerOpacity: 0`).
+    case pillWithBlurredCapsule = 1
+    /// Frames 03–04 (300–400ms): Bottom subcontainer expands outward & downward from `.top` anchor
+    /// (`scaleX: 0.96, scaleY: 0.96, anchor: .top, blur: 3.2, opacity: 0.82`), while its inner controls
+    /// fade in with a soft motion blur (`innerOpacity: 0.54, innerBlur: 2.8, innerOffsetY: -2.5`).
+    case subcontainerExpanding = 2
+    /// Frame 05–35 (500ms+): Both top pill and bottom subcontainer (and all inner rows) are settled
+    /// at full crispness (`scale: 1.0, blur: 0, opacity: 1.0`).
+    case settled = 3
+
+    var topPillScaleX: CGFloat {
+        self == .hidden ? 0.96 : 1.0
+    }
+
+    var topPillScaleY: CGFloat {
+        self == .hidden ? 0.92 : 1.0
+    }
+
+    var topPillBlur: CGFloat {
+        self == .hidden ? 6.0 : 0.0
+    }
+
+    var topPillOffsetY: CGFloat {
+        self == .hidden ? -6.0 : 0.0
+    }
+
+    var topPillOpacity: Double {
+        self == .hidden ? 0.0 : 1.0
+    }
+
+    var subcontainerScaleX: CGFloat {
+        switch self {
+        case .hidden: return 0.38
+        case .pillWithBlurredCapsule: return 0.44
+        case .subcontainerExpanding: return 0.96
+        case .settled: return 1.0
+        }
+    }
+
+    var subcontainerScaleY: CGFloat {
+        switch self {
+        case .hidden: return 0.34
+        case .pillWithBlurredCapsule: return 0.44
+        case .subcontainerExpanding: return 0.96
+        case .settled: return 1.0
+        }
+    }
+
+    var subcontainerOffsetY: CGFloat {
+        switch self {
+        case .hidden: return -14.0
+        case .pillWithBlurredCapsule: return -8.0
+        case .subcontainerExpanding: return -2.0
+        case .settled: return 0.0
+        }
+    }
+
+    var subcontainerBlur: CGFloat {
+        switch self {
+        case .hidden: return 16.0
+        case .pillWithBlurredCapsule: return 12.0
+        case .subcontainerExpanding: return 3.2
+        case .settled: return 0.0
+        }
+    }
+
+    var subcontainerOpacity: Double {
+        switch self {
+        case .hidden: return 0.0
+        case .pillWithBlurredCapsule: return 0.42
+        case .subcontainerExpanding: return 0.82
+        case .settled: return 1.0
+        }
+    }
+
+    var subcontainerInnerOpacity: Double {
+        switch self {
+        case .hidden, .pillWithBlurredCapsule: return 0.0
+        case .subcontainerExpanding: return 0.54
+        case .settled: return 1.0
+        }
+    }
+
+    var subcontainerInnerBlur: CGFloat {
+        switch self {
+        case .hidden, .pillWithBlurredCapsule: return 8.0
+        case .subcontainerExpanding: return 2.8
+        case .settled: return 0.0
+        }
+    }
+
+    var subcontainerInnerOffsetY: CGFloat {
+        switch self {
+        case .hidden, .pillWithBlurredCapsule: return -5.0
+        case .subcontainerExpanding: return -2.5
+        case .settled: return 0.0
+        }
+    }
+}
+
+private struct MuseSubcontainerTransitionModifier: ViewModifier {
+    var isCollapsed: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(
+                x: isCollapsed ? 0.44 : 1.0,
+                y: isCollapsed ? 0.42 : 1.0,
+                anchor: .top
+            )
+            .offset(y: isCollapsed ? -8.0 : 0.0)
+            .blur(radius: isCollapsed ? 12.0 : 0.0)
+            .opacity(isCollapsed ? 0.0 : 1.0)
+    }
+}
+
+extension AnyTransition {
+    static var museSubcontainerEnterExit: AnyTransition {
+        .modifier(
+            active: MuseSubcontainerTransitionModifier(isCollapsed: true),
+            identity: MuseSubcontainerTransitionModifier(isCollapsed: false)
+        )
     }
 }
 
@@ -1237,7 +1527,7 @@ struct LiquidGlassCardBackground: View {
             )
 
             if isDarkTopPill {
-                // Dark obsidian top fading into smoky frosted glass at the bottom (matching Screenshot 14.04.21 & orb1.gif)
+                // Dark obsidian top fading into smoky frosted glass at the bottom (matching Screenshot 14.04.21 & enter-anim.gif)
                 LinearGradient(
                     stops: [
                         .init(color: Color(red: 0.04, green: 0.04, blue: 0.06, opacity: 0.95), location: 0.0),
@@ -1246,6 +1536,18 @@ struct LiquidGlassCardBackground: View {
                     ],
                     startPoint: .top,
                     endPoint: .bottom
+                )
+
+                // Warm golden-peach ambient halo behind the leading caret (`enter-anim.gif`)
+                RadialGradient(
+                    colors: [
+                        Color(red: 1.0, green: 0.74, blue: 0.42, opacity: 0.18),
+                        Color(red: 0.96, green: 0.62, blue: 0.32, opacity: 0.06),
+                        Color.clear
+                    ],
+                    center: UnitPoint(x: 0.06, y: 0.64),
+                    startRadius: 2,
+                    endRadius: 96
                 )
 
                 // Subtle bottom inner glass refraction sheen

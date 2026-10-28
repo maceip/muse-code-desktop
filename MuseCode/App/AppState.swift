@@ -493,6 +493,7 @@ final class AppState {
     func refreshIndex() async {
         guard phase.isReady else { return }
         isIndexing = true
+        let emptyPlaceholders = projects.filter { $0.sessions.isEmpty }
         let loaded = await index.loadAllProjects()
         // Reconcile newly persisted sessions with their existing controllers.
         // Native IDs and file paths are different for Claude Code and Codex.
@@ -506,7 +507,11 @@ final class AppState {
             lastAccess[session.controllerKey] = lastAccess.removeValue(forKey: oldKey)
             if selectedSessionKey == oldKey { selectedSessionKey = session.controllerKey }
         }
-        projects = sort(decorate(loaded))
+        var decorated = decorate(loaded)
+        for placeholder in emptyPlaceholders where !decorated.contains(where: { $0.path == placeholder.path }) {
+            decorated.append(placeholder)
+        }
+        projects = sort(decorated)
         catalog.save(projects: projects)
         isIndexing = false
         lastIndexedAt = Date()
@@ -567,8 +572,14 @@ final class AppState {
         selectedProjectPath.flatMap(project(for:))
     }
 
+    private var lastActiveController: PiSessionController?
+    var composerEnterAnimationTick = 0
+
     var activeController: PiSessionController? {
-        selectedSessionKey.flatMap { controllers[$0] }
+        if let key = selectedSessionKey, let match = controllers[key] {
+            return match
+        }
+        return selectedSessionKey != nil ? lastActiveController : nil
     }
 
     var isActiveSessionBusy: Bool { activeController?.hasPendingWork ?? false }
@@ -601,7 +612,6 @@ final class AppState {
         // so it follows the session when it is resumed.
         let settings = preferences.projectSettings(for: canonical)
         selectedProjectPath = canonical
-        selectedSessionKey = key
         preferences.lastProjectPath = selectedProjectPath
         preferences.persist()
         await activate(key: key,
@@ -624,20 +634,47 @@ final class AppState {
         // New chats honour the project's chosen folder; the sidebar still groups
         // them under the project the user clicked.
         let launchDirectory = settings.directory.isEmpty ? canonical : CanonicalPath.of(settings.directory)
+
+        // If the current active session is already an empty, unsaved chat in this exact folder,
+        // reuse it in-place so clicking the Muse icon or New Chat never tears down the view.
+        if let current = activeController,
+           current.sessionFile == nil,
+           current.items.isEmpty,
+           CanonicalPath.of(current.projectPath) == launchDirectory,
+           current.harness.id == harness.id {
+            selectedProjectPath = canonical
+            preferences.lastProjectPath = canonical
+            preferences.persist()
+            ensureProjectPlaceholderExists(for: canonical, settings: settings)
+            composerEnterAnimationTick += 1
+            return
+        }
+
         let key = AppState.ephemeralKey(projectPath: canonical, id: UUID().uuidString.prefix(8).description)
         recordNavigation(to: key)
         selectedProjectPath = canonical
-        selectedSessionKey = key
         preferences.lastProjectPath = canonical
         preferences.persist()
-        if project(for: canonical) == nil {
-            await refreshIndex()
-        }
+        ensureProjectPlaceholderExists(for: canonical, settings: settings)
         await activate(key: key,
                        projectPath: launchDirectory,
                        sessionFile: nil,
                        systemPrompt: settings.systemPrompt,
                        harness: harness)
+    }
+
+    private func ensureProjectPlaceholderExists(for canonical: String, settings: ProjectSettings) {
+        guard project(for: canonical) == nil else { return }
+        let placeholder = ProjectGroup(
+            id: canonical,
+            path: canonical,
+            name: settings.name.isEmpty ? URL(fileURLWithPath: canonical).lastPathComponent : settings.name,
+            sessions: [],
+            isPinned: preferences.pinnedProjects.contains(canonical),
+            trustState: ProjectTrustService().state(for: canonical),
+            workingDirectory: settings.directory.isEmpty ? nil : CanonicalPath.of(settings.directory)
+        )
+        projects.insert(placeholder, at: 0)
     }
 
     /// Start a chat in the project the user is already working in. The project
@@ -675,6 +712,8 @@ final class AppState {
         if let existing = controllers[key] {
             existing.onAgentCompleted = { [weak self] in self?.noteAssistantResponseCompleted() }
             lastAccess[key] = Date()
+            lastActiveController = existing
+            selectedSessionKey = key
             await existing.refreshAll()
             pruneControllers()
             return
@@ -695,6 +734,8 @@ final class AppState {
         )
         controller.onAgentCompleted = { [weak self] in self?.noteAssistantResponseCompleted() }
         controllers[key] = controller
+        lastActiveController = controller
+        selectedSessionKey = key
         controller.onSessionForked = { [weak self, weak controller] in
             guard let self, let controller, let path = controller.sessionFile else { return }
             let newKey = AppState.key(forSessionPath: path)
