@@ -90,19 +90,26 @@ fi
 run_notarytool() {
   if [[ -n "${MUSE_KEYCHAIN_PROFILE:-}" ]]; then
     xcrun notarytool "$@" --keychain-profile "${MUSE_KEYCHAIN_PROFILE}"
+  elif [[ -n "${APPLE_API_KEY_PATH:-}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER:-}" ]]; then
+    xcrun notarytool "$@" \
+      --key "${APPLE_API_KEY_PATH}" \
+      --key-id "${APPLE_API_KEY_ID}" \
+      --issuer "${APPLE_API_ISSUER}"
   elif [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
     xcrun notarytool "$@" \
       --apple-id "${APPLE_ID}" \
       --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
       --team-id "${APPLE_TEAM_ID}"
   else
-    echo "ERROR: Notarization requested, but neither MUSE_KEYCHAIN_PROFILE nor APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID are set." >&2
+    echo "ERROR: Notarization requested, but neither MUSE_KEYCHAIN_PROFILE, APPLE_API_KEY_*, nor APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID are set." >&2
     return 1
   fi
 }
 
 has_notary_credentials() {
-  [[ -n "${MUSE_KEYCHAIN_PROFILE:-}" ]] || [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]
+  [[ -n "${MUSE_KEYCHAIN_PROFILE:-}" ]] \
+    || [[ -n "${APPLE_API_KEY_PATH:-}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER:-}" ]] \
+    || [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]
 }
 
 if [[ "${DO_NOTARIZE}" -eq 1 ]] && ! has_notary_credentials; then
@@ -213,13 +220,28 @@ ditto "${STAGE_APP}" "${DMG_STAGE}/Pie.app"
 ln -s /Applications "${DMG_STAGE}/Applications"
 
 echo "==> Building compressed disk image ${VERSIONED_DMG_OUT}"
-hdiutil create \
-  -volname "Muse Code" \
-  -srcfolder "${DMG_STAGE}" \
-  -ov \
-  -format UDZO \
-  -imagekey zlib-level=9 \
-  "${VERSIONED_DMG_OUT}"
+sync
+DMG_CREATED=0
+for attempt in 1 2 3 4 5; do
+  rm -f "${VERSIONED_DMG_OUT}"
+  if hdiutil create \
+    -volname "Muse Code" \
+    -srcfolder "${DMG_STAGE}" \
+    -ov \
+    -format UDZO \
+    -imagekey zlib-level=9 \
+    "${VERSIONED_DMG_OUT}"; then
+    DMG_CREATED=1
+    break
+  fi
+  echo "WARN: hdiutil create attempt ${attempt}/5 failed (Spotlight/fseventsd lock); retrying in $((attempt * 2))s..." >&2
+  sync
+  sleep $((attempt * 2))
+done
+if [[ "${DMG_CREATED}" -ne 1 ]]; then
+  echo "ERROR: Failed to create DMG after 5 attempts." >&2
+  exit 1
+fi
 rm -rf "${DMG_STAGE}"
 
 if [[ -n "${IDENTITY}" ]]; then
