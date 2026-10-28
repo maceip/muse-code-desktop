@@ -25,12 +25,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 # The two send-key modes are compiled from a stub so `ComposerTextView` can be
 # built on its own; these checks keep the stub honest.
-PREFERENCES="$ROOT/PiCode/Services/PreferencesStore.swift"
-COMPOSER="$ROOT/PiCode/Features/Composer/ComposerView.swift"
-TEXTVIEW="$ROOT/PiCode/Features/Composer/ComposerTextView.swift"
-SESSION="$ROOT/PiCode/Features/Session/SessionView.swift"
-CONVERSATION="$ROOT/PiCode/Features/Conversation/ConversationView.swift"
-COLUMN="$ROOT/PiCode/Features/Conversation/ConversationLayout.swift"
+PREFERENCES="$ROOT/MuseCode/Services/PreferencesStore.swift"
+COMPOSER="$ROOT/MuseCode/Features/Composer/ComposerView.swift"
+TEXTVIEW="$ROOT/MuseCode/Features/Composer/ComposerTextView.swift"
+SESSION="$ROOT/MuseCode/Features/Session/SessionView.swift"
+CONVERSATION="$ROOT/MuseCode/Features/Conversation/ConversationView.swift"
+COLUMN="$ROOT/MuseCode/Features/Conversation/ConversationLayout.swift"
 
 echo "== the composer is wired the way this harness measures =="
 fail=0
@@ -149,10 +149,10 @@ SWIFT
 
 SDK="$(xcrun --show-sdk-path --sdk macosx)"
 swiftc -sdk "$SDK" -target "$(uname -m)-apple-macos14.0" -swift-version 5 \
-    "$ROOT/PiCode/Shared/UI/Typography.swift" \
+    "$ROOT/MuseCode/Shared/UI/Typography.swift" \
     "$WORK/SendKeyStub.swift" "$WORK/ComposerMetrics.swift" \
-    "$ROOT/PiCode/Features/Composer/ComposerTextView.swift" \
-    "$ROOT/PiCode/Features/Conversation/ConversationLayout.swift" \
+    "$ROOT/MuseCode/Features/Composer/ComposerTextView.swift" \
+    "$ROOT/MuseCode/Features/Conversation/ConversationLayout.swift" \
     "$ROOT/Tools/SmokeTest/WindowPixels.swift" \
     "$ROOT/Tools/SmokeTest/ComposerKeyTest.swift" \
     -o "$WORK/composer" 2>&1 | grep -v "deprecated in macOS 14" || true

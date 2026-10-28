@@ -10,7 +10,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-APP="$PWD/PiCode"
+APP="$PWD/MuseCode"
 TMP="${TMPDIR:-/tmp}"
 OUT="${TMP%/}/picode-extension-test"
 
@@ -28,7 +28,7 @@ SOURCES=$(find "$APP/Models" "$APP/Services" "$APP/Shared" -name '*.swift')
 swiftc -Onone -g -sdk "$SDK" -target arm64-apple-macos14.0 -swift-version 5 \
   -o "$OUT/picode-extension" \
   Tools/SmokeTest/ExtensionUITest.swift \
-  "$APP/Features/Session/PiSessionController.swift" \
+  "$APP/Features/Session/MuseSessionController.swift" \
   "$APP/Features/Session/TranscriptBuilder.swift" \
   $SOURCES
 

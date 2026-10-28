@@ -2,7 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-APP="$PWD/PiCode"
+APP="$PWD/MuseCode"
 OUT="${TMPDIR:-/tmp}/picode-muse-features-test"
 SDK="$(xcrun --show-sdk-path --sdk macosx)"
 

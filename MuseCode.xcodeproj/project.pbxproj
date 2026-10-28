@@ -11,9 +11,9 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		04C124653057E23700CFC5C2 /* PiCode */ = {
+		04C124653057E23700CFC5C2 /* MuseCode */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = PiCode;
+			path = MuseCode;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		04C1245A3057E23600CFC5C2 = {
 			isa = PBXGroup;
 			children = (
-				04C124653057E23700CFC5C2 /* PiCode */,
+				04C124653057E23700CFC5C2 /* MuseCode */,
 				04C124643057E23700CFC5C2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		04C124623057E23700CFC5C2 /* PiCode */ = {
+		04C124623057E23700CFC5C2 /* MuseCode */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 04C124703057E23900CFC5C2 /* Build configuration list for PBXNativeTarget "PiCode" */;
+			buildConfigurationList = 04C124703057E23900CFC5C2 /* Build configuration list for PBXNativeTarget "MuseCode" */;
 			buildPhases = (
 				04C1245F3057E23700CFC5C2 /* Sources */,
 				04C124603057E23700CFC5C2 /* Frameworks */,
@@ -61,12 +61,12 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				04C124653057E23700CFC5C2 /* PiCode */,
+				04C124653057E23700CFC5C2 /* MuseCode */,
 			);
-			name = PiCode;
+			name = MuseCode;
 			packageProductDependencies = (
 			);
-			productName = PiCode;
+			productName = MuseCode;
 			productReference = 04C124633057E23700CFC5C2 /* Pie.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 04C1245E3057E23600CFC5C2 /* Build configuration list for PBXProject "PiCode" */;
+			buildConfigurationList = 04C1245E3057E23600CFC5C2 /* Build configuration list for PBXProject "MuseCode" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				04C124623057E23700CFC5C2 /* PiCode */,
+				04C124623057E23700CFC5C2 /* MuseCode */,
 			);
 		};
 /* End PBXProject section */
@@ -251,7 +251,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = PiCode/PiCode.entitlements;
+				CODE_SIGN_ENTITLEMENTS = MuseCode/MuseCode.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -281,7 +281,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = PiCode/PiCode.entitlements;
+				CODE_SIGN_ENTITLEMENTS = MuseCode/MuseCode.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -309,7 +309,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		04C1245E3057E23600CFC5C2 /* Build configuration list for PBXProject "PiCode" */ = {
+		04C1245E3057E23600CFC5C2 /* Build configuration list for PBXProject "MuseCode" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				04C1246E3057E23900CFC5C2 /* Debug */,
@@ -318,7 +318,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		04C124703057E23900CFC5C2 /* Build configuration list for PBXNativeTarget "PiCode" */ = {
+		04C124703057E23900CFC5C2 /* Build configuration list for PBXNativeTarget "MuseCode" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				04C124713057E23900CFC5C2 /* Debug */,

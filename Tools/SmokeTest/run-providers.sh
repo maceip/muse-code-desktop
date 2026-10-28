@@ -8,7 +8,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-APP="$PWD/PiCode"
+APP="$PWD/MuseCode"
 TMP="${TMPDIR:-/tmp}"
 OUT="${TMP%/}/picode-provider-test"
 SDK="$(xcrun --show-sdk-path --sdk macosx)"

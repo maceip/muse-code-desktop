@@ -16,7 +16,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Compile against the real metrics rather than a copy of the numbers, the same
 # way `run-sidebar-align.sh` does — `SidebarStyle` names `Typography`.
-python3 - "$ROOT/PiCode/Features/Sidebar/SidebarView.swift" "$ROOT/PiCode/Shared/UI/Typography.swift" "$WORK/SidebarStyle.swift" <<'PY'
+python3 - "$ROOT/MuseCode/Features/Sidebar/SidebarView.swift" "$ROOT/MuseCode/Shared/UI/Typography.swift" "$WORK/SidebarStyle.swift" <<'PY'
 import sys
 source, typography, destination = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(source).read()
@@ -46,8 +46,8 @@ check_absent() {
         echo "  ok   $3"
     fi
 }
-SIDEBAR="$ROOT/PiCode/Features/Sidebar/SidebarView.swift"
-APPSTATE="$ROOT/PiCode/App/AppState.swift"
+SIDEBAR="$ROOT/MuseCode/Features/Sidebar/SidebarView.swift"
+APPSTATE="$ROOT/MuseCode/App/AppState.swift"
 check_source "$SIDEBAR" 'state.toggleCollapsed(project: project)' \
     "clicking a project folds its chats"
 check_source "$SIDEBAR" '.padding(.horizontal, SidebarStyle.rowHighlightInset)' \

@@ -16,7 +16,7 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 
 # Compile against the real metrics rather than a copy of the numbers.
-python3 - "$ROOT/PiCode/Features/Sidebar/SidebarView.swift" "$ROOT/PiCode/Shared/UI/Typography.swift" "$WORK/SidebarStyle.swift" <<'PY'
+python3 - "$ROOT/MuseCode/Features/Sidebar/SidebarView.swift" "$ROOT/MuseCode/Shared/UI/Typography.swift" "$WORK/SidebarStyle.swift" <<'PY'
 import sys
 source, typography, destination = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(source).read()
@@ -36,7 +36,7 @@ check_source() {
         fail=1
     fi
 }
-SIDEBAR="$ROOT/PiCode/Features/Sidebar/SidebarView.swift"
+SIDEBAR="$ROOT/MuseCode/Features/Sidebar/SidebarView.swift"
 check_source "$SIDEBAR" '.frame(width: SidebarStyle.projectIconSize' \
     "the project glyph has a fixed width, so the indent is exact"
 check_source "$SIDEBAR" '.padding(.leading, SidebarStyle.titleIndent)' \

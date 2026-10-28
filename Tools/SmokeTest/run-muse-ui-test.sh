@@ -6,7 +6,7 @@ cd "$(dirname "$0")/../.."
 DERIVED="${TMPDIR:-/tmp}/pie-muse-ui-test"
 mkdir -p "$DERIVED"
 
-SOURCES=($(find PiCode -name '*.swift' ! -name 'PiCodeApp.swift'))
+SOURCES=($(find MuseCode -name '*.swift' ! -name 'MuseCodeApp.swift'))
 
 xcrun swiftc \
   -O \

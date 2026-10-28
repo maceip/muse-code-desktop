@@ -57,7 +57,7 @@ func run() async -> Int32 {
 
     let fixture = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/ExtensionUI/picode-ui-test.ts")
+        .appendingPathComponent("Fixtures/ExtensionUI/musecode-ui-test.ts")
     let extensionDirectory = agentDirectory.appendingPathComponent("extensions", isDirectory: true)
     try? FileManager.default.createDirectory(at: extensionDirectory, withIntermediateDirectories: true)
     guard let extensionSource = try? String(contentsOf: fixture, encoding: .utf8) else {

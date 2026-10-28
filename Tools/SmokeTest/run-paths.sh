@@ -8,16 +8,16 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-APP="$PWD/PiCode"
+APP="$PWD/MuseCode"
 OUT="${TMPDIR:-/tmp}/picode-paths-test"
 SDK="$(xcrun --show-sdk-path --sdk macosx)"
 
 mkdir -p "$OUT"
 # shellcheck disable=SC2046
-SOURCES=$(find "$APP/Models" "$APP/Services" "$APP/Shared" "$APP/Harness" -name '*.swift')
+SOURCES="$(find "$APP/Models" "$APP/Services" "$APP/Shared" "$APP/Harness" -name '*.swift') $(find "$APP/Features/Session" -name 'Transcript*.swift')"
 
 swiftc -Onone -g -sdk "$SDK" -target arm64-apple-macos14.0 -swift-version 5 \
   -o "$OUT/picode-paths" \
-  Tools/SmokeTest/PiPathsTest.swift $SOURCES
+  Tools/SmokeTest/MusePathsTest.swift $SOURCES
 
 exec "$OUT/picode-paths"
