@@ -85,10 +85,19 @@ struct ComposerView: View {
     @State private var isShowingVoiceErrorPopover = false
     @State private var enterExitPhase: ComposerEnterExitPhase = .hidden
     @State private var animationTask: Task<Void, Never>?
+    @Namespace private var morphNamespace
     @Bindable private var stt = MuseVoiceSTTService.shared
 
     private var isVoiceActive: Bool {
         stt.isRecording || stt.isTranscribing
+    }
+
+    /// Before the first turn (`controller.items.isEmpty`), the composer renders as two
+    /// separate Liquid Glass containers (top input pill + bottom subcontainer).
+    /// After the first turn (`!controller.items.isEmpty`), the two containers animate-morph
+    /// into one unified, consolidated Liquid Glass bar.
+    var isConsolidatedBar: Bool {
+        !controller.items.isEmpty
     }
 
     var body: some View {
@@ -116,7 +125,7 @@ struct ComposerView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
 
-            // Top Smoked Liquid Glass Input Pill — morphs into the 3D Liquid Glass Voice Orb when mic is active
+            // Top Smoked Liquid Glass Input Pill (or Consolidated Single Bar after first turn) — morphs into the 3D Liquid Glass Voice Orb when mic is active
             morphingTopInputOrOrb
                 .scaleEffect(
                     x: enterExitPhase.topPillScaleX,
@@ -127,8 +136,8 @@ struct ComposerView: View {
                 .offset(y: enterExitPhase.topPillOffsetY)
                 .opacity(enterExitPhase.topPillOpacity)
 
-            // Bottom Frosted Liquid Glass Subcontainer — enters & exits via the staged capsule-blur-expand choreography (`enter-anim.gif`)
-            if !isContractedToOrb {
+            // Bottom Frosted Liquid Glass Subcontainer — shown before the first turn, and morphs into the top bar after the first turn
+            if !isContractedToOrb && !isConsolidatedBar {
                 liquidGlassControlCard
                     .scaleEffect(
                         x: isWaveIgniting ? 0.44 : enterExitPhase.subcontainerScaleX,
@@ -141,6 +150,7 @@ struct ComposerView: View {
                     .transition(.museSubcontainerEnterExit)
             }
         }
+        .animation(.spring(response: 0.44, dampingFraction: 0.84), value: isConsolidatedBar)
         .animation(.spring(response: 0.44, dampingFraction: 0.80), value: isContractedToOrb)
         .animation(.easeOut(duration: 0.22), value: isWaveIgniting)
         .onChange(of: isVoiceActive) { _, active in
@@ -219,56 +229,94 @@ struct ComposerView: View {
     }
 
     private var liquidGlassInputPill: some View {
-        HStack(alignment: .center, spacing: 10) {
-            ComposerTextView(
-                text: $text,
-                placeholder: placeholder,
-                focusTick: focusTick,
-                sendKey: state.preferences.sendKey,
-                suggestionsActive: !suggestions.isEmpty,
-                isEnabled: controller.connection.isConnected,
-                onSend: { send() },
-                onFollowUp: { send(delivery: .followUp) },
-                onEscape: handleEscape,
-                onMoveSuggestion: moveSuggestion,
-                onAcceptSuggestion: acceptCurrentSuggestion
-            )
-            .frame(minHeight: ComposerMetrics.editorMinHeight, maxHeight: ComposerMetrics.editorMaxHeight)
-            .fixedSize(horizontal: false, vertical: true)
-            .opacity(isWaveIgniting ? 0.15 : 1.0)
+        let barCornerRadius: CGFloat = isConsolidatedBar ? 22 : 28
+        return VStack(alignment: .leading, spacing: isConsolidatedBar ? 8 : 0) {
+            HStack(alignment: .center, spacing: 10) {
+                ComposerTextView(
+                    text: $text,
+                    placeholder: placeholder,
+                    focusTick: focusTick,
+                    sendKey: state.preferences.sendKey,
+                    suggestionsActive: !suggestions.isEmpty,
+                    isEnabled: controller.connection.isConnected,
+                    onSend: { send() },
+                    onFollowUp: { send(delivery: .followUp) },
+                    onEscape: handleEscape,
+                    onMoveSuggestion: moveSuggestion,
+                    onAcceptSuggestion: acceptCurrentSuggestion
+                )
+                .frame(minHeight: ComposerMetrics.editorMinHeight, maxHeight: ComposerMetrics.editorMaxHeight)
+                .fixedSize(horizontal: false, vertical: true)
+                .opacity(isWaveIgniting ? 0.15 : 1.0)
 
-            HStack(spacing: 8) {
-                Button {
-                    toggleVoiceOrbRecording()
-                } label: {
-                    HugeIcon(name: "mic-01", size: 18)
-                        .foregroundStyle(Color.white.opacity(0.82))
-                        .frame(width: 30, height: 30)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .accessibilityLabel("Voice input via Muse built-in STT")
-                .help("Voice input via Muse built-in STT (`muse voice transcribe`)")
-                .contextMenu {
-                    Button("Transcribe Audio Clip (.wav / .m4a)…") {
-                        pickAndTranscribeAudioFile()
+                if !isConsolidatedBar {
+                    HStack(spacing: 8) {
+                        voiceMicButton
+                            .matchedGeometryEffect(id: "composerMicButton", in: morphNamespace)
+
+                        if isStreamingRun || canSend {
+                            primaryActionButton
+                                .matchedGeometryEffect(id: "composerPrimaryAction", in: morphNamespace)
+                        }
                     }
-                }
-
-                if isStreamingRun || canSend {
-                    primaryActionButton
+                    .opacity(isWaveIgniting ? 0.0 : 1.0)
                 }
             }
-            .opacity(isWaveIgniting ? 0.0 : 1.0)
+
+            if isConsolidatedBar {
+                if !attachments.isEmpty {
+                    attachmentRow
+                        .opacity(isWaveIgniting ? 0.0 : 1.0)
+                }
+
+                // Consolidated single-bar control strip (minimized attachment +, folder, branch, model, access, tachometer, mic, send)
+                HStack(spacing: 12) {
+                    Button {
+                        chooseAttachments()
+                    } label: {
+                        HugeIcon(name: "add-01", size: 15)
+                            .foregroundStyle(Color.white.opacity(0.82))
+                            .frame(width: 24, height: 24)
+                            .background(Color.white.opacity(0.08), in: Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .accessibilityLabel("Attach files or images")
+                    .help("Attach images or text files — drag and drop works too")
+                    .matchedGeometryEffect(id: "composerAttachControl", in: morphNamespace)
+
+                    ComposerContextStrip(state: state, controller: controller, isGlassSurface: true)
+                        .matchedGeometryEffect(id: "composerContextStrip", in: morphNamespace)
+
+                    modelThinkingMenu
+                        .matchedGeometryEffect(id: "composerModelMenu", in: morphNamespace)
+
+                    Spacer(minLength: 10)
+
+                    ComposerAccessControl(controller: controller)
+                        .matchedGeometryEffect(id: "composerAccessControl", in: morphNamespace)
+
+                    MuseCreditBatteryButton(controller: controller, isGlassSurface: true)
+                        .matchedGeometryEffect(id: "composerTachometer", in: morphNamespace)
+
+                    voiceMicButton
+                        .matchedGeometryEffect(id: "composerMicButton", in: morphNamespace)
+
+                    primaryActionButton
+                        .matchedGeometryEffect(id: "composerPrimaryAction", in: morphNamespace)
+                }
+                .opacity(isWaveIgniting ? 0.0 : 1.0)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
         }
-        .padding(.leading, 18)
+        .padding(.leading, isConsolidatedBar ? 16 : 18)
         .padding(.trailing, 14)
-        .padding(.vertical, 11)
+        .padding(.vertical, isConsolidatedBar ? 10 : 11)
         .background(
             ZStack {
                 LiquidGlassCardBackground(
-                    cornerRadius: 28,
+                    cornerRadius: barCornerRadius,
                     isDarkTopPill: true,
                     isDropTargeted: isDropTargeted
                 )
@@ -276,7 +324,7 @@ struct ComposerView: View {
                 // Stage 1 of `orb1.gif`: Horizontal chromatic plasma wave igniting across the pill before contracting into the 3D orb
                 if isWaveIgniting {
                     PlasmaHorizonWaveCanvas(isCircularOrb: false)
-                        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: barCornerRadius, style: .continuous))
                         .transition(.opacity)
                 }
             }
@@ -288,16 +336,39 @@ struct ComposerView: View {
         } isTargeted: { isDropTargeted = $0 }
     }
 
-    // MARK: - Bottom Frosted Liquid Glass Control Card (Transparent Baseline Controls)
+    private var voiceMicButton: some View {
+        Button {
+            toggleVoiceOrbRecording()
+        } label: {
+            HugeIcon(name: "mic-01", size: 17)
+                .foregroundStyle(Color.white.opacity(0.82))
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .accessibilityLabel("Voice input via Muse built-in STT")
+        .help("Voice input via Muse built-in STT (`muse voice transcribe`)")
+        .contextMenu {
+            Button("Transcribe Audio Clip (.wav / .m4a)…") {
+                pickAndTranscribeAudioFile()
+            }
+        }
+    }
+
+    // MARK: - Bottom Frosted Liquid Glass Control Card (Landing State Before First Turn)
 
     private var liquidGlassControlCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Row 1: Project Folder & Git Branch on the left, Model & Reasoning Effort Selector on the right
             HStack(spacing: 14) {
                 ComposerContextStrip(state: state, controller: controller, isGlassSurface: true)
+                    .matchedGeometryEffect(id: "composerContextStrip", in: morphNamespace)
                 ComposerAccessControl(controller: controller)
+                    .matchedGeometryEffect(id: "composerAccessControl", in: morphNamespace)
                 Spacer(minLength: 14)
                 modelThinkingMenu
+                    .matchedGeometryEffect(id: "composerModelMenu", in: morphNamespace)
             }
 
             Rectangle()
@@ -326,10 +397,12 @@ struct ComposerView: View {
                 .focusEffectDisabled()
                 .accessibilityLabel("Attach files or images")
                 .help("Attach images or text files — drag and drop works too")
+                .matchedGeometryEffect(id: "composerAttachControl", in: morphNamespace)
 
                 Spacer(minLength: 14)
 
                 MuseCreditBatteryButton(controller: controller, isGlassSurface: true)
+                    .matchedGeometryEffect(id: "composerTachometer", in: morphNamespace)
             }
         }
         .opacity(enterExitPhase.subcontainerInnerOpacity)
@@ -1527,36 +1600,14 @@ struct LiquidGlassCardBackground: View {
             )
 
             if isDarkTopPill {
-                // Dark obsidian top fading into smoky frosted glass at the bottom (matching Screenshot 14.04.21 & enter-anim.gif)
+                // Clean, uniform dark smoked obsidian glass without bottom-edge or corner discoloration
                 LinearGradient(
                     stops: [
-                        .init(color: Color(red: 0.04, green: 0.04, blue: 0.06, opacity: 0.95), location: 0.0),
-                        .init(color: Color(red: 0.12, green: 0.12, blue: 0.15, opacity: 0.88), location: 0.52),
-                        .init(color: Color(red: 0.36, green: 0.35, blue: 0.39, opacity: 0.78), location: 1.0)
+                        .init(color: Color(red: 0.08, green: 0.08, blue: 0.10, opacity: 0.94), location: 0.0),
+                        .init(color: Color(red: 0.12, green: 0.12, blue: 0.15, opacity: 0.90), location: 0.65),
+                        .init(color: Color(red: 0.16, green: 0.16, blue: 0.19, opacity: 0.86), location: 1.0)
                     ],
                     startPoint: .top,
-                    endPoint: .bottom
-                )
-
-                // Warm golden-peach ambient halo behind the leading caret (`enter-anim.gif`)
-                RadialGradient(
-                    colors: [
-                        Color(red: 1.0, green: 0.74, blue: 0.42, opacity: 0.18),
-                        Color(red: 0.96, green: 0.62, blue: 0.32, opacity: 0.06),
-                        Color.clear
-                    ],
-                    center: UnitPoint(x: 0.06, y: 0.64),
-                    startRadius: 2,
-                    endRadius: 96
-                )
-
-                // Subtle bottom inner glass refraction sheen
-                LinearGradient(
-                    colors: [
-                        Color.clear,
-                        Color.white.opacity(0.14)
-                    ],
-                    startPoint: .center,
                     endPoint: .bottom
                 )
             } else {

@@ -344,19 +344,19 @@ struct RootView: View {
 
     // MARK: - Detail pane
 
-    /// The conversation occupies 100% of the detail pane width; when the right
-    /// panel (`Overview` + `Muse Agent Messages`) is revealed via the top-right
-    /// sidebar button, it floats as an overlay over the trailing side of the
-    /// conversation view instead of taking a full layout column.
+    /// The conversation and the right inspector panel (`Overview` + `Muse Agent Messages`)
+    /// sit side-by-side in their own columns so the right panel never overlaps the
+    /// chat transcript or the composer box.
     private var detailPane: some View {
-        ZStack(alignment: .topTrailing) {
+        HStack(alignment: .top, spacing: 0) {
             detail
                 .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
 
             if state.isInspectorVisible {
-                HStack(spacing: 0) {
+                HStack(alignment: .top, spacing: 0) {
                     Color.clear
                         .frame(width: 6)
+                        .frame(maxHeight: .infinity)
                         .contentShape(Rectangle())
                         .onHover { inside in
                             if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
@@ -375,21 +375,26 @@ struct RootView: View {
                                 }
                         )
 
-                    InspectorView(state: state)
-                        .frame(width: inspectorWidth)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(AppTheme.cardStroke, lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.45), radius: 18, x: -4, y: 8)
+                    VStack(spacing: 0) {
+                        InspectorView(state: state)
+                            .frame(width: inspectorWidth)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(AppTheme.cardStroke, lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.28), radius: 14, x: 0, y: 6)
+                            .fixedSize(horizontal: false, vertical: state.inspectorArtifact == nil && !state.isNotificationsVisible)
+
+                        if state.inspectorArtifact == nil && !state.isNotificationsVisible {
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .padding(.top, 10)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 12)
                 }
-                .fixedSize(horizontal: false, vertical: state.inspectorArtifact == nil && !state.isNotificationsVisible)
-                .padding(.top, 10)
-                .padding(.trailing, 12)
-                .padding(.bottom, 12)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
-                .zIndex(2)
             }
         }
         .clipped()

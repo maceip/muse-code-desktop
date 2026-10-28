@@ -288,13 +288,15 @@ struct MuseUITestMain {
         check(ComposerEnterExitPhase.settled.subcontainerScaleX == 1.0 && ComposerEnterExitPhase.settled.subcontainerBlur == 0.0 && ComposerEnterExitPhase.settled.subcontainerInnerOpacity == 1.0,
               "Phase .settled (Frame 05 of enter-anim.gif) must settle subcontainer at 1.0x scale and 0 blur")
 
+        let composerViewLanding = ComposerView(
+            state: state,
+            controller: controller,
+            focusTick: 0
+        )
+        check(!composerViewLanding.isConsolidatedBar, "Before the first turn (items.isEmpty), ComposerView must render the 2-container landing layout (!isConsolidatedBar)")
         let composerHost = NSHostingView(
-            rootView: ComposerView(
-                state: state,
-                controller: controller,
-                focusTick: 0
-            )
-            .frame(width: 680, height: 220)
+            rootView: composerViewLanding
+                .frame(width: 680, height: 220)
         )
         window.contentView = composerHost
         composerHost.frame = NSRect(x: 0, y: 0, width: 680, height: 220)
