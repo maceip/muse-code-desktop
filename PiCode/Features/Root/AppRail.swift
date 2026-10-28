@@ -25,13 +25,10 @@ struct AppRail: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            RailButton(systemImage: "home-07", help: "Home", isSelected: !state.isPackagesVisible && !state.isSettingsPresented) {
-                state.hidePackages()
+            RailButton(systemImage: "home-07", help: "Home", isSelected: !state.isSettingsPresented) {
+                state.isSettingsPresented = false
             }
             RailButton(systemImage: "clock-01", help: "Search history (⇧⌘P)", isSelected: false, action: onOpenPalette)
-            RailButton(systemImage: "package", help: "Packages", isSelected: state.isPackagesVisible && !state.isSettingsPresented) {
-                state.showPackages()
-            }
             moreMenu
 
             Spacer(minLength: 0)

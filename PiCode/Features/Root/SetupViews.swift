@@ -2,11 +2,7 @@
 //  SetupViews.swift
 //  PiCode
 //
-//  Launching, empty, and "Pi is not installed" states.
-//
-//  PiCode never installs, updates, or reconfigures Pi. When Pi is missing, this
-//  screen explains how to install it and how PiCode looks for it, then re-runs
-//  discovery on request.
+//  Launch-state and Muse CLI setup screens.
 //
 
 import SwiftUI
@@ -15,9 +11,11 @@ struct LaunchingView: View {
     var body: some View {
         VStack(spacing: 12) {
             ProgressView()
-                .controlSize(.large)
-            Text("Looking for your Pi installation…")
-                .font(.callout)
+                .controlSize(.regular)
+            Text("Starting Muse…")
+                .font(.headline)
+            Text("Resolving your Muse CLI installation and indexing existing sessions.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -41,8 +39,6 @@ struct WelcomeView: View {
             .controlSize(.large)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // With a folder to work in, there is nothing to ask: go straight to an
-        // empty chat there. The button stays for the case with no folder yet.
         .task {
             guard state.selectedSessionKey == nil, let path = state.landingProjectPath else { return }
             await state.startNewSession(projectPath: path)
@@ -50,8 +46,6 @@ struct WelcomeView: View {
     }
 }
 
-/// The landing line of an empty chat: one question that names the project the
-/// chat runs in.
 struct BuildPromptHero: View {
     var projectName: String?
 
@@ -74,101 +68,135 @@ struct BuildPromptHero: View {
 
 struct PiSetupView: View {
     @Bindable var state: AppState
-
-    @State private var isChecking = false
+    var asSheet: Bool = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Pi was not found", huge: "alert-01")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.orange)
-                    Text("PiCode is a client for Pi Coding Agent. It does not bundle Pi, and it never installs or updates it for you.")
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 14) {
+                    HugeIcon(
+                        name: state.installation != nil ? "checkmark-circle-01" : "wrench-01"
+                    )
+                    .font(.system(size: 32))
+                    .foregroundStyle(state.installation != nil ? .green : Color.accentColor)
 
-                if let detail = state.discoveryDetail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.callout.monospaced())
-                        .textSelection(.enabled)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-                }
-
-                InspectorSection(
-                    title: "Install Pi",
-                    subtitle: "Any of these put `pi` on your PATH.",
-                    systemImage: "arrow-down-01"
-                ) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        CommandLineRow(command: "npm install -g --ignore-scripts @earendil-works/pi-coding-agent")
-                        CommandLineRow(command: "curl -fsSL https://pi.dev/install.sh | sh")
-                    }
-                }
-
-                InspectorSection(
-                    title: "How PiCode looks for Pi",
-                    subtitle: "It asks your login shell first, then falls back to common install locations.",
-                    systemImage: "search-01"
-                ) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Login shell: `command -v pi` in your shell, with your shell's PATH.")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(state.installation != nil ? "Muse is Installed" : "Muse CLI Required")
+                            .font(.title2.weight(.semibold))
+                        Text("Pie wraps your local `muse` CLI binary directly and reads sessions from `~/.local/share/muse/sessions`.")
                             .font(.callout)
-                        if !state.searchedPaths.isEmpty {
-                            Text("Searched:")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            ForEach(state.searchedPaths, id: \.self) { path in
-                                Text(path.abbreviatingHomeDirectory)
-                                    .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
+                if let installation = state.installation {
+                    GroupBox("Detected Muse Executable") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            KeyValueRow(key: "Executable", value: installation.displayPath, isMonospaced: true)
+                            KeyValueRow(key: "Version", value: installation.version, isMonospaced: true)
+                            KeyValueRow(key: "Resolved via", value: installation.origin)
+                            KeyValueRow(key: "Login shell", value: installation.shell ?? "—", isMonospaced: true)
+                            KeyValueRow(key: "Config folder", value: PiPaths.agentDirectory.path.abbreviatingHomeDirectory, isMonospaced: true)
+                            KeyValueRow(key: "Sessions folder", value: PiPaths.sessionsDirectory.path.abbreviatingHomeDirectory, isMonospaced: true)
+                        }
+                        .padding(6)
+                    }
+                } else {
+                    GroupBox("Muse was not found") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let detail = state.discoveryDetail {
+                                Text(detail)
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if !state.searchedPaths.isEmpty {
+                                Text("Searched locations:")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(state.searchedPaths.map(\.abbreviatingHomeDirectory).joined(separator: "\n"))
+                                    .font(Typography.codeBlockCompact)
                                     .foregroundStyle(.secondary)
                                     .textSelection(.enabled)
                             }
                         }
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                GroupBox("Muse CLI Quick Reference") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        InstallStep(
+                            number: 1,
+                            title: "Ensure `muse` is on your PATH (e.g. ~/.local/bin/muse)",
+                            command: "muse --version"
+                        )
+                        InstallStep(
+                            number: 2,
+                            title: "Authenticate with your Meta Muse account",
+                            command: "muse login"
+                        )
+                    }
+                    .padding(6)
                 }
 
                 HStack {
                     Button {
-                        isChecking = true
-                        Task {
-                            await state.launch()
-                            isChecking = false
-                        }
+                        Task { await state.retryDiscovery() }
                     } label: {
-                        if isChecking {
-                            HStack(spacing: 6) {
-                                ProgressView().controlSize(.small)
-                                Text("Checking…")
-                            }
-                        } else {
-                            Text("Check again")
-                        }
+                        Label("Check Again", huge: "refresh")
                     }
-                    .buttonStyle(.settingsPillProminent)
-                    .disabled(isChecking)
+                    .buttonStyle(.borderedProminent)
 
-                    Button("Open Terminal in Home") {
-                        state.openTerminal(at: NSHomeDirectory())
+                    Button("Open Terminal") {
+                        _ = WorkspaceLauncher.openTerminal(at: NSHomeDirectory())
+                    }
+
+                    Button("Reveal Config Folder") {
+                        WorkspaceLauncher.reveal(PiPaths.agentDirectory.path)
+                    }
+
+                    Spacer()
+
+                    if asSheet {
+                        Button("Done") { dismiss() }
+                            .keyboardShortcut(.defaultAction)
                     }
                 }
-
-                Text("Nothing on this screen changes your Pi configuration. Pi settings, sessions, and trust decisions stay in `\(PiPaths.agentDirectory.path.abbreviatingHomeDirectory)`.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .padding(28)
             .frame(maxWidth: 640, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minWidth: asSheet ? 580 : nil, minHeight: asSheet ? 440 : nil)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-/// A copyable shell command with a monospaced presentation.
+struct InstallStep: View {
+    var number: Int
+    var title: String
+    var command: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(number). \(title)")
+                .font(.subheadline.weight(.medium))
+            HStack {
+                Text(command)
+                    .font(Typography.codeBlock)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                CopyButton(text: command)
+            }
+        }
+    }
+}
+
 struct CommandLineRow: View {
     var command: String
 

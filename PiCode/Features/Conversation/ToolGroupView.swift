@@ -258,7 +258,10 @@ struct ToolActionRow: View {
     /// "Thinking". Every action row carries a label, so an opened run reads as a
     /// list of actions rather than a list of bare file names.
     private var stepLabel: String {
-        family?.stepLabel ?? "Action"
+        if family == .tool, let toolName = item.toolName, !toolName.isEmpty {
+            return toolName.replacingOccurrences(of: "_", with: " ").capitalizedFirst
+        }
+        return family?.stepLabel ?? "Action"
     }
 
     /// What the step names, beside its label. A command names itself; a read or an

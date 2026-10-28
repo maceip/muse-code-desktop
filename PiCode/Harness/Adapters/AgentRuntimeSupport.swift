@@ -2,10 +2,9 @@
 //  AgentRuntimeSupport.swift
 //  PiCode
 //
-//  Shared plumbing for adapters that translate a non-Pi harness into the app's
+//  Shared plumbing for adapters that translate a CLI harness into the app's
 //  canonical command/event surface: a buffered conversation, Pi-shaped message
-//  construction, and default responses for the commands every harness can answer
-//  from local state.
+//  construction, and default responses for the commands answered from local state.
 //
 
 import Foundation
@@ -33,8 +32,8 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
 
     // MARK: Canonical conversation
 
-    /// Pi-shaped messages, so the controller's `get_messages` path rebuilds the
-    /// transcript without knowing which harness produced them.
+    /// Canonical messages so the controller's `get_messages` path rebuilds the
+    /// transcript uniformly.
     var messages: [PiMessage] = []
     var stateFields = StateFields()
 
@@ -68,23 +67,16 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
 
     // MARK: Lifecycle (subclasses override)
 
-    /// Reads a resumed chat's history into the buffer. It used to happen in
-    /// `init` (Claude Code, Codex) and `start` (DeepSeek), both on the main
-    /// actor: a long DeepSeek log is a zstd stream of thousands of JSON events,
-    /// and decoding it froze the window for seconds while the chat opened.
     func prepare() async {
         guard let sessionFile, messages.isEmpty else { return }
-        let harness = descriptor.id
-        guard harness == .claudeCode || harness == .codex || harness == .deepseekHarness else { return }
-        let loaded = await Task.detached(priority: .userInitiated) {
-            harness == .deepseekHarness
-                ? DeepSeekSessionHistory.load(sessionId: sessionFile)
-                : HarnessSessionIndex.history(id: sessionFile, harness: harness)
+        let summary = await Task.detached(priority: .userInitiated) {
+            MuseSessionHistory.loadSummary(at: sessionFile)
         }.value
         guard messages.isEmpty else { return }
-        messages = loaded
-        stateFields.sessionId = sessionFile
+        messages = summary.messages
+        stateFields.sessionId = summary.sessionId ?? sessionFile
         stateFields.sessionFile = sessionFile
+        stateFields.sessionName = summary.sessionName
         stateFields.messageCount = messages.count
     }
 
@@ -99,9 +91,6 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
 
     // MARK: Command dispatch
 
-    /// The commands every adapter answers from its own buffer/state. Subclasses
-    /// handle their own commands first, then call `super.send` or fall through to
-    /// `unsupported`.
     func send(_ command: RPCCommand, timeout: TimeInterval) async throws -> RPCResponse {
         switch command {
         case .getState:
@@ -117,7 +106,8 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
             stateFields.thinkingLevel = level
             return response(command)
         case .setSessionName(let name):
-            stateFields.sessionName = name.isEmpty ? nil : name
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            stateFields.sessionName = trimmed.isEmpty ? nil : trimmed
             return response(command)
         default:
             throw AgentRuntimeError.unsupported(command: command.name, harness: descriptor.displayName)
@@ -127,7 +117,6 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
     var thinkingLevelNames: [String] { [] }
 
     /// The bare model id a CLI flag expects, with any `provider/` prefix removed.
-    /// Project settings store a qualified id; the CLI wants the id alone.
     var cliModelName: String? {
         guard let modelOverride, !modelOverride.isEmpty else { return nil }
         if let slash = modelOverride.firstIndex(of: "/") {
@@ -184,7 +173,6 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
         stateFields.messageCount = messages.count
     }
 
-    /// Starts an assistant turn: `agent_start`, `message_start`.
     func beginAssistant(model: String?, provider: String?, sessionId: String? = nil) {
         if let sessionId { stateFields.sessionId = sessionId }
         stateFields.isStreaming = true
@@ -192,7 +180,6 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
         emit(.messageStart(AgentWire.assistantMessage(text: "", model: model, provider: provider)))
     }
 
-    /// Streams an assistant text delta.
     func streamText(_ delta: String, index: Int = 0) {
         guard !delta.isEmpty else { return }
         emit(.messageUpdate(usage: nil, delta: .textDelta(contentIndex: index, delta: delta)))
@@ -204,8 +191,6 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
                             delta: .thinkingDelta(contentIndex: index, delta: delta)))
     }
 
-    /// Finishes an assistant turn: `message_end`, `agent_end`, and a final
-    /// synthesized message list so the transcript is authoritative locally.
     func endAssistant(text: String, model: String?, provider: String?, usage: PiUsage? = nil) {
         let message = AgentWire.assistantMessage(text: text, model: model, provider: provider, usage: usage)
         messages.append(message)
@@ -248,68 +233,122 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
 // MARK: - Canonical wire builders
 
 enum AgentWire {
-    static func userMessage(_ text: String) -> JSONValue {
+    static func userMessage(_ text: String, timestamp: Date = Date()) -> JSONValue {
         .object([
             "role": .string("user"),
-            "content": .array([.object(["type": .string("text"), "text": .string(text)])]),
-            "timestamp": .number(Date().timeIntervalSince1970 * 1000)
+            "content": .string(text),
+            "timestamp": .number(timestamp.timeIntervalSince1970 * 1000)
         ])
     }
 
     static func assistantMessage(text: String,
-                                 model: String?,
-                                 provider: String?,
-                                 usage: PiUsage? = nil) -> PiMessage {
+                                 thinking: String? = nil,
+                                 toolCalls: [(id: String, name: String, arguments: JSONValue)] = [],
+                                 model: String? = nil,
+                                 provider: String? = nil,
+                                 usage: PiUsage? = nil,
+                                 stopReason: String? = "end_turn",
+                                 errorMessage: String? = nil,
+                                 timestamp: Date = Date()) -> PiMessage {
+        var blocks: [JSONValue] = []
+        if let thinking, !thinking.isEmpty {
+            blocks.append(.object([
+                "type": .string("thinking"),
+                "thinking": .string(thinking)
+            ]))
+        }
+        if !text.isEmpty {
+            blocks.append(.object([
+                "type": .string("text"),
+                "text": .string(text)
+            ]))
+        }
+        for call in toolCalls {
+            blocks.append(.object([
+                "type": .string("toolCall"),
+                "id": .string(call.id),
+                "name": .string(call.name),
+                "arguments": call.arguments
+            ]))
+        }
         var object: [String: JSONValue] = [
             "role": .string("assistant"),
-            "content": .array([.object(["type": .string("text"), "text": .string(text)])]),
-            "timestamp": .number(Date().timeIntervalSince1970 * 1000)
+            "content": .array(blocks),
+            "timestamp": .number(timestamp.timeIntervalSince1970 * 1000)
         ]
         if let model { object["model"] = .string(model) }
         if let provider { object["provider"] = .string(provider) }
+        if let stopReason { object["stopReason"] = .string(stopReason) }
+        if let errorMessage { object["errorMessage"] = .string(errorMessage) }
         if let usage {
             object["usage"] = .object([
                 "input": .number(Double(usage.input)),
                 "output": .number(Double(usage.output)),
-                "totalTokens": .number(Double(usage.totalTokens))
+                "cacheRead": .number(Double(usage.cacheRead)),
+                "cacheWrite": .number(Double(usage.cacheWrite)),
+                "totalTokens": .number(Double(usage.totalTokens)),
+                "cost": .object(["total": .number(usage.cost)])
             ])
         }
         return PiMessage(raw: .object(object))
     }
 
-    static func toolResultMessage(id: String, name: String, output: String, isError: Bool) -> JSONValue {
+    static func toolResultMessage(id: String,
+                                  name: String,
+                                  output: String,
+                                  isError: Bool,
+                                  timestamp: Date = Date()) -> JSONValue {
         .object([
             "role": .string("toolResult"),
             "toolCallId": .string(id),
             "toolName": .string(name),
+            "content": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(output)
+                ])
+            ]),
             "isError": .bool(isError),
-            "content": .array([.object(["type": .string("text"), "text": .string(output)])]),
-            "timestamp": .number(Date().timeIntervalSince1970 * 1000)
+            "timestamp": .number(timestamp.timeIntervalSince1970 * 1000)
         ])
     }
 
     static func toolResult(text: String, isError: Bool) -> PiToolResult {
         PiToolResult(json: .object([
-            "content": .array([.object(["type": .string("text"), "text": .string(text)])]),
+            "content": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(text)
+                ])
+            ]),
             "isError": .bool(isError)
         ]))
     }
 
-    /// A model list entry shaped like Pi's `get_available_models` payload.
-    static func model(id: String, name: String, provider: String, reasoning: Bool, images: Bool) -> JSONValue {
-        .object([
+    static func model(id: String,
+                      name: String,
+                      provider: String,
+                      reasoning: Bool = false,
+                      thinkingEfforts: [String] = [],
+                      images: Bool = true,
+                      contextWindow: Int? = nil,
+                      maxTokens: Int? = nil) -> JSONValue {
+        var object: [String: JSONValue] = [
             "id": .string(id),
             "name": .string(name),
             "provider": .string(provider),
             "reasoning": .bool(reasoning),
+            "thinking": .object(["efforts": .array(thinkingEfforts.map(JSONValue.string))]),
+            "thinkingEfforts": .array(thinkingEfforts.map(JSONValue.string)),
             "input": .array(images ? [.string("text"), .string("image")] : [.string("text")])
-        ])
+        ]
+        if let contextWindow { object["contextWindow"] = .number(Double(contextWindow)) }
+        if let maxTokens { object["maxTokens"] = .number(Double(maxTokens)) }
+        return .object(object)
     }
 }
 
 extension PiModel {
-    /// Builds a catalog entry for a harness that has no model RPC. `PiModel`'s
-    /// only initializer decodes Pi JSON, so adapters need this to report a model.
     init(id: String, provider: String, name: String, reasoning: Bool = false, images: Bool = false) {
         self.id = id
         self.name = name

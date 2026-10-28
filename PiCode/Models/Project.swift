@@ -85,10 +85,7 @@ struct SessionRef: Identifiable, Equatable {
     var harnessID: HarnessID = .pi
 
     var resumeIdentifier: String? {
-        switch harnessID {
-        case .pi, .ohMyPi: return filePath
-        default: return sessionId
-        }
+        filePath ?? sessionId
     }
 
     var controllerKey: String {

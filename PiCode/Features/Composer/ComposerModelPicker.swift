@@ -53,7 +53,6 @@ struct ComposerModelPicker: View {
     private func content(for level: ComposerModelPickerLevel) -> some View {
         switch level {
         case .root: rootList
-        case .harness: submenu(title: "Harness") { harnessList }
         case .provider: submenu(title: "Provider") { providerList }
         case .model: submenu(title: providerFilter?.pickerCapitalized ?? "Model") { modelList }
         }
@@ -71,12 +70,6 @@ struct ComposerModelPicker: View {
     private var rootList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                pickerRow(title: "Harness",
-                          value: controller.harness.displayName,
-                          systemImage: "package") {
-                    navigate(to: .harness)
-                }
-
                 pickerRow(title: "Provider",
                           value: currentProvider?.pickerCapitalized ?? "Any",
                           systemImage: "building") {
@@ -103,35 +96,14 @@ struct ComposerModelPicker: View {
         }
     }
 
-    private var harnessList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(state.harnesses.usableHarnesses) { descriptor in
-                    let isCurrent = descriptor.id == controller.harness.id
-                    selectionRow(
-                        title: descriptor.displayName,
-                        subtitle: isCurrent ? "Current chat" : "Start a new chat on \(descriptor.displayName)",
-                        isSelected: isCurrent
-                    ) {
-                        selectHarness(descriptor)
-                    }
-                }
-            }
-            .padding(.vertical, 4)
-        }
-        .safeAreaInset(edge: .bottom) {
-            footnote("A harness is fixed for a chat. Choosing another starts a new chat on it; this conversation stays on \(controller.harness.displayName).")
-        }
-    }
-
     private var providerList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if providers.isEmpty {
                     if let error = controller.modelCatalogError {
-                        note("\(controller.harness.displayName) could not load its models: \(error)")
+                        note("Muse could not load its models: \(error)")
                     } else {
-                        note("\(controller.harness.displayName) did not return any providers. Configure one in Settings → Providers, then reopen this menu.")
+                        note("Muse did not return any providers yet. Run `muse login` in Terminal, then reopen this menu.")
                     }
                 } else {
                     ForEach(providers, id: \.self) { provider in
@@ -142,11 +114,6 @@ struct ComposerModelPicker: View {
                         ) {
                             providerFilter = provider
                             navigate(to: .model)
-                            Task {
-                                if await state.refreshProviderModelsIfStale(provider) {
-                                    await controller.refreshModels()
-                                }
-                            }
                         }
                     }
                 }
@@ -369,16 +336,6 @@ struct ComposerModelPicker: View {
         navigate(to: destination, goingBack: true)
     }
 
-    private func selectHarness(_ descriptor: HarnessDescriptor) {
-        if descriptor.id == controller.harness.id {
-            navigate(to: .root, goingBack: true)
-            return
-        }
-        let projectPath = controller.projectPath
-        onDismiss()
-        Task { await state.startNewSession(projectPath: projectPath, harnessOverride: descriptor) }
-    }
-
     private func selectModel(_ model: PiModel) {
         Task { await controller.setModel(model) }
         providerFilter = model.provider
@@ -425,7 +382,6 @@ struct ComposerModelPicker: View {
     private var fittedHeight: CGFloat {
         ComposerModelPickerLayout.height(
             for: level,
-            harnessCount: state.harnesses.usableHarnesses.count,
             providerCount: providers.count,
             reasoningCount: controller.thinkingLevels.count,
             modelCount: filteredModels.count,

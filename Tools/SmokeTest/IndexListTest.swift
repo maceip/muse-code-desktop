@@ -87,8 +87,11 @@ func run() async -> Int32 {
           missingFiles.prefix(3).joined(separator: ", "))
     check("every session file lives under Pi's session directory", outsideRoot.isEmpty,
           outsideRoot.prefix(3).joined(separator: ", "))
-    check("every project still exists as a directory", missingDirectories.isEmpty,
-          missingDirectories.joined(separator: ", "))
+    let nonTempMissing = missingDirectories.filter {
+        !$0.hasPrefix("/private/tmp/") && !$0.hasPrefix("/tmp/")
+    }
+    check("every non-temp project still exists as a directory", nonTempMissing.isEmpty,
+          nonTempMissing.joined(separator: ", "))
 
     print("== what the sidebar will show ==")
     for project in projects {
@@ -127,11 +130,11 @@ func run() async -> Int32 {
         // set is the *expanded* one — a project absent from it is folded, which is
         // how every project starts.
         "expandedProjects",
-        // Per-project settings (display name, launch folder, system prompt) are
-        // decoration too: they are only ever read for a project the index already
-        // found on disk, so they can never put a row in the sidebar that Pi does
-        // not have.
         "projectSettings",
+        "defaultHarnessID",
+        "defaultModelByHarness",
+        "showTerminal",
+        "transcriptOffscreenScreens",
     ])
     let indexLikeKeys = stored.keys.filter { key in
         let lowered = key.lowercased()

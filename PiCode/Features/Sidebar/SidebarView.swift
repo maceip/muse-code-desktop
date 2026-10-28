@@ -392,16 +392,8 @@ struct SidebarView: View {
         harnessProjects.filter(\.isPinned)
     }
 
-    /// The sidebar speaks for one harness at a time — the one in its title. Every
-    /// project stays (a folder is not owned by a harness, and a new chat can start
-    /// in any of them); only the chats under it are narrowed to that harness.
     private var harnessProjects: [ProjectGroup] {
-        let harnessID = state.preferences.defaultHarnessID
-        return state.projects.map { project in
-            var project = project
-            project.sessions = project.sessions.filter { $0.harnessID == harnessID }
-            return project
-        }
+        state.projects
     }
 
     /// …and everything else, under the "Projects" heading. When nothing is pinned
@@ -535,10 +527,9 @@ struct SidebarView: View {
         return (Array(items.prefix(limit)), items.count - limit)
     }
 
-    /// A session that exists only in memory because Pi has not written it yet.
+    /// A session that exists only in memory because Muse has not written it yet.
     private func ephemeralSession(for project: ProjectGroup) -> SessionRef? {
         guard let controller = state.activeController,
-              controller.harness.id == state.preferences.defaultHarnessID,
               controller.sessionFile == nil,
               controller.projectPath == project.path,
               state.selectedSessionKey?.hasPrefix("new:") == true else { return nil }

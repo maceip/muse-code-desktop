@@ -113,7 +113,6 @@ final class AppState {
             } else if controllers[entry.key] != nil {
                 selectedSessionKey = entry.key
                 if let path = entry.projectPath { selectProject(path) }
-                isPackagesVisible = false
                 lastAccess[entry.key] = Date()
             } else {
                 continue
@@ -136,14 +135,12 @@ final class AppState {
 
     // MARK: - Presentation
 
-    /// Whether the right panel is open for the current window. This is
-    /// intentionally session-only: switching chats keeps an open inspector, but
-    /// closing and reopening the window always starts with the panel closed.
-    var isInspectorVisible = false
-    /// What the right panel is showing. It is a single viewer, not a set of tabs:
-    /// whatever the user last clicked in the conversation — a file's contents, an
-    /// edit's diff, a command's output, or any other tool's result — is rendered
-    /// there, with its path (or a title when there is no path) along the top.
+    /// Whether the right panel is open for the current window. Open by default
+    /// so the Overview and Muse Agent Messages cards are visible immediately.
+    var isInspectorVisible = true
+    /// What the right panel is showing. When `nil`, the panel renders the
+    /// Overview card (Review, Files, Terminal, Extensions, Subagents, Background
+    /// Tasks, Artifacts) and the Muse Agent Messages card.
     enum InspectorArtifact: Equatable {
         /// A tool call from the transcript, matched by item id so the panel keeps
         /// up while the call is still streaming.
@@ -152,6 +149,14 @@ final class AppState {
         case file(path: String, line: Int?)
         /// A file the agent changed, shown as a working-tree diff.
         case change(path: String)
+        /// Session & Git changes review pane.
+        case review
+        /// Project files browser pane.
+        case files
+        /// Muse skills & extensions browser pane.
+        case extensions
+        /// Detailed view of a spawned Muse subagent.
+        case subagent(MuseSubagentInfo)
     }
 
     var inspectorArtifact: InspectorArtifact?
@@ -171,22 +176,9 @@ final class AppState {
     var selectedFileLine: Int?
     var selectedChangePath: String?
 
-    /// Whether the detail column is showing the package browser instead of a
-    /// session. It is a page, not a session: the selection below is kept while it
-    /// is open, so leaving the page returns to whatever chat was showing.
-    private(set) var isPackagesVisible = false
-
-    /// Show the package browser in the detail column.
-    func showPackages() {
-        isPackagesVisible = true
-        isSettingsPresented = false
-        isPalettePresented = false
-    }
-
-    /// Leave the package browser and return to whatever chat was showing.
-    func hidePackages() {
-        isPackagesVisible = false
-        isSettingsPresented = false
+    /// True while an app self-update is running; drives the rail's Settings glyph.
+    var isUpdatingAnything: Bool {
+        updater.isBusy
     }
 
     /// Text the inspector wants appended to the composer (e.g. an `@path`
@@ -213,6 +205,37 @@ final class AppState {
     /// edit's diff, or a generic tool's output — in the right panel.
     func openInInspector(toolId: String) {
         inspectorArtifact = .tool(id: toolId)
+        isNotificationsVisible = false
+        isInspectorVisible = true
+    }
+
+    /// Returns the right panel to the Overview + Muse Agent Messages cards.
+    func showOverview() {
+        inspectorArtifact = nil
+        isNotificationsVisible = false
+        isInspectorVisible = true
+    }
+
+    func openReviewInInspector() {
+        inspectorArtifact = .review
+        isNotificationsVisible = false
+        isInspectorVisible = true
+    }
+
+    func openFilesInInspector() {
+        inspectorArtifact = .files
+        isNotificationsVisible = false
+        isInspectorVisible = true
+    }
+
+    func openExtensionsInInspector() {
+        inspectorArtifact = .extensions
+        isNotificationsVisible = false
+        isInspectorVisible = true
+    }
+
+    func openSubagentInInspector(_ subagent: MuseSubagentInfo) {
+        inspectorArtifact = .subagent(subagent)
         isNotificationsVisible = false
         isInspectorVisible = true
     }
@@ -323,7 +346,7 @@ final class AppState {
     /// startup or supplies provider-specific launch configuration.
     func providersDidChange() {
         synchronizeProviders()
-        let affected: Set<HarnessID> = [.pi, .ohMyPi, .deepseekHarness, .claudeCode, .codex]
+        let affected: Set<HarnessID> = [.museCode]
         let connected = controllers.values.filter {
             $0.connection.isConnected && affected.contains($0.harness.id)
         }
@@ -571,7 +594,6 @@ final class AppState {
         let settings = preferences.projectSettings(for: canonical)
         selectedProjectPath = canonical
         selectedSessionKey = key
-        isPackagesVisible = false
         preferences.lastProjectPath = selectedProjectPath
         preferences.persist()
         await activate(key: key,
@@ -598,7 +620,6 @@ final class AppState {
         recordNavigation(to: key)
         selectedProjectPath = canonical
         selectedSessionKey = key
-        isPackagesVisible = false
         preferences.lastProjectPath = canonical
         preferences.persist()
         if project(for: canonical) == nil {
@@ -729,41 +750,16 @@ final class AppState {
         pendingSessionRename = session
     }
 
-    /// Ask Pi to name a session. A chat that is not on screen is opened just far
-    /// enough to talk to it: `set_session_name` acts on the session Pi has loaded,
-    /// so a controller has to exist (it is pruned like any other idle one
-    /// afterwards). Pi owns the session file, so the name is Pi's write; PiCode
-    /// never edits the file itself.
+    /// Rename a session in the catalog metadata and update its controller if active.
     func rename(session: SessionRef, to name: String) async {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if session.harnessID != .pi && session.harnessID != .ohMyPi {
-            guard !trimmed.isEmpty else { return }
-            SessionCatalogMetadata.rename(session, to: trimmed)
-            await refreshIndex()
-            return
+        guard !trimmed.isEmpty else { return }
+        SessionCatalogMetadata.rename(session, to: trimmed)
+        if let controller = controllers[session.controllerKey] {
+            await controller.setSessionName(trimmed)
+        } else if session.isEphemeral {
+            await activeController?.setSessionName(trimmed)
         }
-        let harness = HarnessDescriptor.descriptor(for: session.harnessID)
-        guard !trimmed.isEmpty, harnesses.isInstalled(harness.id) else { return }
-
-        let controller: PiSessionController?
-        if let path = session.resumeIdentifier {
-            let key = session.controllerKey
-            if controllers[key] == nil {
-                let canonical = CanonicalPath.of(session.cwd)
-                let settings = preferences.projectSettings(for: canonical)
-                await activate(key: key,
-                               projectPath: session.cwd,
-                               sessionFile: path,
-                               systemPrompt: settings.systemPrompt,
-                               harness: harness)
-            }
-            controller = controllers[key]
-        } else {
-            // A session that exists only in memory is the one on screen; its row
-            // is only drawn while its controller is the active one.
-            controller = activeController
-        }
-        await controller?.setSessionName(trimmed)
         await refreshIndex()
     }
 

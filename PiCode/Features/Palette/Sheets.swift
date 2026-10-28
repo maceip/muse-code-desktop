@@ -25,7 +25,7 @@ struct RenameSessionSheet: View {
     var body: some View {
         SheetScaffold(
             title: "Rename Session",
-            message: "Pi stores the name in the session file, so other Pi clients see it too.",
+            message: "This name is shown in the sidebar and window header.",
             primaryTitle: isSaving ? "Saving…" : "Rename",
             isPrimaryDisabled: name.trimmingCharacters(in: .whitespaces).isEmpty || isSaving,
             onCancel: onFinish
@@ -73,7 +73,7 @@ struct CompactSessionSheet: View {
     var body: some View {
         SheetScaffold(
             title: "Compact with Instructions",
-            message: "Pi summarizes the conversation, keeping what you describe here. Your existing messages stay in the session file.",
+            message: "Muse summarizes the conversation, keeping what you describe here. Your existing messages stay in the session file.",
             primaryTitle: isRunning ? "Compacting…" : "Compact",
             isPrimaryDisabled: isRunning,
             onCancel: onFinish
@@ -120,7 +120,7 @@ struct ForkSessionSheet: View {
         } content: {
             Group {
                 if forkPoints.isEmpty {
-                    Text("Pi has not reported any forkable messages yet. Send a message first.")
+                    Text("Muse has not reported any forkable messages yet. Send a message first.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
@@ -212,19 +212,12 @@ struct DeleteSessionSheet: View {
     private var message: String {
         session.filePath == nil
             ? "This session has not been written to disk yet. Close it instead of deleting it."
-            : "This permanently deletes \(session.displayName) from Pi's session folder."
+            : "This permanently deletes \(session.displayName) from Muse's session folder."
     }
 }
 
 // MARK: - Project settings
 
-/// Edits PiCode's own per-project choices: the name the sidebar shows, the folder
-/// new chats start in, and a system prompt appended to Pi for new sessions.
-///
-/// Nothing here rewrites a session or Pi's configuration. The name is a PiCode
-/// label; the folder only affects chats started *after* the change (Pi keeps every
-/// session in the folder it actually ran in); the system prompt is handed to Pi as
-/// `--append-system-prompt` on the next launch.
 struct ProjectSettingsSheet: View {
     @Bindable var state: AppState
     var project: ProjectGroup
@@ -233,15 +226,13 @@ struct ProjectSettingsSheet: View {
     @State private var name = ""
     @State private var directory = ""
     @State private var systemPrompt = ""
-    @State private var harnessID: HarnessID = .pi
-    @State private var provider = ""
     @State private var model = ""
     @State private var isSaving = false
 
     var body: some View {
         SheetScaffold(
             title: "Project Settings",
-            message: "Stored on this Mac only. PiCode never writes Pi's configuration or edits session files.",
+            message: "Stored on this Mac only. PiCode never writes Muse's configuration or edits session files.",
             primaryTitle: isSaving ? "Saving…" : "Save",
             isPrimaryDisabled: isSaving,
             onCancel: onFinish
@@ -252,8 +243,8 @@ struct ProjectSettingsSheet: View {
                 settings.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
                 settings.directory = directory.trimmingCharacters(in: .whitespacesAndNewlines)
                 settings.systemPrompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-                settings.harness = harnessID
-                settings.providerID = provider.isEmpty ? nil : provider
+                settings.harness = .museCode
+                settings.providerID = nil
                 settings.modelID = model.isEmpty ? nil : model
                 await state.updateProjectSettings(settings, for: project)
                 isSaving = false
@@ -279,45 +270,21 @@ struct ProjectSettingsSheet: View {
                     }
                 }
 
-                if !state.harnesses.usableHarnesses.isEmpty {
-                    field("Harness", caption: "Agent runtime new chats in this project use.") {
+                field("Model", caption: "Optional Muse model override for new sessions in this project.") {
+                    if !modelOptions.isEmpty {
                         Dropdown(
-                            selection: $harnessID,
-                            options: state.harnesses.usableHarnesses.map { .init(label: $0.displayName, value: $0.id) }
+                            selection: $model,
+                            options: [.init(label: "Muse's default", value: "")]
+                                + modelOptions.map { .init(label: $0, value: $0) }
                         )
+                    } else {
+                        TextField("Model", text: $model, prompt: Text("meta/muse-wonder-full-1.0"))
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.caption, design: .monospaced))
                     }
                 }
 
-                if harnessID == .pi {
-                    field("Provider and model", caption: "Optional Pi configuration. Other harnesses own separate provider catalogs.") {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Dropdown(
-                                selection: $provider,
-                                options: [.init(label: "Automatic", value: "")]
-                                    + providerOptions.map { .init(label: $0, value: $0) }
-                            )
-                            if !modelOptions.isEmpty {
-                                Dropdown(
-                                    selection: $model,
-                                    options: [.init(label: "Automatic", value: "")]
-                                        + modelOptions.map { .init(label: $0, value: $0) }
-                                )
-                            } else {
-                                TextField("Model", text: $model, prompt: Text("provider/model"))
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(.caption, design: .monospaced))
-                            }
-                        }
-                    }
-                } else if let descriptor = state.harnesses.usableHarnesses.first(where: { $0.id == harnessID }) {
-                    field("Provider and model", caption: "Configured independently by \(descriptor.displayName).") {
-                        Text("Choose from \(descriptor.displayName)'s reported model catalog after starting the chat.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                field("System prompt", caption: "Appended to the agent's system prompt for new sessions in this project.") {
+                field("System prompt", caption: "Appended to Muse's prompt for new sessions in this project.") {
                     TextEditor(text: $systemPrompt)
                         .font(.system(.body, design: .monospaced))
                         .frame(minHeight: 110)
@@ -329,32 +296,14 @@ struct ProjectSettingsSheet: View {
                 name = settings.name
                 directory = settings.directory
                 systemPrompt = settings.systemPrompt
-                harnessID = settings.harness ?? state.preferences.defaultHarnessID
-                provider = settings.providerID ?? ""
                 model = settings.modelID ?? ""
             }
         }
     }
 
-    private var providerOptions: [String] {
-        var ids = Set(PiProviderService.credentials().map(\.provider))
-        for provider in PiProviderService.customProviders() { ids.insert(provider.id) }
-        if let controller = state.activeController {
-            for entry in controller.availableModels { ids.insert(entry.provider) }
-        }
-        return ids.sorted()
-    }
-
     private var modelOptions: [String] {
-        guard !provider.isEmpty else { return [] }
-        var ids: [String] = []
-        if let custom = PiProviderService.customProviders().first(where: { $0.id == provider }) {
-            ids.append(contentsOf: custom.models.map(\.id))
-        }
-        if let controller = state.activeController {
-            ids.append(contentsOf: controller.availableModels.filter { $0.provider == provider }.map(\.id))
-        }
-        return Array(Set(ids)).sorted()
+        guard let controller = state.activeController else { return [] }
+        return controller.availableModels.map(\.qualifiedID).sorted()
     }
 
     @ViewBuilder

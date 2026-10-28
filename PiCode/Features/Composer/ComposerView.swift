@@ -204,8 +204,8 @@ struct ComposerView: View {
     }
 
     private var placeholder: String {
-        if !controller.connection.isConnected { return "Pi is not running…" }
-        if controller.runtime.isBusy { return "Steer Pi, or queue a follow-up…" }
+        if !controller.connection.isConnected { return "Muse is not running…" }
+        if controller.runtime.isBusy { return "Steer Muse, or queue a follow-up…" }
         return "Do anything"
     }
 
@@ -257,17 +257,13 @@ struct ComposerView: View {
             }
 
             ComposerAccessControl(controller: controller)
+            modelThinkingMenu
 
             Spacer(minLength: 8)
 
-            // The model/reasoning control and the send button are the two ends of
-            // one action — choose how, then do it — so they sit apart from the
-            // attachment controls and with a clear gap between them.
-            HStack(spacing: 12) {
-                modelThinkingMenu
-                iconButton("mic-01", size: 15, help: "Dictate (uses macOS Dictation)") {
-                    startDictation()
-                }
+            HStack(spacing: 10) {
+                MuseCreditBatteryButton(controller: controller)
+                MuseVoiceSTTButton(controller: controller, text: $text)
                 primaryActionButton
             }
         }
@@ -318,7 +314,7 @@ struct ComposerView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .help("Stop Pi and put anything queued back in the box (esc; ⌘. aborts without restoring)")
+            .help("Stop Muse and put anything queued back in the box (esc; ⌘. aborts without restoring)")
         } else {
             Button {
                 send(delivery: .automatic)
@@ -688,5 +684,288 @@ enum AttachmentLoader {
         }
 
         return .failure(Failure(message: "\(name) is not an image or a text file."))
+    }
+}
+
+// MARK: - Custom Credit Tracker Battery Icon (`muse usage --json` + Session Allowance)
+
+struct MuseCreditBatteryButton: View {
+    var controller: PiSessionController
+    @State private var isPopoverPresented = false
+    @Bindable private var usageService = MuseUsageService.shared
+
+    private var percentage: Int {
+        let totalTokens = (controller.stats?.tokens.totalTokens ?? 0)
+            + controller.subagents.reduce(0) { $0 + $1.totalTokens }
+        return usageService.batteryPercentage(
+            contextUsagePercent: controller.contextUsagePercent,
+            sessionTokens: totalTokens,
+            contextWindow: controller.model?.contextWindow
+        )
+    }
+
+    private var fillFraction: CGFloat {
+        CGFloat(max(0, min(100, percentage))) / 100.0
+    }
+
+    private var batteryTint: Color {
+        if percentage <= 20 { return .red }
+        if percentage <= 45 { return .orange }
+        return Color.primary
+    }
+
+    var body: some View {
+        Button {
+            isPopoverPresented.toggle()
+            Task { await usageService.refresh(installation: controller.museInstallation) }
+        } label: {
+            HStack(spacing: 4) {
+                ZStack(alignment: .leading) {
+                    // Outer battery pill background
+                    Capsule(style: .continuous)
+                        .fill(Color.primary.opacity(0.10))
+
+                    // Diagonal hatch / stripe pattern inside battery
+                    GeometryReader { geo in
+                        let width = max(0, geo.size.width * fillFraction)
+                        ZStack(alignment: .trailing) {
+                            Capsule(style: .continuous)
+                                .fill(batteryTint.opacity(0.88))
+                                .frame(width: width)
+
+                            // Diagonal hatch stripes on the right edge like the screenshot's [100%///] pill
+                            BatteryHatchPattern()
+                                .stroke(Color(nsColor: .windowBackgroundColor).opacity(0.42), lineWidth: 1.4)
+                                .frame(width: min(width, 16), height: geo.size.height)
+                                .clipped()
+                        }
+                    }
+                    .clipShape(Capsule(style: .continuous))
+
+                    Capsule(style: .continuous)
+                        .strokeBorder(batteryTint.opacity(0.32), lineWidth: 1)
+
+                    Text("\(percentage)%")
+                        .font(.system(size: 10.5, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(percentage > 45 ? Color(nsColor: .windowBackgroundColor) : .primary)
+                        .padding(.horizontal, 6)
+                }
+                .frame(width: 44, height: 18)
+
+                HugeIcon(name: "arrow-up-01")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Muse Credit & Context Battery (\(percentage)% remaining)")
+        .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
+            popoverContent
+        }
+        .task(id: controller.sessionId) {
+            await usageService.refresh(installation: controller.museInstallation)
+        }
+    }
+
+    private var popoverContent: some View {
+        let totalTokens = controller.stats?.tokens.totalTokens ?? 0
+        let inputTokens = controller.stats?.tokens.input ?? 0
+        let outputTokens = controller.stats?.tokens.output ?? 0
+        let cachedTokens = controller.stats?.tokens.cacheRead ?? 0
+        let subagentTokens = controller.subagents.reduce(0) { $0 + $1.totalTokens }
+        let contextWindow = controller.model?.contextWindow ?? 1_007_997
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Muse Credit & Context Battery")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Text("\(percentage)%")
+                    .font(.callout.monospacedDigit().weight(.bold))
+                    .foregroundStyle(percentage <= 20 ? .red : (percentage <= 45 ? .orange : .green))
+            }
+
+            // Visual battery bar in popover
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.primary.opacity(0.08))
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(percentage <= 20 ? Color.red : (percentage <= 45 ? Color.orange : Color.accentColor))
+                        .frame(width: max(4, geo.size.width * fillFraction))
+                }
+            }
+            .frame(height: 8)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 5) {
+                KeyValueRow(key: "Input tokens", value: "\(inputTokens.formatted())", isMonospaced: true)
+                KeyValueRow(key: "Output tokens", value: "\(outputTokens.formatted())", isMonospaced: true)
+                KeyValueRow(key: "Cached tokens", value: "\(cachedTokens.formatted())", isMonospaced: true)
+                if subagentTokens > 0 {
+                    KeyValueRow(key: "Subagent tokens", value: "\(subagentTokens.formatted())", isMonospaced: true)
+                }
+                KeyValueRow(key: "Context capacity", value: "\((totalTokens + subagentTokens).formatted()) / \(contextWindow.formatted())", isMonospaced: true)
+            }
+
+            if let snapshot = usageService.latestSnapshot {
+                Divider()
+                HStack(alignment: .top, spacing: 6) {
+                    HugeIcon(name: "flash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(snapshot.allowanceSummary ?? "Meta Muse Subscription")
+                            .font(.caption.weight(.medium))
+                        if let hint = snapshot.hint ?? snapshot.reason {
+                            Text(hint)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            HStack {
+                Button {
+                    Task { await usageService.refresh(installation: controller.museInstallation) }
+                } label: {
+                    HStack(spacing: 4) {
+                        if usageService.isRefreshing {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            HugeIcon(name: "refresh")
+                                .font(.system(size: 11))
+                        }
+                        Text("Refresh `muse usage`")
+                    }
+                }
+                .buttonStyle(.settingsPill)
+                Spacer()
+                Text("YOLO • Parallel Tools • Subagents")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(14)
+        .frame(width: 310)
+    }
+}
+
+private struct BatteryHatchPattern: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let step: CGFloat = 4.0
+        var x: CGFloat = -rect.height
+        while x < rect.width + rect.height {
+            path.move(to: CGPoint(x: x, y: rect.maxY))
+            path.addLine(to: CGPoint(x: x + rect.height * 0.65, y: rect.minY))
+            x += step
+        }
+        return path
+    }
+}
+
+// MARK: - Muse Built-In STT Microphone Control (`muse voice transcribe`)
+
+struct MuseVoiceSTTButton: View {
+    var controller: PiSessionController
+    @Binding var text: String
+    @Bindable private var stt = MuseVoiceSTTService.shared
+    @State private var isShowingErrorPopover = false
+
+    var body: some View {
+        Button {
+            Task {
+                await stt.toggleRecording(installation: controller.museInstallation) { transcribed in
+                    appendTranscription(transcribed)
+                }
+                if stt.lastError != nil {
+                    isShowingErrorPopover = true
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if stt.isTranscribing {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 16, height: 16)
+                } else if stt.isRecording {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(String(format: "%d:%02d", Int(stt.recordingDuration) / 60, Int(stt.recordingDuration) % 60))
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.red)
+                } else {
+                    HugeIcon(name: "mic-01")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(minWidth: 26, minHeight: 26)
+            .padding(.horizontal, stt.isRecording ? 6 : 0)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(stt.isRecording ? Color.red.opacity(0.14) : Color.primary.opacity(0.06))
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(stt.isRecording ? "Stop recording & transcribe via `muse voice transcribe`" : "Voice input via Muse built-in STT (`muse voice transcribe`)")
+        .contextMenu {
+            Button("Transcribe Audio Clip (.wav / .m4a)…") {
+                pickAndTranscribeAudioFile()
+            }
+        }
+        .popover(isPresented: $isShowingErrorPopover, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Muse Voice STT", huge: "mic-01")
+                    .font(.callout.weight(.semibold))
+                Text(stt.lastError ?? "Could not transcribe audio.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Transcribe Audio File (.wav / .m4a)…") {
+                    isShowingErrorPopover = false
+                    pickAndTranscribeAudioFile()
+                }
+                .buttonStyle(.settingsPill)
+            }
+            .padding(12)
+            .frame(width: 260)
+        }
+    }
+
+    private func appendTranscription(_ transcribed: String) {
+        let trimmed = transcribed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if text.isEmpty {
+            text = trimmed
+        } else if text.hasSuffix(" ") || text.hasSuffix("\n") {
+            text += trimmed
+        } else {
+            text += " " + trimmed
+        }
+    }
+
+    private func pickAndTranscribeAudioFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a .wav or .m4a audio clip to transcribe with `muse voice transcribe`"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            if let result = await stt.transcribeFile(at: url, installation: controller.museInstallation) {
+                appendTranscription(result)
+            } else if stt.lastError != nil {
+                isShowingErrorPopover = true
+            }
+        }
     }
 }

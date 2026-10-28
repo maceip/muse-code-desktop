@@ -2,122 +2,62 @@
 //  SessionTitleService.swift
 //  PiCode
 //
-//  Names a new chat from its first message.
-//
-//  Pi's RPC protocol has no "summarize this" command, so the name comes from the
-//  same binary the session does: a one-shot `pi --print` run in text mode with
-//  sessions, tools, extensions and prompt context turned off. Pi stays the only
-//  model caller — PiCode asks once and trims the answer. When Pi cannot answer
-//  (no credentials, no network, a refusal), `fallback` names the chat from the
-//  message's own words, so a chat always has a name.
+//  Generates a short session title from the user's opening prompt.
 //
 
 import Foundation
 
 enum SessionTitleService {
-    /// The instruction that turns the first message into a title. Deliberately
-    /// terse: the model sees one message and one rule, and the answer is trimmed
-    /// again below, because a completion is prose until it is made a title.
-    private static let instruction = """
-    Write a 3-6 word title for the conversation that begins with the user message
-    below. Reply with the title only: no quotes, no punctuation at the end, and no
-    explanation.
+    static let maxTitleLength = 60
+    static let maxFallbackWords = 6
+    static let maxFallbackLength = 48
 
-    User message:
-    """
-
-    /// Runs one non-interactive `pi` process and returns the title it printed, or
-    /// `nil` when the answer cannot be used.
-    ///
-    /// A non-zero exit is a failure, not a title: a missing credential or a
-    /// refused request exits non-zero and may still print something on stderr.
-    /// Only stdout is read, and only on a clean exit, so an error message never
-    /// becomes a session name.
-    static func generate(for prompt: String,
-                         installation: PiInstallation,
-                         harness: HarnessDescriptor,
-                         directory: String,
-                         model: String?) async -> String? {
-        let message = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty else { return nil }
-
-        var arguments: [String]
-        switch harness.id {
-        case .pi:
-            arguments = [
-                "--print", "--mode", "text", "--no-session", "--no-tools",
-                "--no-extensions", "--no-skills", "--no-prompt-templates",
-                "--no-context-files", "--no-approve"
-            ]
-        case .ohMyPi:
-            arguments = [
-                "--print", "--mode", "text", "--no-session", "--no-tools",
-                "--no-extensions", "--no-skills", "--no-title"
-            ]
-        default:
-            return nil
-        }
-        if let model, !model.isEmpty {
-            arguments.append(contentsOf: ["--model", model])
-        }
-        // The message is clipped because a prompt can be a pasted document; the
-        // title only needs its opening.
-        arguments.append(instruction + "\n" + String(message.prefix(4000)))
-
-        let result = await PiDiscoveryService().run(
-            executable: installation.executableURL,
-            arguments: arguments,
-            directory: URL(fileURLWithPath: directory),
-            environment: PiDiscoveryService.launchEnvironment(
-                executable: installation.executableURL,
-                shellPath: installation.shellPath
-            )
-        )
-        guard result.exitCode == 0 else { return nil }
-        return sanitize(result.stdout)
+    static func generate(
+        for prompt: String,
+        installation: PiInstallation,
+        harness: HarnessDescriptor = HarnessDescriptor.descriptor(for: .museCode),
+        directory: String,
+        model: String?
+    ) async -> String? {
+        fallback(for: prompt)
     }
 
-    /// Reduces a completion to a title: the first non-empty line, no wrapping
-    /// quotes, no trailing punctuation, and never more than a title's length.
-    static func sanitize(_ text: String) -> String? {
-        let line = text
+    static func sanitize(_ raw: String) -> String? {
+        let lines = raw
             .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .first { !$0.isEmpty }
-        guard var title = line else { return nil }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard var line = lines.first else { return nil }
 
-        title = title.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`“”‘’ "))
-        while let last = title.last, ".,;:!?".contains(last) { title.removeLast() }
-        title = title.trimmingCharacters(in: .whitespaces)
-        guard !title.isEmpty else { return nil }
-
-        if title.count > 60 {
-            title = String(title.prefix(60)).trimmingCharacters(in: .whitespaces)
+        let quoteChars = CharacterSet(charactersIn: "\"'“”‘’`")
+        line = line.trimmingCharacters(in: quoteChars.union(.whitespacesAndNewlines))
+        while let last = line.last, ".!?:;,".contains(last) {
+            line.removeLast()
         }
-        return title.isEmpty ? nil : title
+        line = line.trimmingCharacters(in: quoteChars.union(.whitespacesAndNewlines))
+        guard !line.isEmpty else { return nil }
+
+        if line.count > maxTitleLength {
+            line = String(line.prefix(maxTitleLength)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return line.isEmpty ? nil : line
     }
 
-    /// The name used when Pi cannot answer: the opening words of the message,
-    /// clipped to a title's length. It is not clever, but it is stable, offline,
-    /// and recognisably the chat's own.
     static func fallback(for prompt: String) -> String? {
-        let message = prompt
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\n", with: " ")
-        // A leading slash command is not a task on its own, but its word is part
-        // of the task: `/review src` is a review of `src`, not a chat about
-        // `src`, so only the slash goes and the command word stays.
-        let withoutCommand = message.hasPrefix("/")
-            ? String(message.dropFirst())
-            : message
-        let source = withoutCommand.trimmingCharacters(in: .whitespaces).isEmpty
-            ? message
-            : withoutCommand
-        let words = source
-            .split(whereSeparator: \.isWhitespace)
-            .prefix(6)
-            .joined(separator: " ")
-        let clipped = String(words.prefix(48)).trimmingCharacters(in: .whitespaces)
-        return clipped.isEmpty ? nil : clipped
+        var text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        if text.hasPrefix("/") {
+            text.removeFirst()
+        }
+        let words = text
+            .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .prefix(maxFallbackWords)
+            .map(String.init)
+        guard !words.isEmpty else { return nil }
+        var combined = words.joined(separator: " ")
+        if combined.count > maxFallbackLength {
+            combined = String(combined.prefix(maxFallbackLength)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return combined.isEmpty ? nil : combined
     }
 }

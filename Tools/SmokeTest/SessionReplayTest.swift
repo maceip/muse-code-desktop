@@ -101,22 +101,23 @@ enum SessionReplayTest {
         for session in sessions {
             guard let path = session.filePath else { continue }
 
+            let fileURL = URL(fileURLWithPath: path)
             let content = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
             var decoder = LineAccumulator()
-            var records: [JSONValue] = []
+            var rawRecordsCount = 0
             for line in decoder.append(content.data(using: .utf8) ?? Data()) {
                 totalLines += 1
-                if let value = try? JSONCoding.decode(Data(line.utf8)) {
-                    records.append(value)
+                if (try? JSONCoding.decode(Data(line.utf8))) != nil {
+                    rawRecordsCount += 1
                 } else {
                     undecodableLines += 1
                 }
             }
-            guard !records.isEmpty else { continue }
+            guard rawRecordsCount > 0 else { continue }
 
-            // A session file's last entry is the leaf of the active branch.
-            let entries = records.map(PiSessionEntry.init(json:))
-            let leafId = entries.last?.id
+            let summary = MuseSessionHistory.loadSummary(at: fileURL)
+            let entries = summary.parsedEntries
+            let leafId = summary.leafID ?? entries.last?.id
             for entry in entries {
                 entryTypes[entry.type, default: 0] += 1
                 if !["message", "compaction", "branch", "label", "session", "model_change",

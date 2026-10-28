@@ -56,7 +56,7 @@ check_source "$PREFERENCES" 'case commandReturn' "SendKey still has a Command-Re
 check_absent "$PREFERENCES" 'case shiftReturn' "SendKey has no third mode the harness would miss"
 
 check_source "$COMPOSER" 'ComposerAccessControl(controller: controller)' "access/trust sits in the control row"
-check_source "$COMPOSER" 'iconButton("plus"' "attach sits in the control row"
+check_source "$COMPOSER" 'iconButton("add-01"' "attach sits in the control row"
 check_source "$COMPOSER" 'in: RoundedRectangle(cornerRadius: ComposerMetrics.cornerRadius' \
     "the box is the only filled shape, at ComposerMetrics.cornerRadius"
 check_source "$COMPOSER" 'onFollowUp: { send(delivery: .followUp) }' "Option-Return can queue a follow-up"
@@ -69,7 +69,9 @@ check_absent "$SESSION" '.background(.bar)' "there is no container background be
 # transcript rather than push it up. Both are structure: they compile either way.
 check_absent "$SESSION" 'ExtensionStatusBar' "no status line under the composer"
 check_source "$SESSION" 'placement: .belowEditor' "a widget Pi placed below the editor is still shown (above the box, since nothing is below it)"
-check_source "$SESSION" '.overlay(alignment: .bottom) { floatingComposer }' "the composer is an overlay on the transcript"
+check_source "$SESSION" '.overlay { composerLayer }' "the composer is an overlay on the transcript"
+check_source "$COMPOSER" 'MuseCreditBatteryButton(controller: controller)' "credit tracker battery sits in the control row"
+check_source "$COMPOSER" 'MuseVoiceSTTButton(controller: controller, text: $text)' "Muse built-in STT mic button sits in the control row"
 check_source "$SESSION" 'bottomInset: composerHeight' "the transcript is told how tall the overlay is"
 check_source "$CONVERSATION" 'bottomInset: CGFloat = 0' "the transcript takes a bottom inset"
 check_source "$CONVERSATION" '.frame(height: 8 + bottomInset)' "the inset is room inside the bottom anchor, so scrolling to it keeps the room"
@@ -104,7 +106,7 @@ python3 - "$COMPOSER" <<'PY'
 import re, sys
 source = open(sys.argv[1]).read()
 row = source[source.index('private var controlRow'):source.index('private func iconButton')]
-order = ['iconButton("plus"', 'ComposerAccessControl(controller: controller)', 'modelThinkingMenu', 'primaryActionButton']
+order = ['iconButton("add-01"', 'ComposerAccessControl(controller: controller)', 'modelThinkingMenu', 'primaryActionButton']
 positions = [row.find(token) for token in order]
 if all(p >= 0 for p in positions) and positions == sorted(positions):
     print("  ok   the row reads attach · access · model+reasoning · send")

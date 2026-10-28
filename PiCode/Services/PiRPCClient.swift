@@ -90,11 +90,8 @@ final class PiRPCClient: AgentRuntime, @unchecked Sendable {
         return try await sendAwaitingResponse(command.json(id: id), timeout: timeout)
     }
 
-    /// OMP protocol v2 splits responses larger than 1 MiB into ordered chunks.
-    /// Pi has no negotiation command, so it stays on its existing JSONL protocol.
     private func negotiateProtocolIfNeeded() async throws {
-        guard descriptor.id == .ohMyPi else { return }
-        try await protocolNegotiationTask().value
+        // No protocol negotiation needed.
     }
 
     private func protocolNegotiationTask() -> Task<Void, Error> {

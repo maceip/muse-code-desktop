@@ -242,7 +242,7 @@ struct RootView: View {
                 .padding(.leading, WindowChromeMetrics.sidebarToggleLeading)
                 .padding(.top, buttonTop)
 
-                if state.phase == .ready, !state.isPackagesVisible, let controller = state.activeController {
+                if state.phase == .ready, let controller = state.activeController {
                     titlebarTitle(controller)
                         .padding(.leading, titleLeading)
                         .padding(.trailing, titleTrailingReserve)
@@ -305,7 +305,7 @@ struct RootView: View {
     /// card's trailing edge.
     @ViewBuilder
     private var titlebarTrailingControls: some View {
-        if state.phase == .ready, state.activeController != nil, !state.isPackagesVisible, !state.isSettingsPresented {
+        if state.phase == .ready, state.activeController != nil, !state.isSettingsPresented {
             HStack(spacing: 6) {
                 SessionHeaderMenu(
                     isPinned: fallbackDeletionCandidate?.isPinned ?? false,
@@ -336,42 +336,34 @@ struct RootView: View {
     /// share the card's height, so opening the panel never resizes or shifts the
     /// sidebar or the transcript.
     private var detailPane: some View {
-        Group {
-            // The package browser owns the whole detail pane: the inspector is
-            // about a session's facts, and there is no session on screen.
-            if state.phase == .ready && state.isPackagesVisible {
-                PackagesView(state: state)
-            } else {
+        HStack(spacing: 0) {
+            detail
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(0)
+
+            if state.isInspectorVisible {
                 HStack(spacing: 0) {
-                    detail
-                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                        .layoutPriority(0)
-
-                    if state.isInspectorVisible {
-                        HStack(spacing: 0) {
-                            paneDivider { translation in
-                                if inspectorWidthAtDragStart == nil {
-                                    inspectorWidthAtDragStart = inspectorWidth
-                                }
-                                let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
-                                inspectorWidth = min(560, max(280, startingWidth - translation))
-                            } onEnded: {
-                                inspectorWidthAtDragStart = nil
-                            }
-
-                            InspectorView(state: state)
-                                .frame(width: inspectorWidth)
-                                .frame(maxHeight: .infinity)
+                    paneDivider { translation in
+                        if inspectorWidthAtDragStart == nil {
+                            inspectorWidthAtDragStart = inspectorWidth
                         }
-                        .layoutPriority(1)
-                        .transition(.move(edge: .trailing))
+                        let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
+                        inspectorWidth = min(560, max(280, startingWidth - translation))
+                    } onEnded: {
+                        inspectorWidthAtDragStart = nil
                     }
+
+                    InspectorView(state: state)
+                        .frame(width: inspectorWidth)
+                        .frame(maxHeight: .infinity)
                 }
-                .clipped()
-                .background(AppTheme.background)
-                .animation(.easeInOut(duration: 0.22), value: state.isInspectorVisible)
+                .layoutPriority(1)
+                .transition(.move(edge: .trailing))
             }
         }
+        .clipped()
+        .background(AppTheme.background)
+        .animation(.easeInOut(duration: 0.22), value: state.isInspectorVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -537,12 +529,6 @@ struct RootView: View {
         case .openSettings:
             state.openSettings(tab: state.settingsTab)
 
-        case .providersSettings:
-            state.openSettings(tab: .providers)
-
-        case .packages:
-            state.showPackages()
-
         case .showPiSetup:
             state.isOnboardingPresented = true
 
@@ -550,7 +536,7 @@ struct RootView: View {
             Task {
                 await state.launch()
                 if let installation = state.installation {
-                    state.showToast("Pi \(installation.version) at \(installation.displayPath)")
+                    state.showToast("Muse \(installation.version) at \(installation.displayPath)")
                 }
             }
         }

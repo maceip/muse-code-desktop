@@ -99,25 +99,7 @@ final class HarnessUpdateChecker {
     static func updateMethod(for descriptor: HarnessDescriptor,
                              installation: HarnessInstallation?,
                              tag: String?) -> HarnessInstallMethod? {
-        let real = installation.map { $0.executableURL.resolvingSymlinksInPath().path } ?? ""
-        let linked = installation?.executableURL.path ?? ""
-        // Claude Code's native installer keeps versions outside node_modules.
-        if descriptor.id == .claudeCode, !real.contains("/node_modules/"),
-           let exe = installation?.executableURL.path {
-            let quoted = "'" + exe.replacingOccurrences(of: "'", with: "'\\''") + "'"
-            return HarnessInstallMethod(kind: .script, label: "claude update", command: "claude update",
-                                        shellScript: "\(quoted) update")
-        }
-        guard let npm = descriptor.installMethods.first(where: { $0.kind == .npm }),
-              let package = npmPackage(of: descriptor) else {
-            return descriptor.installMethods.first
-        }
-        let target = tag.map { "\(package)@\($0)" } ?? "\(package)@latest"
-        if real.contains("/.bun/") || linked.contains("/.bun/") {
-            return HarnessInstallMethod(kind: .bun, label: "bun", command: "bun install -g \(target)")
-        }
-        let flags = npm.command.contains("--ignore-scripts") ? " --ignore-scripts" : ""
-        return HarnessInstallMethod(kind: .npm, label: "npm", command: "npm install -g\(flags) \(target)")
+        descriptor.installMethods.first
     }
 
     nonisolated static func npmPackage(of descriptor: HarnessDescriptor) -> String? {

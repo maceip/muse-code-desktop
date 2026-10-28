@@ -2,63 +2,22 @@
 //  HarnessProviderCatalog.swift
 //  PiCode
 //
-//  Translates the neutral provider registry into the subset each harness can
-//  actually speak and into PiCode's canonical model-list payload.
+//  Provider catalog helpers for the Muse runtime.
 //
 
 import Foundation
 
 enum HarnessProviderCatalog {
     static func providers(for harness: HarnessID) -> [ProviderConfiguration] {
-        ProviderModelCapabilities.normalized(ProviderRegistry.providers()).filter { provider in
-            switch harness {
-            case .pi, .ohMyPi:
-                return true
-            case .deepseekHarness:
-                guard let api = provider.api else { return false }
-                return ["openai-completions", "openai-responses", "anthropic-messages"]
-                    .contains(api)
-            case .claudeCode:
-                return provider.api == "anthropic-messages"
-            case .codex:
-                return provider.api == "openai-responses"
-            case .opencode, .museCode:
-                return false
-            }
-        }
+        []
     }
 
     static func models(for harness: HarnessID) -> [JSONValue] {
-        providers(for: harness).flatMap { provider in
-            provider.models.map { model in
-                var object: [String: JSONValue] = [
-                    "id": .string(model.id),
-                    "name": .string(model.displayName),
-                    "provider": .string(provider.id),
-                    "reasoning": .bool(model.reasoning),
-                    "input": .array(model.acceptsImages
-                        ? [.string("text"), .string("image")]
-                        : [.string("text")])
-                ]
-                if let api = provider.api { object["api"] = .string(api) }
-                if let baseURL = provider.baseURL { object["baseUrl"] = .string(baseURL) }
-                if let contextWindow = model.contextWindow {
-                    object["contextWindow"] = .number(Double(contextWindow))
-                }
-                if let maxTokens = model.maxTokens { object["maxTokens"] = .number(Double(maxTokens)) }
-                if model.reasoning {
-                    object["thinking"] = ProviderModelCapabilities.standardThinking
-                }
-                return .object(object)
-            }
-        }
+        []
     }
 
     static func provider(for modelSelection: String?, harness: HarnessID) -> ProviderConfiguration? {
-        guard let modelSelection,
-              let separator = modelSelection.firstIndex(of: "/") else { return nil }
-        let providerID = String(modelSelection[..<separator])
-        return providers(for: harness).first { $0.id == providerID }
+        nil
     }
 
     static func providerID(for modelSelection: String?, fallback: String) -> String {
@@ -68,17 +27,7 @@ enum HarnessProviderCatalog {
     }
 
     static func supports(providerID: String, on harness: HarnessID) -> Bool {
-        let nativeProvider: String?
-        switch harness {
-        case .deepseekHarness: nativeProvider = "deepseek-official"
-        case .claudeCode: nativeProvider = "anthropic"
-        case .codex: nativeProvider = "openai"
-        case .pi, .ohMyPi: return true
-        case .opencode, .museCode: nativeProvider = nil
-        }
-        if harness == .opencode || harness == .museCode { return true }
-        if providerID == nativeProvider { return true }
-        return providers(for: harness).contains { $0.id == providerID }
+        true
     }
 
     static func apiKey(_ provider: ProviderConfiguration) -> String? {

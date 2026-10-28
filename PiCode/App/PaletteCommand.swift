@@ -39,8 +39,6 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
     case revealPiDirectory
 
     case openSettings
-    case providersSettings
-    case packages
     case showPiSetup
     case checkForPiUpdates
 
@@ -71,12 +69,10 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
         case .openInTerminal: return "Open Project in Terminal"
         case .openInVSCode: return "Open Project in VS Code"
         case .revealInFinder: return "Reveal Project in Finder"
-        case .revealPiDirectory: return "Reveal Pi's Config Folder"
+        case .revealPiDirectory: return "Reveal Muse's Config Folder"
         case .openSettings: return "Settings…"
-        case .providersSettings: return "Providers and Credentials…"
-        case .packages: return "Packages"
-        case .showPiSetup: return "Pi Setup Help"
-        case .checkForPiUpdates: return "Check Pi Version"
+        case .showPiSetup: return "Muse Setup Help"
+        case .checkForPiUpdates: return "Check Muse Version"
         }
     }
 
@@ -106,8 +102,6 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
         case .revealInFinder: return "folder"
         case .revealPiDirectory: return "setting-3"
         case .openSettings: return "settings-02"
-        case .providersSettings: return "key-01"
-        case .packages: return "package"
         case .showPiSetup: return "message-question"
         case .checkForPiUpdates: return "refresh-circle"
         }
@@ -117,7 +111,7 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
     var requiresSession: Bool {
         switch self {
         case .newSession, .addProject, .refreshSessions, .toggleInspector, .toggleSidebar,
-             .toggleTerminal, .openSettings, .providersSettings, .packages, .showPiSetup,
+             .toggleTerminal, .openSettings, .showPiSetup,
              .checkForPiUpdates, .revealPiDirectory:
             return false
         default:
@@ -125,7 +119,7 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// Actions that require Pi to be idle.
+    /// Actions that require Muse to be idle.
     var requiresIdleAgent: Bool {
         switch self {
         case .compactContext, .compactWithInstructions, .deleteSession, .renameSession,
@@ -163,12 +157,12 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
             return .session
         case .focusComposer, .interrupt, .abortRun, .cycleModel, .cycleThinkingLevel:
             return .run
-        case .toggleInspector, .toggleSidebar, .toggleTerminal, .packages:
+        case .toggleInspector, .toggleSidebar, .toggleTerminal:
             return .view
         case .copyTranscript, .copyLastResponse, .openInTerminal, .openInVSCode, .revealInFinder,
              .revealPiDirectory:
             return .share
-        case .openSettings, .providersSettings, .showPiSetup, .checkForPiUpdates:
+        case .openSettings, .showPiSetup, .checkForPiUpdates:
             return .app
         }
     }

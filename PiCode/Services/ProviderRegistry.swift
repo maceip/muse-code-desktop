@@ -2,8 +2,8 @@
 //  ProviderRegistry.swift
 //  PiCode
 //
-//  PiCode-owned source of truth for third-party provider definitions. Harness
-//  exporters translate this neutral catalog into each runtime's native file.
+//  Stub provider registry for the Muse-only build (Muse manages its own model
+//  catalog in ~/.local/share/muse/model-catalog).
 //
 
 import Foundation
@@ -17,33 +17,16 @@ enum ProviderRegistry {
             .appendingPathComponent("providers.json")
     }
 
-    /// Imports the old Pi-owned catalog once, then uses PiCode's registry.
     static func providers() -> [ProviderConfiguration] {
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            return ProviderConfigurationStore.load(from: fileURL)
-        }
-        let migrated = PiProviderService.customProviders()
-        if !migrated.isEmpty { try? save(migrated) }
-        return migrated
+        []
     }
 
     static func save(_ providers: [ProviderConfiguration]) throws {
-        try ProviderConfigurationStore.save(providers, to: fileURL)
+        // Muse manages its own model catalog.
     }
 
-    /// Applies the complete neutral catalog. Removing a provider therefore also
-    /// removes the PiCode-managed copy from every installed supported harness.
     static func synchronize(_ providers: [ProviderConfiguration],
                             with harnesses: Set<HarnessID>) throws {
-        let providers = ProviderModelCapabilities.normalized(providers)
-        if harnesses.contains(.pi) {
-            try PiProviderService.saveCustomProviders(providers)
-        }
-        if harnesses.contains(.ohMyPi) {
-            try OMPProviderService.saveCustomProviders(providers)
-        }
-        if harnesses.contains(.deepseekHarness) {
-            try DSHProviderService.saveCustomProviders(providers)
-        }
+        // Muse manages its own model catalog.
     }
 }

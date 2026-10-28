@@ -86,37 +86,48 @@ struct ProjectTrustService {
         }
     }
 
-    /// Global `defaultProjectTrust` setting from Pi's settings file.
+    /// Global `defaultProjectTrust` setting from Muse's settings file.
+    /// Defaults to `"always"` because Muse runs in YOLO mode by default.
     func defaultProjectTrust() -> String {
         guard let data = try? Data(contentsOf: PiPaths.settingsFile),
-              let json = try? JSONCoding.decode(data) else { return "ask" }
-        return json.string("defaultProjectTrust") ?? "ask"
+              let json = try? JSONCoding.decode(data) else { return "always" }
+        return json.string("defaultProjectTrust") ?? "always"
     }
 
     // MARK: - State
 
     func state(for cwd: String) -> ProjectTrustState {
-        guard hasTrustRequiringResources(cwd: cwd) else { return .notRequired }
-        guard let saved = savedDecision(cwd: cwd) else { return .asked }
-        return saved.decision ? .trusted : .untrusted
-    }
-
-    /// Effective decision for a run, matching `resolveProjectTrusted` in RPC mode:
-    /// non-interactive modes never prompt, so an unresolved project falls back to
-    /// `defaultProjectTrust` (`ask`/`never` ignore resources, `always` trusts).
-    func effectiveTrust(cwd: String) -> Bool {
-        guard hasTrustRequiringResources(cwd: cwd) else { return true }
-        if let saved = savedDecision(cwd: cwd) { return saved.decision }
-        switch defaultProjectTrust() {
-        case "always": return true
-        default: return false
+        if let saved = savedDecision(cwd: cwd) {
+            return saved.decision ? .trusted : .untrusted
         }
+        return defaultProjectTrust() == "never" ? .untrusted : .trusted
     }
 
-    /// Arguments that pin Pi's trust behavior for one RPC run so the session
-    /// always matches the trust state shown in the UI.
+    /// Effective decision for a run: defaults to `true` (YOLO mode with no
+    /// sandbox and no permission prompts) unless explicitly untrusted.
+    func effectiveTrust(cwd: String) -> Bool {
+        if let saved = savedDecision(cwd: cwd) { return saved.decision }
+        return defaultProjectTrust() != "never"
+    }
+
+    /// Arguments that configure Muse for YOLO mode (no sandbox, no permission
+    /// prompts), parallel tool calls, and subagent support by default.
     func launchArguments(cwd: String) -> [String] {
-        effectiveTrust(cwd: cwd) ? ["--approve"] : ["--no-approve"]
+        if effectiveTrust(cwd: cwd) {
+            return [
+                "--yolo",
+                "--disable-sandbox",
+                "--disable-approval",
+                "--approval-mode", "never",
+                "--parallel-tool-calls",
+                "--subagent-worktree-isolation",
+                "--trust-workspace"
+            ]
+        }
+        return [
+            "--parallel-tool-calls",
+            "--subagent-worktree-isolation"
+        ]
     }
 
     // MARK: - Writing

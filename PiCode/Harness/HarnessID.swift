@@ -2,57 +2,48 @@
 //  HarnessID.swift
 //  PiCode
 //
-//  Stable identifier for a coding-agent harness.
-//
-//  A *harness* is the runtime PiCode embeds: the agent loop, tools, providers,
-//  and session store. PiCode talks to each harness over a documented headless
-//  protocol and keeps harness-specific wire shapes inside that harness adapter.
+//  Stable identifier for the Muse Code CLI runtime.
 //
 
 import Foundation
 
-enum HarnessID: String, Codable, CaseIterable, Identifiable, Sendable {
-    case pi
-    case ohMyPi = "oh-my-pi"
-    case deepseekHarness = "deepseek-harness"
-    case claudeCode = "claude-code"
-    case codex
-    case opencode
+enum HarnessID: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
     case museCode = "muse-code"
+
+    /// Compatibility alias so legacy call sites resolve to Muse Code.
+    static let pi: HarnessID = .museCode
 
     var id: String { rawValue }
 
+    init?(rawValue: String) {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return nil }
+        self = .museCode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        _ = try? container.decode(String.self)
+        self = .museCode
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(Self.museCode.rawValue)
+    }
+
+    /// Short human-facing product name.
     var displayName: String {
-        switch self {
-        case .pi: return "Pi"
-        case .ohMyPi: return "Oh My Pi"
-        case .deepseekHarness: return "DeepSeek Harness"
-        case .claudeCode: return "Claude Code"
-        case .codex: return "Codex"
-        case .opencode: return "OpenCode"
-        case .museCode: return "Muse Code"
-        }
+        "Muse"
     }
 
-    /// The command users type in a terminal, shown in setup text.
-    var commandName: String {
-        switch self {
-        case .pi: return "pi"
-        case .ohMyPi: return "omp"
-        case .deepseekHarness: return "dsh"
-        case .claudeCode: return "claude"
-        case .codex: return "codex"
-        case .opencode: return "opencode"
-        case .museCode: return "muse"
-        }
+    /// CLI command name users type in a terminal.
+    var cliName: String {
+        "muse"
     }
 
-    /// Whether the harness can be embedded over a structured stdio protocol
-    /// today. Harnesses without an adapter are shown in Settings but cannot be
-    /// selected for a session yet.
+    /// Whether a session runtime adapter is wired up for this harness.
     var hasAdapter: Bool {
-        switch self {
-        case .pi, .ohMyPi, .deepseekHarness, .claudeCode, .codex, .opencode, .museCode: return true
-        }
+        true
     }
 }

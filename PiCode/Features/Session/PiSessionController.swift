@@ -225,6 +225,43 @@ final class PiSessionController {
     private(set) var toolCallCount = 0
     private(set) var subagentCount = 0
 
+    // MARK: - Muse Overview & Agent Messages
+
+    private(set) var subagents: [MuseSubagentInfo] = []
+    private(set) var backgroundTasks: [MuseBackgroundTaskInfo] = []
+    private(set) var sessionArtifacts: [MuseArtifactInfo] = []
+    private(set) var agentMessages: [MuseAgentMessageInfo] = []
+
+    var runningSubagentCount: Int {
+        subagents.filter { $0.status == .running || $0.status == .waiting }.count
+    }
+
+    var museInstallation: PiInstallation { installation }
+
+    func sendAgentMessage(target: String, body: String) async -> (success: Bool, detail: String) {
+        let trimmedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTarget.isEmpty, !trimmedBody.isEmpty else {
+            return (false, "Target and message body are required.")
+        }
+        let result = await MuseSessionMessageService.sendMessage(
+            target: trimmedTarget,
+            body: trimmedBody,
+            installation: installation
+        )
+        agentMessages.append(MuseAgentMessageInfo(
+            id: UUID().uuidString,
+            direction: .outgoing,
+            sender: sessionName ?? "this session",
+            target: trimmedTarget,
+            workspaceLabel: projectName,
+            body: trimmedBody,
+            timestamp: Date(),
+            deliveryPolicy: result.success ? "delivered" : "queued"
+        ))
+        return result
+    }
+
     // MARK: - Init
 
     init(projectPath: String,
@@ -254,9 +291,7 @@ final class PiSessionController {
     }
 
     private static func sessionID(fromFile path: String) -> String? {
-        let name = (path as NSString).lastPathComponent
-        guard name.contains("_") else { return nil }
-        return name.split(separator: "_").last.map { String($0).replacingOccurrences(of: ".jsonl", with: "") }
+        MuseRuntime.extractSessionUUID(from: path)
     }
 
     var projectName: String { URL(fileURLWithPath: projectPath).lastPathComponent }
@@ -377,9 +412,9 @@ final class PiSessionController {
                 trustState = trustService.state(for: projectPath)
                 record(kind: .sessionChange,
                        title: decision ? "Project trusted" : "Project not trusted",
-                       detail: "Saved to Pi's trust store")
+                       detail: "Saved to Muse's trust store")
             } catch {
-                lastError = "Could not update Pi's trust store: \(error.localizedDescription)"
+                lastError = "Could not update Muse's trust store: \(error.localizedDescription)"
                 record(kind: .error, title: "Trust store not updated",
                        detail: error.localizedDescription, isError: true)
             }
@@ -398,7 +433,7 @@ final class PiSessionController {
             trustOverride = nil
             record(kind: .sessionChange, title: "Parent folder trusted")
         } catch {
-            lastError = "Could not update Pi's trust store: \(error.localizedDescription)"
+            lastError = "Could not update Muse's trust store: \(error.localizedDescription)"
             return
         }
         Task { await self.restart() }
@@ -1001,9 +1036,100 @@ final class PiSessionController {
             await self.refreshStats()
             await self.refreshForkPoints()
             await self.refreshEntries()
+            await self.refreshMuseTelemetry()
+            await MuseUsageService.shared.refresh(installation: self.installation)
         }
         refreshTask = task
         await task.value
+    }
+
+    func refreshMuseTelemetry() async {
+        guard let path = sessionFile else {
+            rebuildLiveMuseTelemetry()
+            return
+        }
+        let summary = await sessionHistoryReader.summary(at: path)
+        subagents = summary.subagents
+        backgroundTasks = summary.backgroundTasks
+        sessionArtifacts = summary.artifacts
+        agentMessages = summary.agentMessages
+        subagentCount = subagents.count
+        rebuildLiveMuseTelemetry()
+    }
+
+    private func rebuildLiveMuseTelemetry() {
+        // Merge any live tool calls from `allBaseItems` that haven't been flushed to
+        // `session.jsonl` yet so the Overview panel updates in real time.
+        var existingTaskIds = Set(backgroundTasks.compactMap(\.toolCallId) + backgroundTasks.map(\.id))
+        var existingArtifacts = Set(sessionArtifacts.map(\.id))
+        var existingSubagents = Set(subagents.compactMap(\.commandId) + subagents.map(\.id))
+
+        for item in allBaseItems where item.kind == .toolCall {
+            let callId = item.toolCallId ?? item.id
+            let toolName = item.toolName ?? ""
+            let args = item.toolArguments
+
+            if ["bash", "monitor", "cron_create", "work_list", "work_status", "workflow"].contains(toolName),
+               existingTaskIds.insert(callId).inserted {
+                let title = args?.string("description")
+                    ?? item.commandText
+                    ?? args?.string("command")
+                    ?? toolName
+                let status: MuseBackgroundTaskInfo.Status = {
+                    switch item.toolStatus {
+                    case .pending, .running: return .running
+                    case .success: return .completed
+                    case .failure, .cancelled: return .failed
+                    }
+                }()
+                backgroundTasks.append(MuseBackgroundTaskInfo(
+                    id: callId,
+                    kind: toolName,
+                    title: title.oneLinePreview(limit: 72),
+                    detail: item.commandText,
+                    status: status,
+                    outputPreview: item.toolOutput?.oneLinePreview(limit: 120),
+                    toolCallId: callId,
+                    timestamp: item.timestamp
+                ))
+            }
+
+            if ["write_file", "edit_file"].contains(toolName),
+               let path = item.toolFilePath ?? args?.string("path"),
+               !path.isEmpty,
+               existingArtifacts.insert(path).inserted {
+                let name = (path as NSString).lastPathComponent
+                sessionArtifacts.append(MuseArtifactInfo(
+                    id: path,
+                    kind: toolName == "write_file" ? .file : .edit,
+                    title: name.isEmpty ? path : name,
+                    path: path,
+                    preview: path,
+                    toolCallId: callId,
+                    timestamp: item.timestamp
+                ))
+            }
+
+            if toolName == "subagent_spawn" {
+                let cmdId = args?.string("command_id") ?? callId
+                if existingSubagents.insert(cmdId).inserted {
+                    let obj = args?.string("objective") ?? args?.string("prompt") ?? cmdId
+                    subagents.append(MuseSubagentInfo(
+                        id: cmdId,
+                        childSessionId: nil,
+                        commandId: cmdId,
+                        role: args?.string("role") ?? "subagent",
+                        title: obj.oneLinePreview(limit: 80),
+                        objective: obj,
+                        status: item.toolStatus == .running ? .running : .completed,
+                        summary: item.toolOutput,
+                        sessionFilePath: nil,
+                        updatedAt: item.timestamp
+                    ))
+                }
+            }
+        }
+        subagentCount = subagents.count
     }
 
     func refreshState() async {
@@ -1071,10 +1197,6 @@ final class PiSessionController {
             : catalogModel?.thinkingEfforts ?? []
         if !modelEfforts.isEmpty {
             thinkingLevels = modelEfforts
-            return
-        }
-        if harness.id == .ohMyPi {
-            thinkingLevels = []
             return
         }
 
@@ -1651,6 +1773,7 @@ final class PiSessionController {
         // of `recomposeItems` so the streaming hot path does not re-aggregate the
         // whole session for a value that cannot have moved.
         recentFileChanges = aggregateFileChanges()
+        rebuildLiveMuseTelemetry()
     }
 
     private func rebuildVisibleTranscript() {
@@ -1684,7 +1807,6 @@ final class PiSessionController {
     }
 
     private func beginLocalHistoryLoad() {
-        guard harness.id == .pi || harness.id == .ohMyPi else { return }
         guard let path = sessionFile, localHistoryFile != path else { return }
         localHistoryTask?.cancel()
         localHistoryFile = path
@@ -1692,17 +1814,19 @@ final class PiSessionController {
         localHistoryTask = Task { [weak self] in
             guard let self else { return }
             defer { self.isLoadingTranscriptHistory = false }
-            let values = await self.sessionHistoryReader.entries(at: path)
-            // Decoding a long session's entries (dates included) is tens of
-            // milliseconds; it runs off the main actor so opening a chat does not
-            // freeze the window while it happens.
+            let summary = await self.sessionHistoryReader.summary(at: path)
             let loaded = await Task.detached(priority: .userInitiated) {
-                values.map(PiSessionEntry.init(json:))
+                summary.entries.map(PiSessionEntry.init(json:))
             }.value
             guard !Task.isCancelled, !loaded.isEmpty, self.sessionFile == path else {
                 self.localHistoryFile = nil
                 return
             }
+            self.subagents = summary.subagents
+            self.backgroundTasks = summary.backgroundTasks
+            self.sessionArtifacts = summary.artifacts
+            self.agentMessages = summary.agentMessages
+            self.subagentCount = summary.subagents.count
             self.entries = loaded
             self.leafId = loaded.last?.id
             self.lastEntryId = loaded.last?.id
@@ -1934,6 +2058,11 @@ final class PiSessionController {
         runtime = .idle
         items = []
         recentFileChanges = []
+        subagents = []
+        backgroundTasks = []
+        sessionArtifacts = []
+        agentMessages = []
+        subagentCount = 0
     }
 
     // MARK: - Presentation helpers

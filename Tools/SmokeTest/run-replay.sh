@@ -16,7 +16,7 @@ SDK="$(xcrun --show-sdk-path --sdk macosx)"
 
 mkdir -p "$OUT"
 # shellcheck disable=SC2046
-SOURCES=$(find "$APP/Models" "$APP/Services" "$APP/Shared" -name '*.swift')
+SOURCES=$(find "$APP/Models" "$APP/Services" "$APP/Shared" "$APP/Harness" -name '*.swift')
 
 # `TranscriptRows.swift` is the folding rule, and is Foundation-only on purpose:
 # it compiles here so its checks run against every session on disk.

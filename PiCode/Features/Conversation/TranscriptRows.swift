@@ -44,11 +44,10 @@ enum QuietFamily: String, CaseIterable {
     case command
     case edit
     case read
+    case tool
     case thinking
 
-    /// The family an item belongs to, or `nil` for the rows that stand alone. The
-    /// tool names are the ones Pi actually sends (checked across the real sessions
-    /// on this machine: `bash`, `read`, `edit`, `write`).
+    /// The family an item belongs to, or `nil` for the rows that stand alone.
     static func of(_ item: TranscriptItem) -> QuietFamily? {
         switch item.kind {
         case .thinking:
@@ -61,11 +60,13 @@ enum QuietFamily: String, CaseIterable {
     }
 
     static func of(toolName: String?) -> QuietFamily? {
-        switch (toolName ?? "").lowercased() {
-        case "bash": return .command
-        case "edit", "multiedit", "write", "patch", "apply_patch": return .edit
-        case "read": return .read
-        default: return nil
+        let lower = (toolName ?? "").lowercased()
+        switch lower {
+        case "bash", "monitor": return .command
+        case "edit", "edit_file", "multiedit", "write", "write_file", "patch", "apply_patch": return .edit
+        case "read", "read_file", "read_memory": return .read
+        case "": return nil
+        default: return .tool
         }
     }
 
@@ -74,6 +75,7 @@ enum QuietFamily: String, CaseIterable {
         case .command: return "terminal"
         case .edit: return "edit-02"
         case .read: return "note-01"
+        case .tool: return "wrench-01"
         case .thinking: return "bulb"
         }
     }
@@ -86,43 +88,41 @@ enum QuietFamily: String, CaseIterable {
         case .command: return "Ran command"
         case .edit: return "Edited file"
         case .read: return "Read file"
+        case .tool: return "Ran tool"
         case .thinking: return "Thinking"
         }
     }
 
-    /// The label for one step *inside* an opened run. Singular, because the row is
-    /// one call and not the run; the group line uses `label`/`pluralLabel`, and this
-    /// is what each action under it says. The specific command or path is not the
-    /// label — it is the summary beside it, the way the run's own line pairs a
-    /// family with what it touched.
+    /// The label for one step *inside* an opened run.
     var stepLabel: String {
         switch self {
         case .command: return "Ran command"
         case .edit: return "Edited file"
         case .read: return "Read file"
+        case .tool: return "Ran tool"
         case .thinking: return "Thinking"
         }
     }
 
-    /// …and when the run holds several of the same family. Only a command has a
-    /// singular, and reasoning reads the same however much of it there is.
+    /// …and when the run holds several of the same family.
     var pluralLabel: String {
         switch self {
         case .command: return "Ran commands"
         case .edit: return "Edited files"
         case .read: return "Read files"
+        case .tool: return "Ran tools"
         case .thinking: return "Thinking"
         }
     }
 
     /// The same family inside a list of families, where it is one item among others
-    /// and the first letter is capitalised by position: "run commands". The count
-    /// decides the noun, so a group holding one command says so.
+    /// and the first letter is capitalised by position: "run commands".
     func listed(count: Int) -> String {
         switch self {
         case .command: return count == 1 ? "ran command" : "ran commands"
         case .edit: return count == 1 ? "edited file" : "edited files"
         case .read: return count == 1 ? "read file" : "read files"
+        case .tool: return count == 1 ? "ran tool" : "ran tools"
         case .thinking: return "thinking"
         }
     }
@@ -416,7 +416,11 @@ extension TranscriptItem {
                 return path.oneLinePreview(limit: 120)
             }
         }
-        return toolInputSummary
+        let summary = toolInputSummary
+        if !summary.isEmpty && summary != "{}" {
+            return summary
+        }
+        return toolName ?? ""
     }
 }
 

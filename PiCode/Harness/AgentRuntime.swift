@@ -2,42 +2,52 @@
 //  AgentRuntime.swift
 //  PiCode
 //
-//  The seam between a session controller and a coding-agent harness.
-//
-//  A controller owns exactly one `AgentRuntime`. The runtime owns the child
-//  process (or process group) and speaks the harness's wire protocol. The
-//  controller only ever sends the app's canonical commands and renders the
-//  canonical events, so a new harness is a new adapter rather than a change to
-//  the session UI.
-//
-//  Pi and Oh My Pi implement this directly over their shared RPC transport.
-//  Claude Code, Codex, and DeepSeek Harness translate their own protocols into
-//  the same command/event surface here.
+//  Transport-neutral contract between a session controller and the Muse CLI
+//  runtime.
 //
 
 import Foundation
 
-/// One running harness. Not actor-isolated: adapters serialize their own I/O and
-/// the controller hops to the main actor before touching UI state.
+enum AgentRuntimeError: LocalizedError {
+    case notRunning
+    case unsupported(command: String, harness: String)
+    case processExited(code: Int32, stderr: String)
+    case commandFailed(command: String, message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notRunning:
+            return "The agent process is not running."
+        case .unsupported(let command, let harness):
+            return "\(harness) does not support `\(command)`."
+        case .processExited(let code, let stderr):
+            let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty
+                ? "The agent exited with status \(code)."
+                : "The agent exited with status \(code): \(trimmed.oneLinePreview(limit: 240))"
+        case .commandFailed(let command, let message):
+            return "`\(command)` failed: \(message)"
+        }
+    }
+}
+
+/// A live connection to one coding-agent session.
+///
+/// Implementations may run a long-lived child process or spawn one process per
+/// turn (`muse exec --json`). Either way, the controller talks to this type and
+/// never to `Process` directly.
 protocol AgentRuntime: AnyObject, Sendable {
     var descriptor: HarnessDescriptor { get }
 
-    /// Unsolicited events, delivered on a background queue.
     var onEvent: ((PiEvent, JSONValue) -> Void)? { get set }
-    /// Process exit.
     var onExit: ((Int32, Process.TerminationReason) -> Void)? { get set }
-    /// Diagnostics on stderr. Never protocol data.
     var onStderr: ((String) -> Void)? { get set }
-    /// A framing/decoding problem worth surfacing.
     var onProtocolError: ((String) -> Void)? { get set }
-    /// A response that could not be matched to a request.
     var onResponseWithoutID: ((RPCResponse) -> Void)? { get set }
-    /// Raw payload capture for the diagnostics log. Off by default.
     var onPayloadRecord: ((String) -> Void)? { get set }
     var recordsPayloads: Bool { get set }
 
-    /// Work to finish before `start`, off the main actor — reading a resumed
-    /// chat's saved history, which for a long session is megabytes of JSON.
+    /// Async pre-start hook for adapters that load existing history off the main actor.
     func prepare() async
     func start() throws
     func stop()
@@ -49,139 +59,28 @@ extension AgentRuntime {
     func prepare() async {}
 }
 
-enum AgentRuntimeError: LocalizedError, Equatable {
-    case notRunning
-    case unsupported(command: String, harness: String)
-    case failed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .notRunning:
-            return "The agent process is not running."
-        case .unsupported(let command, let harness):
-            return "\(harness) does not support `\(command)`."
-        case .failed(let message):
-            return message
-        }
-    }
-}
-
-/// Builds the right runtime for a harness.
 enum AgentRuntimeFactory {
-    static func make(descriptor: HarnessDescriptor,
-                     installation: HarnessInstallation,
-                     projectPath: String,
-                     sessionFile: String?,
-                     systemPrompt: String?,
-                     model: String?,
-                     trustArguments: [String],
-                     extraArguments: [String],
-                     environment: [String: String]) -> any AgentRuntime {
-        switch descriptor.id {
-        case .pi, .ohMyPi:
-            let arguments = HarnessLaunch.piFamilyArguments(
-                for: descriptor,
-                sessionFile: sessionFile,
-                systemPrompt: systemPrompt,
-                model: model,
-                trustArguments: trustArguments,
-                extra: extraArguments
-            )
-            let client = PiRPCClient(
-                executableURL: installation.executableURL,
-                workingDirectory: URL(fileURLWithPath: projectPath),
-                arguments: arguments,
-                environment: environment
-            )
-            client.descriptor = descriptor
-            return client
-        case .claudeCode:
-            return ClaudeCodeRuntime(
-                descriptor: descriptor,
-                installation: installation,
-                projectPath: projectPath,
-                sessionFile: sessionFile,
-                systemPrompt: systemPrompt,
-                model: model,
-                extraArguments: extraArguments,
-                environment: environment
-            )
-        case .codex:
-            return CodexRuntime(
-                descriptor: descriptor,
-                installation: installation,
-                projectPath: projectPath,
-                sessionFile: sessionFile,
-                systemPrompt: systemPrompt,
-                model: model,
-                extraArguments: extraArguments,
-                environment: environment
-            )
-        case .deepseekHarness:
-            return DeepSeekRuntime(
-                descriptor: descriptor,
-                installation: installation,
-                projectPath: projectPath,
-                sessionFile: sessionFile,
-                systemPrompt: systemPrompt,
-                model: model,
-                extraArguments: extraArguments,
-                environment: environment
-            )
-        case .museCode:
-            return MuseRuntime(
-                descriptor: descriptor,
-                installation: installation,
-                projectPath: projectPath,
-                sessionFile: sessionFile,
-                systemPrompt: systemPrompt,
-                model: model,
-                extraArguments: extraArguments,
-                environment: environment
-            )
-        case .opencode:
-            return OpenCodeRuntime(
-                descriptor: descriptor,
-                installation: installation,
-                projectPath: projectPath,
-                sessionFile: sessionFile,
-                systemPrompt: systemPrompt,
-                model: model,
-                extraArguments: extraArguments,
-                environment: environment
-            )
-        }
+    static func make(
+        descriptor: HarnessDescriptor,
+        installation: HarnessInstallation,
+        projectPath: String,
+        sessionFile: String?,
+        systemPrompt: String?,
+        model: String?,
+        trustArguments: [String],
+        extraArguments: [String],
+        environment: [String: String]
+    ) -> any AgentRuntime {
+        MuseRuntime(
+            descriptor: descriptor,
+            installation: installation,
+            projectPath: projectPath,
+            sessionFile: sessionFile,
+            systemPrompt: systemPrompt,
+            model: model,
+            trustArguments: trustArguments,
+            extraArguments: extraArguments,
+            environment: environment
+        )
     }
-}
-
-/// Placeholder runtime for harnesses whose adapter is not implemented. It starts
-/// nothing and fails every command with a clear reason instead of pretending.
-final class UnsupportedRuntime: AgentRuntime, @unchecked Sendable {
-    let descriptor: HarnessDescriptor
-    private let installation: HarnessInstallation
-
-    var onEvent: ((PiEvent, JSONValue) -> Void)?
-    var onExit: ((Int32, Process.TerminationReason) -> Void)?
-    var onStderr: ((String) -> Void)?
-    var onProtocolError: ((String) -> Void)?
-    var onResponseWithoutID: ((RPCResponse) -> Void)?
-    var onPayloadRecord: ((String) -> Void)?
-    var recordsPayloads = false
-
-    init(descriptor: HarnessDescriptor, installation: HarnessInstallation) {
-        self.descriptor = descriptor
-        self.installation = installation
-    }
-
-    func start() throws {
-        throw AgentRuntimeError.unsupported(command: "start", harness: descriptor.displayName)
-    }
-
-    func stop() {}
-
-    func send(_ command: RPCCommand, timeout: TimeInterval) async throws -> RPCResponse {
-        throw AgentRuntimeError.unsupported(command: command.name, harness: descriptor.displayName)
-    }
-
-    func sendRaw(_ payload: JSONValue) {}
 }

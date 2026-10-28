@@ -82,8 +82,6 @@ struct SettingsView: View {
             Group {
                 switch state.settingsTab {
                 case .general: GeneralSettings(state: state)
-                case .harnesses: HarnessesSettingsView(state: state)
-                case .providers: ProvidersSettingsView(state: state)
                 case .composer: ComposerSettings(state: state)
                 case .sessions: SessionSettings(state: state)
                 case .pi: PiSettingsTab(state: state)
@@ -106,7 +104,6 @@ struct SettingsView: View {
             Text(state.settingsTab.title)
                 .font(.system(size: 30, weight: .semibold))
             Spacer(minLength: 12)
-            if state.settingsTab == .harnesses { UpdateAllHarnessesButton(state: state) }
         }
         .padding(.horizontal, 40)
         .frame(height: SettingsMetrics.headerHeight)
@@ -133,8 +130,6 @@ struct SettingsView: View {
 /// instead of dropping the user on General.
 enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
     case general
-    case harnesses
-    case providers
     case composer
     case sessions
     case pi
@@ -143,14 +138,13 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
 
     /// The labelled clusters in the settings menu.
     enum Group: String, CaseIterable, Identifiable {
-        case personal, integrations, coding
+        case personal, coding
 
         var id: String { rawValue }
         var title: String {
             switch self {
             case .personal: return "Personal"
-            case .integrations: return "Integrations"
-            case .coding: return "Coding"
+            case .coding: return "Muse"
             }
         }
     }
@@ -158,7 +152,6 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
     var group: Group {
         switch self {
         case .general, .composer: return .personal
-        case .harnesses, .providers: return .integrations
         case .sessions, .pi: return .coding
         }
     }
@@ -166,19 +159,15 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .general: return "General"
-        case .harnesses: return "Harnesses"
-        case .providers: return "Providers"
         case .composer: return "Composer"
         case .sessions: return "Sessions"
-        case .pi: return "Diagnostics"
+        case .pi: return "Muse & Diagnostics"
         }
     }
 
     var systemImage: String {
         switch self {
         case .general: return "settings-02"
-        case .harnesses: return "package"
-        case .providers: return "key-01"
         case .composer: return "edit-02"
         case .sessions: return "message-multiple-01"
         case .pi: return "stethoscope"
@@ -289,23 +278,21 @@ struct ComposerSettings: View {
                             set: { state.preferences.defaultThinkingLevel = $0.isEmpty ? nil : $0; state.preferences.persist() }
                         ),
                         values: ["", "off", "low", "medium", "high"],
-                        label: { $0.isEmpty ? "Pi's default" : $0 }
+                        label: { $0.isEmpty ? "Muse's default" : $0 }
                     )
                 }
                 if let controller = state.activeController, !controller.availableModels.isEmpty {
-                    SettingsRow("\(controller.harness.displayName) model") {
+                    SettingsRow("Muse model") {
                         Dropdown(
                             selection: Binding(
                                 get: { state.preferences.defaultModelByHarness[controller.harness.id.rawValue] ?? "" },
                                 set: {
                                     state.preferences.defaultModelByHarness[controller.harness.id.rawValue] = $0.isEmpty ? nil : $0
-                                    if controller.harness.id == .pi {
-                                        state.preferences.defaultModelQualifiedID = $0.isEmpty ? nil : $0
-                                    }
+                                    state.preferences.defaultModelQualifiedID = $0.isEmpty ? nil : $0
                                     state.preferences.persist()
                                 }
                             ),
-                            options: [.init(label: "\(controller.harness.displayName)'s default", value: "")]
+                            options: [.init(label: "Muse's default", value: "")]
                                 + controller.availableModels.map {
                                     .init(label: "\($0.provider)/\($0.id)", value: $0.qualifiedID)
                                 }
@@ -314,7 +301,7 @@ struct ComposerSettings: View {
                 } else {
                     SettingsRow(
                         "Default model",
-                        detail: "Open a session to choose a default model. The selected harness's own default is used until then."
+                        detail: "Open a session to choose a default model. Muse's own default is used until then."
                     )
                 }
             }
@@ -339,8 +326,8 @@ struct SessionSettings: View {
                     .toggleStyle(.switch)
                 }
                 SettingsRow(
-                    "Record RPC payloads",
-                    detail: "Keeps the last \(PiDiagnosticsLog.shared.limit) RPC payloads in memory for troubleshooting. Nothing is written to disk."
+                    "Record event payloads",
+                    detail: "Keeps the last \(PiDiagnosticsLog.shared.limit) event payloads in memory for troubleshooting. Nothing is written to disk."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { state.preferences.recordRPCPayloads },
@@ -351,7 +338,7 @@ struct SessionSettings: View {
                 }
             }
 
-            SettingsSection("Pi's session storage") {
+            SettingsSection("Muse's session storage") {
                 SettingsRow(
                     "Sessions folder",
                     detail: "\(PiPaths.sessionsDirectory.path.abbreviatingHomeDirectory)\nPiCode indexes these files read-only and never rewrites them."
@@ -377,7 +364,7 @@ struct SessionSettings: View {
     }
 }
 
-// MARK: - Pi
+// MARK: - Muse
 
 struct PiSettingsTab: View {
     @Bindable var state: AppState
@@ -386,25 +373,31 @@ struct PiSettingsTab: View {
 
     var body: some View {
         SettingsPage {
-            SettingsSection("\(state.activeHarness.displayName) installation") {
+            SettingsSection("Muse installation") {
                 if let installation = state.installation {
                     SettingsRow("Version") {
                         Text(installation.version).foregroundStyle(.secondary)
                     }
                     SettingsRow("Path", detail: installation.displayPath)
                 } else {
-                    SettingsRow("Not found", detail: state.discoveryDetail ?? "No harness was found yet.") {
+                    SettingsRow("Not found", detail: state.discoveryDetail ?? "Muse CLI was not found yet.") {
                         Button("Search Again") { Task { await state.retryDiscovery() } }
                             .buttonStyle(.settingsPill)
                     }
                 }
                 SettingsRow("Version check") {
-                    Button("Check \(state.activeHarness.displayName) Version") { state.run(.checkForPiUpdates) }
+                    Button("Check Muse Version") { state.run(.checkForPiUpdates) }
                         .buttonStyle(.settingsPill)
                 }
                 SettingsRow("Setup instructions") {
                     Button("Show") { state.run(.showPiSetup) }
                         .buttonStyle(.settingsPill)
+                }
+            }
+
+            SettingsSection("Muse account") {
+                SettingsBlock {
+                    LocalHarnessAccountSettingsView(state: state, descriptor: state.activeHarness)
                 }
             }
 
@@ -417,14 +410,14 @@ struct PiSettingsTab: View {
                         ), prompt: Text("--verbose"))
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.callout, design: .monospaced))
-                        Text("Appended to every `pi --mode rpc` launch. PiCode never writes to Pi's settings files.")
+                        Text("Appended to every `muse exec --json` launch. PiCode never writes to Muse's settings files.")
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
                 }
             }
 
-            SettingsSection("Pi configuration") {
+            SettingsSection("Muse configuration") {
                 ForEach(configFiles, id: \.path) { file in
                     SettingsRow(file.lastPathComponent, detail: file.path.abbreviatingHomeDirectory) {
                         if FileManager.default.fileExists(atPath: file.path) {
@@ -435,7 +428,7 @@ struct PiSettingsTab: View {
                         }
                     }
                 }
-                SettingsRow("Pi's folder") {
+                SettingsRow("Muse's config folder") {
                     Button("Open") { state.run(.revealPiDirectory) }
                         .buttonStyle(.settingsPill)
                 }
@@ -458,8 +451,7 @@ struct PiSettingsTab: View {
     }
 
     private var configFiles: [URL] {
-        [PiPaths.settingsFile, PiPaths.trustFile, PiPaths.authFile,
-         PiPaths.modelsFile, PiPaths.modelsStoreFile]
+        [PiPaths.settingsFile, PiPaths.trustFile, PiPaths.authFile, PiPaths.approvalPolicyFile]
     }
 }
 

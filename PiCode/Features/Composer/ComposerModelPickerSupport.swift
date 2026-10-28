@@ -11,7 +11,6 @@ import Foundation
 
 enum ComposerModelPickerLevel: Equatable {
     case root
-    case harness
     case provider
     case model
 }
@@ -21,7 +20,6 @@ enum ComposerModelPickerLayout {
     static let maximumHeight: CGFloat = 420
 
     static func height(for level: ComposerModelPickerLevel,
-                       harnessCount: Int,
                        providerCount: Int,
                        reasoningCount: Int,
                        modelCount: Int,
@@ -30,10 +28,7 @@ enum ComposerModelPickerLayout {
 
         switch level {
         case .root:
-            height = reasoningCount > 0 ? 202 : 174
-        case .harness:
-            // Header + rows (which carry subtitles) + the explanatory footer.
-            height = 44 + CGFloat(max(harnessCount, 1)) * 47 + 68
+            height = reasoningCount > 0 ? 167 : 139
         case .provider:
             height = 44 + CGFloat(max(providerCount, 1)) * 35
         case .model:

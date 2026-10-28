@@ -196,35 +196,35 @@ struct TranscriptItem: Identifiable, Equatable {
             ?? toolArguments.string("filePath")
 
         switch lower {
-        case "write":
+        case "write", "write_file":
             guard let path else { return [] }
             let content = toolArguments.string("content") ?? ""
             let lines = content.isEmpty ? nil : Self.lineCount(content)
             return [FileChange(path: path, kind: .created, additions: lines, deletions: nil)]
-        case "edit", "multiedit", "patch", "apply_patch":
+        case "edit", "edit_file", "multiedit", "patch", "apply_patch":
             guard let path else { return [] }
             var additions = 0
             var deletions = 0
             let blocks = toolArguments.array("edits") ?? []
             if blocks.isEmpty {
-                if let new = toolArguments.string("new_string") ?? toolArguments.string("newText") {
+                if let new = toolArguments.string("new_string") ?? toolArguments.string("newText") ?? toolArguments.string("replace") {
                     additions += Self.lineCount(new)
                 }
-                if let old = toolArguments.string("old_string") ?? toolArguments.string("oldText") {
+                if let old = toolArguments.string("old_string") ?? toolArguments.string("oldText") ?? toolArguments.string("find") {
                     deletions += Self.lineCount(old)
                 }
             } else {
                 for block in blocks {
-                    if let new = block.string("new_string") ?? block.string("newText") {
+                    if let new = block.string("new_string") ?? block.string("newText") ?? block.string("replace") {
                         additions += Self.lineCount(new)
                     }
-                    if let old = block.string("old_string") ?? block.string("oldText") {
+                    if let old = block.string("old_string") ?? block.string("oldText") ?? block.string("find") {
                         deletions += Self.lineCount(old)
                     }
                 }
             }
             return [FileChange(path: path, kind: .modified, additions: additions, deletions: deletions)]
-        case "read":
+        case "read", "read_file", "read_memory":
             guard let path else { return [] }
             return [FileChange(path: path, kind: .read, additions: nil, deletions: nil)]
         default:
@@ -276,13 +276,13 @@ struct TranscriptItem: Identifiable, Equatable {
         if !blocks.isEmpty {
             return blocks.map { block in
                 (
-                    old: block.string("oldText") ?? block.string("old_string") ?? "",
-                    new: block.string("newText") ?? block.string("new_string") ?? ""
+                    old: block.string("oldText") ?? block.string("old_string") ?? block.string("find") ?? "",
+                    new: block.string("newText") ?? block.string("new_string") ?? block.string("replace") ?? ""
                 )
             }
         }
-        let old = toolArguments?.string("oldText") ?? toolArguments?.string("old_string") ?? ""
-        let new = toolArguments?.string("newText") ?? toolArguments?.string("new_string")
+        let old = toolArguments?.string("oldText") ?? toolArguments?.string("old_string") ?? toolArguments?.string("find") ?? ""
+        let new = toolArguments?.string("newText") ?? toolArguments?.string("new_string") ?? toolArguments?.string("replace")
             ?? toolArguments?.string("content")
             ?? ""
         return (old.isEmpty && new.isEmpty) ? [] : [(old: old, new: new)]

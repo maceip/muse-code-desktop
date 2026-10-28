@@ -311,6 +311,25 @@ struct ConversationView: View {
     @ViewBuilder
     private var statusFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if controller.runningSubagentCount > 0 {
+                Button {
+                    state.showOverview()
+                } label: {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 7, height: 7)
+                        Text(controller.runningSubagentCount == 1
+                             ? "1 subagent running"
+                             : "\(controller.runningSubagentCount) subagents running")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show running subagents in Overview")
+            }
             if controller.isCompacting {
                 statusRow(icon: "shrink", text: "Compacting conversation context…", showsSpinner: true)
             }

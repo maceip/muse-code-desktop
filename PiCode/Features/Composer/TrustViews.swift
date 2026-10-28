@@ -14,10 +14,10 @@ struct ProjectTrustPrompt: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("This project can change how Pi behaves", huge: "shield-01")
+            Label("This project can change how Muse behaves", huge: "shield-01")
                 .font(Typography.noticeSemibold)
 
-            Text("\(controller.projectPath.abbreviatingHomeDirectory) contains project resources Pi can load: settings, extensions, skills, prompts, themes, or system prompts. Pi will not load them unless you trust this project.")
+            Text("\(controller.projectPath.abbreviatingHomeDirectory) contains project resources Muse can load: settings, extensions, skills, prompts, or system prompts. Muse will not load them unless you trust this project.")
                 .font(Typography.notice)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -44,7 +44,7 @@ struct ProjectTrustPrompt: View {
                     controller.trustParentFolder()
                 }
                 .buttonStyle(.settingsPill)
-                .help("Writes a trust decision for the parent directory, which Pi applies to this project by nearest-ancestor lookup.")
+                .help("Writes a trust decision for the parent directory, which Muse applies to this project by nearest-ancestor lookup.")
             }
         }
         // Drawn in the composer's tray, which supplies the fill and the shape.
@@ -60,7 +60,7 @@ struct UntrustedProjectNotice: View {
         HStack(spacing: 8) {
             HugeIcon(name: "lock")
                 .foregroundStyle(.secondary)
-            Text("Project resources are not trusted, so Pi is running without them.")
+            Text("Project resources are not trusted, so Muse is running without them.")
                 .font(Typography.notice)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
@@ -103,22 +103,24 @@ struct ComposerAccessControl: View {
     @State private var isShowingPopover = false
 
     var body: some View {
-        Button {
-            isShowingPopover = true
-        } label: {
-            HStack(spacing: 5) {
-                HugeIcon(name: "alert-01")
-                    .font(.system(size: 13))
-                Text(accessLabel)
-                    .font(.system(size: 13.5))
+        if controller.trustState == .asked || controller.trustState == .untrusted {
+            Button {
+                isShowingPopover = true
+            } label: {
+                HStack(spacing: 5) {
+                    HugeIcon(name: "alert-01")
+                        .font(.system(size: 13))
+                    Text(accessLabel)
+                        .font(.system(size: 13.5))
+                }
+                .foregroundStyle(Color.orange)
+                .frame(height: 24)
+                .contentShape(Rectangle())
             }
-            .foregroundStyle(Color.orange)
-            .frame(height: 24)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help("Access: \(shortLabel)")
+            .popover(isPresented: $isShowingPopover, arrowEdge: .bottom) { popover }
         }
-        .buttonStyle(.plain)
-        .help("Access: \(shortLabel)")
-        .popover(isPresented: $isShowingPopover, arrowEdge: .bottom) { popover }
     }
 
     private var popover: some View {
@@ -127,7 +129,7 @@ struct ComposerAccessControl: View {
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(tint)
 
-            Text("Pi runs as you — the current macOS user — so it can read and write the files your account can, and run shell commands with your permissions. Trusting a project does not change any of that: it only decides whether Pi loads that project's own settings, extensions, skills, prompts, themes, and system prompts.")
+            Text("Muse runs as you — the current macOS user — so it can read and write the files your account can, and run shell commands with your permissions. Trusting a project does not change any of that: it only decides whether Muse loads that project's own settings, extensions, skills, prompts, and system prompts.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -150,7 +152,7 @@ struct ComposerAccessControl: View {
                     .buttonStyle(.settingsPill)
             }
 
-            Text("Changing this restarts Pi for this session. Decisions are written to Pi's own trust store, the same file `/trust` writes.")
+            Text("Changing this restarts Muse for this session. Decisions are written to Muse's own trust store (`~/.config/muse/trust.json`).")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -174,7 +176,7 @@ struct ComposerAccessControl: View {
         }
     }
 
-    /// What the composer says about access. Pi always runs with the user's
+    /// What the composer says about access. Muse always runs with the user's
     /// own permissions, so a trusted project is plainly "Full access"; the other
     /// states name what is still pending.
     private var accessLabel: String {
@@ -218,9 +220,9 @@ struct ComposerAccessControl: View {
         case .trusted, .notRequired, .unknown:
             return nil
         case .asked:
-            return "PiCode asked Pi for the resources this project declares and has not had an answer yet."
+            return "Choose whether Muse should trust this workspace."
         case .untrusted:
-            return "Pi is running with `--no-approve`, so this project's resources are ignored."
+            return "Muse is running without `--trust-workspace` for this project."
         }
     }
 }
