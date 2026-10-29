@@ -75,14 +75,23 @@ echo "==> Muse Code macOS DMG packaging (v${APP_VERSION}, build ${BUILD_NUMBER},
 # ---------------------------------------------------------------------------
 if [[ -z "${IDENTITY}" ]]; then
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' \
+    | sed -n 's/.*\([0-9A-F]\{40\}\) "Developer ID Application: [^"]*".*/\1/p' \
     | head -n 1 || true)"
 fi
 
+if [[ -z "${IDENTITY}" ]]; then
+  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | sed -n 's/.*\([0-9A-F]\{40\}\) "Apple Development: [^"]*".*/\1/p' \
+    | head -n 1 || true)"
+  if [[ -n "${IDENTITY}" ]]; then
+    DO_NOTARIZE=0
+  fi
+fi
+
 if [[ -n "${IDENTITY}" ]]; then
-  echo "==> Using Developer ID identity: ${IDENTITY}"
+  echo "==> Using codesigning identity: ${IDENTITY}"
 else
-  echo "==> No 'Developer ID Application' certificate found in keychain; using ad-hoc Hardened Runtime signing (--sign -)"
+  echo "==> No 'Developer ID Application' or 'Apple Development' certificate found in keychain; using ad-hoc Hardened Runtime signing (--sign -)"
   DO_NOTARIZE=0
 fi
 

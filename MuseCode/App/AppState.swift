@@ -636,17 +636,17 @@ final class AppState {
         let launchDirectory = settings.directory.isEmpty ? canonical : CanonicalPath.of(settings.directory)
 
         // If the current active session is already an empty, unsaved chat in this exact folder,
-        // reuse it in-place so clicking the Muse icon or New Chat never tears down the view.
+        // reuse it in-place so clicking the Muse icon or New Chat never tears down or hides the composer.
         if let current = activeController,
            current.sessionFile == nil,
            current.items.isEmpty,
            CanonicalPath.of(current.projectPath) == launchDirectory,
            current.harness.id == harness.id {
+            current.resetFirstPromptVoiceState()
             selectedProjectPath = canonical
             preferences.lastProjectPath = canonical
             preferences.persist()
             ensureProjectPlaceholderExists(for: canonical, settings: settings)
-            composerEnterAnimationTick += 1
             return
         }
 

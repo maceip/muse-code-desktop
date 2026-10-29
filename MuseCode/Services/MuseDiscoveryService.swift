@@ -186,11 +186,12 @@ struct PiDiscoveryService {
         var exitCode: Int32
     }
 
-    /// Runs a short-lived helper process.
+    /// Runs a short-lived helper process with a bounded timeout so hung CLI subcommands never block forever.
     func run(executable: URL,
              arguments: [String],
              directory: URL,
-             environment: [String: String]?) async -> CommandResult {
+             environment: [String: String]?,
+             timeout: TimeInterval = 10.0) async -> CommandResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -223,19 +224,36 @@ struct PiDiscoveryService {
                     group.leave()
                 }
 
+                var didTimeOut = false
+                let watchdog = DispatchWorkItem {
+                    if process.isRunning {
+                        didTimeOut = true
+                        process.terminate()
+                        try? outPipe.fileHandleForReading.close()
+                        try? errPipe.fileHandleForReading.close()
+                    }
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
+
                 var exitCode: Int32 = -1
                 do {
                     try process.run()
                     process.waitUntilExit()
-                    exitCode = process.terminationStatus
+                    watchdog.cancel()
+                    exitCode = didTimeOut ? -2 : process.terminationStatus
                 } catch {
+                    watchdog.cancel()
                     stderr.append(Data(error.localizedDescription.utf8))
                 }
-                _ = group.wait(timeout: .now() + 5)
+                _ = group.wait(timeout: .now() + 2)
 
+                var stderrStr = String(data: stderr, encoding: .utf8) ?? ""
+                if didTimeOut && stderrStr.isEmpty {
+                    stderrStr = "Command timed out after \(Int(timeout))s."
+                }
                 continuation.resume(returning: CommandResult(
                     stdout: String(data: stdout, encoding: .utf8) ?? "",
-                    stderr: String(data: stderr, encoding: .utf8) ?? "",
+                    stderr: stderrStr,
                     exitCode: exitCode
                 ))
             }

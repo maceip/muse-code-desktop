@@ -308,6 +308,12 @@ struct MuseUITestMain {
             composerTexts.contains("Ask Anything") || composerTexts.contains("Muse is not running…") || composerTexts.contains("Steer Muse, or queue a follow-up…"),
             "Liquid Glass input pill must mount PlaceholderTextView with 'Ask Anything' placeholder (got: \(composerTexts))"
         )
+        await state.newChatInCurrentProject()
+        composerHost.layoutSubtreeIfNeeded()
+        check(
+            composerHost.fittingSize.height >= 120,
+            "Clicking the Muse icon (newChatInCurrentProject) must keep both the top input pill and bottom subcontainer mounted (fittingSize.height = \(composerHost.fittingSize.height))"
+        )
         // Verify all 23 frames (`1...23`) of the Voice Orb transition (`14.58.49.png` & `orb1.gif`)
         let f1 = VoiceOrbFrameDescriptor.descriptor(forFrame: 1)
         let f2 = VoiceOrbFrameDescriptor.descriptor(forFrame: 2)
@@ -357,7 +363,77 @@ struct MuseUITestMain {
             check(orbHost.fittingSize.width >= 90 && orbHost.fittingSize.height >= 90, "LiquidGlassVoiceOrbView must render Frame \(testFrame) of the 3D Liquid Glass Voice Orb")
         }
 
+        // Verify continuous 120fps VoiceOrbEnterMetrics against the measured timestamps of `1028 (2).mp4` (`F018` -> `F046`)
+        let mF20 = VoiceOrbEnterMetrics.evaluateEnter(elapsed: 0.066, fullWidth: 580, baseHeight: 54, orbFrame: 2)
+        let mF22 = VoiceOrbEnterMetrics.evaluateEnter(elapsed: 0.133, fullWidth: 580, baseHeight: 54, orbFrame: 3)
+        let mF25 = VoiceOrbEnterMetrics.evaluateEnter(elapsed: 0.233, fullWidth: 580, baseHeight: 54, orbFrame: 4)
+        let mF27 = VoiceOrbEnterMetrics.evaluateEnter(elapsed: 0.305, fullWidth: 580, baseHeight: 54, orbFrame: 5)
+        let mF31 = VoiceOrbEnterMetrics.evaluateEnter(elapsed: 0.440, fullWidth: 580, baseHeight: 54, orbFrame: 7)
+        let mF44 = VoiceOrbEnterMetrics.evaluateEnter(elapsed: 0.867, fullWidth: 580, baseHeight: 54, orbFrame: 8)
+        let mF46 = VoiceOrbEnterMetrics.evaluateEnter(elapsed: 0.933, fullWidth: 580, baseHeight: 54, orbFrame: 9)
+        check(mF20.capsuleWidth > 550 && mF20.waveOpacity > 0.95 && mF20.editorOpacity > 0.80 && mF20.subOpacity > 0.95,
+              "At t=66ms (F020), full-width S-curve plasma wave must ignite while pill is ~97.5% wide, text & mic are visible, and subcontainer is crisp")
+        check(mF22.capsuleWidth > 475 && mF22.capsuleWidth < 505 && mF22.pillBottomWhiteGlow > 0.85 && mF22.subOpacity > 0.75 && mF22.subOpacity < 0.85,
+              "At t=133ms (F022), pill width must contract to ~83.9% with bright bottom white-silver glow and subcontainer alpha ~0.80")
+        check(mF25.capsuleWidth > 390 && mF25.capsuleWidth < 435 && mF25.editorOpacity == 0.0 && mF25.subOpacity > 0.60 && mF25.subOpacity < 0.72,
+              "At t=233ms (F025), pill width must contract to ~68.7% with heavy subcontainer blur and alpha ~0.64")
+        check(mF27.capsuleWidth < 180 && mF27.subOpacity < 0.05,
+              "At t=305ms (F027), pill must squeeze into plump stadium capsule while subcontainer finishes dissolving")
+        check(abs(mF31.capsuleWidth - 88) < 1.0 && abs(mF31.capsuleHeight - 88) < 1.0 && mF31.waveOpacity > 0.95,
+              "At t=440ms (F031), capsule must settle into 1:1 3D sphere (88x88) with active horizon wave")
+        check(mF44.darkBlinkMix > 0.90 && mF44.waveOpacity < 0.10 && mF44.capsuleWidth > 91,
+              "At t=867ms (F044), sphere must perform the signature dark obsidian blink with 1.055x scale bump")
+        check(abs(mF46.capsuleWidth - 88) < 1.0 && mF46.waveOpacity > 0.95 && mF46.darkBlinkMix == 0.0,
+              "At t=933ms (F046), sphere must resume 1.0x active listening")
+
         if ProcessInfo.processInfo.environment["MUSE_RENDER_ORB_SHEET"] == "1" {
+            let enterTimestamps: [(label: String, t: TimeInterval, frame: Int)] = [
+                ("F018 (0ms)", 0.000, 1),
+                ("F020 (67ms)", 0.066, 2),
+                ("F022 (133ms)", 0.133, 3),
+                ("F025 (233ms)", 0.233, 4),
+                ("F027 (305ms)", 0.308, 5),
+                ("F029 (366ms)", 0.366, 6),
+                ("F031 (440ms)", 0.440, 7),
+                ("F044 (867ms Blink)", 0.867, 8),
+                ("F046 (933ms Active)", 0.933, 9)
+            ]
+            let enterSheet = VStack(alignment: .center, spacing: 18) {
+                ForEach(Array(enterTimestamps.enumerated()), id: \.offset) { _, item in
+                    let m = item.t == 0 ? VoiceOrbEnterMetrics.idle(fullWidth: 520, baseHeight: 56) : VoiceOrbEnterMetrics.evaluateEnter(elapsed: item.t, fullWidth: 520, baseHeight: 56, orbFrame: item.frame)
+                    ZStack(alignment: .top) {
+                        Color.white
+                        Text("when in app rail mode, search or add new should not be")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Color(red: 0.94, green: 0.12, blue: 0.90))
+                            .offset(y: 44)
+                        MorphingVoiceOrbCapsuleView(
+                            metrics: m,
+                            orbFrame: item.frame,
+                            isRecording: true,
+                            isTranscribing: false,
+                            audioLevel: 0.0,
+                            duration: item.t,
+                            fixedTimeOverride: 0.30,
+                            onTap: {}
+                        )
+                    }
+                    .frame(width: 560, height: 108)
+                    .clipped()
+                }
+            }
+            .padding(20)
+            .background(Color.white)
+
+            let enterRenderer = ImageRenderer(content: enterSheet)
+            enterRenderer.scale = 2.0
+            if let cgImg = enterRenderer.cgImage {
+                let rep = NSBitmapImageRep(cgImage: cgImg)
+                if let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: "/tmp/muse_enter_orb_sheet.png"))
+                    print("Saved /tmp/muse_enter_orb_sheet.png")
+                }
+            }
             let micStates: [(label: String, level: Double, time: TimeInterval)] = [
                 ("Mic 1 (Braid)", 0.28, 0.25),
                 ("Mic 2 (Double Helix)", 0.42, 0.70),
@@ -419,6 +495,49 @@ struct MuseUITestMain {
                         .frame(width: 132, height: 136)
                     }
                 }
+
+                // Row 3: 2D Cursor Hover Interactivity (`hoverPoint` tracking) + 3D Perspective Bokeh Constellation (`1028 (2)(3).mp4`)
+                HStack(spacing: 20) {
+                    let hoverPoints: [CGPoint?] = [
+                        CGPoint(x: 0.22, y: 0.52),
+                        CGPoint(x: 0.50, y: 0.50),
+                        CGPoint(x: 0.78, y: 0.46),
+                        CGPoint(x: 0.46, y: 0.26)
+                    ]
+                    ForEach(0..<hoverPoints.count, id: \.self) { idx in
+                        ZStack {
+                            Color(red: 0.09, green: 0.09, blue: 0.10)
+                            PlasmaHorizonWaveCanvas(
+                                isCircularOrb: true,
+                                orbFrame: 12,
+                                audioLevel: 0.0,
+                                waveOpacity: 1.0,
+                                hoverPoint: hoverPoints[idx],
+                                fixedTimeOverride: 0.35
+                            )
+                            .frame(width: 88, height: 88)
+                            .clipShape(Circle())
+                        }
+                        .frame(width: 112, height: 112)
+                    }
+                    ForEach([0.0, 0.55, 1.10, 1.65], id: \.self) { spinTime in
+                        let desc23 = VoiceOrbFrameDescriptor.descriptor(forFrame: 23)
+                        ZStack {
+                            Color(red: 0.09, green: 0.09, blue: 0.10)
+                            LiquidGlassVoiceOrbView(
+                                orbFrame: 23,
+                                descriptor: desc23,
+                                isRecording: false,
+                                isTranscribing: true,
+                                audioLevel: 0.0,
+                                duration: 3.0,
+                                fixedTimeOverride: spinTime,
+                                onTap: {}
+                            )
+                        }
+                        .frame(width: 112, height: 112)
+                    }
+                }
             }
             .padding(20)
             .background(Color.white)
@@ -434,7 +553,423 @@ struct MuseUITestMain {
             }
         }
 
-        print("PASS: All Muse UI, Liquid Glass composer, 3D Voice Orb, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, and backend state transitions verified.")
+        // 13b. Verify updated Input Box & Companion Subcontainer geometry (`Screen Recording 2026-10-28 at 23.23.35.mov`)
+        check(ComposerMetrics.landingWidth == 520, "Landing input pill and companion subcontainer width must be 520pt (got \(ComposerMetrics.landingWidth))")
+        check(ComposerMetrics.topPillMinHeight == 60 && ComposerMetrics.topPillCornerRadius == 30,
+              "Top input pill height must be 60pt with 30pt capsule radius (got \(ComposerMetrics.topPillMinHeight), \(ComposerMetrics.topPillCornerRadius))")
+        check(ComposerMetrics.companionCornerRadius == 34 && ComposerMetrics.companionGap == 12,
+              "Companion subcontainer corner radius must be 34pt with 12pt gap (got \(ComposerMetrics.companionCornerRadius), \(ComposerMetrics.companionGap))")
+
+        // 14. Rapid Multi-Line Paste (`⌘V`) + Voice STT Cancel Stress Test (Zero Freeze / Layout Recursion)
+        MuseVoiceSTTService.shared.cancel()
+        check(!MuseVoiceSTTService.shared.isRecording && !MuseVoiceSTTService.shared.isTranscribing, "MuseVoiceSTTService.cancel() must immediately reset recording and transcribing flags")
+
+        func findTextView(in view: NSView?) -> PlaceholderTextView? {
+            guard let view else { return nil }
+            if let tv = view as? PlaceholderTextView { return tv }
+            for sub in view.subviews {
+                if let found = findTextView(in: sub) { return found }
+            }
+            return nil
+        }
+
+        let textView = findTextView(in: composerHost) ?? findTextView(in: window.contentView)
+        check(textView != nil, "ComposerView must mount a live PlaceholderTextView")
+        if let textView {
+            window.contentView = composerHost
+            window.makeFirstResponder(textView)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("Line 1 of pasted voice+text test\nLine 2 with extra words\nLine 3 of paste", forType: .string)
+            let pasteStart = ProcessInfo.processInfo.systemUptime
+            for _ in 0..<10 {
+                textView.paste(nil)
+                composerHost.layoutSubtreeIfNeeded()
+            }
+            let pasteElapsedMs = (ProcessInfo.processInfo.systemUptime - pasteStart) * 1000.0
+            print(String(format: "10x multi-line paste + layoutSubtreeIfNeeded completed in %.2f ms", pasteElapsedMs))
+            check(pasteElapsedMs < 250.0, "Rapid 10x multi-line paste must complete without layout recursion or main-thread hang (took \(pasteElapsedMs)ms)")
+            check(textView.string.contains("Line 1 of pasted voice+text test"), "PlaceholderTextView must contain pasted plain text")
+            textView.string = ""
+            textView.didChangeText()
+
+            // 15. Verify macOS Dictation (`CampoLightweightUI`) compatibility & GlowingCaretView visibility (`Untitled 8.jpg`, `Und 9.jpg`, `Untitled 9.jpg`)
+            for sub in textView.subviews where !(sub is GlowingCaretView) {
+                if sub is NSTextInsertionIndicator {
+                    check(!sub.isHidden && sub.alphaValue > 0.0, "NSTextInsertionIndicator must NOT be hidden or alpha=0 so macOS Dictation (CampoLightweightUI) validates its positioningView layout")
+                }
+            }
+            let glowingCaret = textView.subviews.first(where: { $0 is GlowingCaretView })
+            check(glowingCaret != nil && glowingCaret?.isHidden == false, "GlowingCaretView ('|Ask Anything') must be visible when string is empty")
+            textView.setMarkedText("Talk about food", selectedRange: NSRange(location: 15, length: 0), replacementRange: NSRange(location: 0, length: 0))
+            check(textView.hasMarkedText(), "PlaceholderTextView must support NSTextInputClient marked text for macOS Dictation")
+            check(glowingCaret?.isHidden == true, "GlowingCaretView must hide while macOS Dictation marked text is active")
+            textView.unmarkText()
+            textView.string = ""
+            textView.didChangeText()
+            textView.refreshCaretState()
+            check(glowingCaret?.isHidden == false, "GlowingCaretView must reappear after unmarkText()")
+
+            // 16. End-to-End Speech-to-Text (`MuseVoiceSTTService.shared.transcribeFile` -> `muse voice transcribe`) & Subcontainer Voice Row (`Untitled 9.jpg`)
+            let sttWavURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("muse-e2e-stt-\(UUID().uuidString.prefix(6)).wav")
+            defer { try? FileManager.default.removeItem(at: sttWavURL) }
+            let sayResult = await discovery.run(
+                executable: URL(fileURLWithPath: "/usr/bin/say"),
+                arguments: ["-o", sttWavURL.path, "--data-format=LEI16@16000", "Talk about food"],
+                directory: URL(fileURLWithPath: NSTemporaryDirectory()),
+                environment: nil,
+                timeout: 10.0
+            )
+            check(sayResult.exitCode == 0 && FileManager.default.fileExists(atPath: sttWavURL.path), "macOS /usr/bin/say must synthesize 16kHz PCM .wav clip for STT test")
+            let transcribedText = await MuseVoiceSTTService.shared.transcribeFile(at: sttWavURL, installation: installation)
+            print("MuseVoiceSTTService transcribed: \"\(transcribedText ?? "<nil>")\" (lastTranscript: \(MuseVoiceSTTService.shared.lastTranscript ?? "<nil>"), lastError: \(MuseVoiceSTTService.shared.lastError ?? "none"))")
+            check(transcribedText != nil && !(transcribedText ?? "").isEmpty, "MuseVoiceSTTService.transcribeFile must return non-empty speech transcription")
+            let lowerTranscript = (transcribedText ?? "").lowercased()
+            check(lowerTranscript.contains("talk about food"), "MuseVoiceSTTService transcription must match 'talk about food' (got '\(transcribedText ?? "")')")
+            check(MuseVoiceSTTService.shared.lastTranscript == "talk about food", "MuseVoiceSTTService.lastTranscript must normalize to 'talk about food' for the subcontainer voice row")
+            check(!MuseVoiceSTTService.shared.isTranscribing, "MuseVoiceSTTService.isTranscribing must reset to false after transcription finishes")
+
+            controller.resetFirstPromptVoiceState()
+            let unpinnedComposerAfter = NSHostingView(
+                rootView: ComposerView(state: state, controller: controller, focusTick: 0)
+                    .frame(width: ComposerMetrics.landingWidth)
+            )
+            unpinnedComposerAfter.layoutSubtreeIfNeeded()
+            let heightWithVoiceRow = unpinnedComposerAfter.fittingSize.height
+
+            MuseVoiceSTTService.shared.lastTranscript = nil
+            check(MuseVoiceSTTService.shared.lastTranscript == nil, "Setting lastTranscript = nil must clear MuseVoiceSTTService.lastTranscript")
+            let unpinnedComposerCleared = NSHostingView(
+                rootView: ComposerView(state: state, controller: controller, focusTick: 0)
+                    .frame(width: ComposerMetrics.landingWidth)
+            )
+            unpinnedComposerCleared.layoutSubtreeIfNeeded()
+            let heightWithoutVoiceRow = unpinnedComposerCleared.fittingSize.height
+
+            print(String(format: "Composer natural height with '\"talk about food\"' voice row: %.1f pt, without voice row: %.1f pt", heightWithVoiceRow, heightWithoutVoiceRow))
+            check(
+                heightWithVoiceRow >= heightWithoutVoiceRow + 20.0,
+                "Subcontainer must expand to display the '\"talk about food\"' voice transcription row after STT completes (with row: \(heightWithVoiceRow)pt, without row: \(heightWithoutVoiceRow)pt)"
+            )
+        }
+
+        // 17. Verify Chat Area Backgrounds (`UntiSlehd 8.png` Midnight Glow & `UntiSDDtlehd 8.png` Forest Glass) & Partially Translucent Liquid Glass Composer
+        let forestImg = AppTheme.chatBackgroundImage(for: .forestGlass)
+        let midnightImg = AppTheme.chatBackgroundImage(for: .midnightGlow)
+        let solidImg = AppTheme.chatBackgroundImage(for: .solidBlack)
+        check(forestImg != nil && (forestImg?.size.width ?? 0) > 100, "Forest Glass chat background asset ('chat-bg-forest') must load from Assets.xcassets")
+        check(midnightImg != nil && (midnightImg?.size.width ?? 0) > 100, "Midnight Glow chat background asset ('chat-bg-midnight') must load from Assets.xcassets")
+        check(solidImg == nil, "Solid Black chat background must use pure obsidian color without an image")
+
+        let originalBg = state.preferences.chatBackground
+        for bgCase in PreferencesStore.ChatBackground.allCases {
+            state.preferences.chatBackground = bgCase
+            state.preferences.persist()
+            let reloaded = PreferencesStore()
+            check(reloaded.chatBackground == bgCase, "PreferencesStore must persist chatBackground = \(bgCase.rawValue)")
+        }
+        state.preferences.chatBackground = originalBg
+        state.preferences.persist()
+
+        if ProcessInfo.processInfo.environment["MUSE_RENDER_ORB_SHEET"] == "1" {
+            let fullDetailW: CGFloat = 1040
+            let fullDetailH: CGFloat = 620
+            let col3W: CGFloat = 310
+            let splitComparison = VStack(spacing: 12) {
+                ForEach([PreferencesStore.ChatBackground.forestGlass, PreferencesStore.ChatBackground.midnightGlow]) { bgStyle in
+                    HStack(alignment: .top, spacing: 0) {
+                        // Column 2: Chat area with centered Liquid Glass Composer
+                        VStack {
+                            Spacer()
+                            VStack(spacing: ComposerMetrics.companionGap) {
+                                MorphingVoiceOrbCapsuleView(
+                                    metrics: VoiceOrbEnterMetrics.idle(fullWidth: ComposerMetrics.landingWidth, baseHeight: ComposerMetrics.topPillMinHeight),
+                                    orbFrame: 1,
+                                    isRecording: false,
+                                    isTranscribing: false,
+                                    audioLevel: 0.0,
+                                    duration: 0.0,
+                                    previewText: "Ask Anything",
+                                    onTap: {}
+                                )
+                                .frame(width: ComposerMetrics.landingWidth, height: ComposerMetrics.topPillMinHeight)
+
+                                VStack(alignment: .leading, spacing: 0) {
+                                    HStack(spacing: 10) {
+                                        Image(nsImage: .huge("folder-02"))
+                                            .resizable()
+                                            .frame(width: 15, height: 15)
+                                            .opacity(0.68)
+                                        Text("snow")
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(Color.white.opacity(0.88))
+                                        Spacer()
+                                        Text("✦ muse-wonder-full-1.0  Xhigh ⌄")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundStyle(Color.white.opacity(0.92))
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .frame(height: 44)
+
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.10))
+                                        .frame(height: 1)
+                                        .padding(.horizontal, 18)
+
+                                    HStack(spacing: 10) {
+                                        Image(nsImage: .huge("add-01"))
+                                            .resizable()
+                                            .frame(width: 15, height: 15)
+                                            .opacity(0.68)
+                                        Text("Attach files or images")
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(Color.white.opacity(0.88))
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .frame(height: 44)
+                                }
+                                .padding(.vertical, 8)
+                                .frame(width: ComposerMetrics.landingWidth)
+                                .background(
+                                    LiquidGlassCardBackground(
+                                        cornerRadius: ComposerMetrics.companionCornerRadius,
+                                        isDarkTopPill: false
+                                    )
+                                )
+                            }
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        // Column 3: Right Inspector (`Overview` + `Muse Agent Messages`) floating over the extended background (`Untitled 11.jpg`)
+                        VStack(spacing: 0) {
+                            InspectorView(state: state)
+                                .frame(width: col3W)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(AppTheme.cardStroke, lineWidth: 1)
+                                )
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.top, 10)
+                        .padding(.trailing, 12)
+                        .padding(.bottom, 12)
+                    }
+                    .frame(width: fullDetailW, height: fullDetailH)
+                    .background(
+                        MuseChatBackgroundView(style: bgStyle)
+                            .frame(width: fullDetailW, height: fullDetailH)
+                    )
+                    .coordinateSpace(name: "picode-session-pane")
+                    .environment(\.sessionPaneSize, CGSize(width: fullDetailW, height: fullDetailH))
+                    .environment(\.chatBackground, bgStyle)
+                    .environment(\.hasRootChatBackground, true)
+                    .clipped()
+                }
+            }
+            .background(Color.black)
+            .environment(\.colorScheme, .dark)
+
+            let bgRenderer = ImageRenderer(content: splitComparison)
+            bgRenderer.scale = 2.0
+            if let cgImg = bgRenderer.cgImage {
+                let rep = NSBitmapImageRep(cgImage: cgImg)
+                if let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: "/tmp/muse_liquid_glass_backgrounds.png"))
+                    print("Saved /tmp/muse_liquid_glass_backgrounds.png")
+                }
+            }
+        }
+
+        // 18. Verify First-Prompt Center Voice Orb + Immediate Bottom Drop (`first.jpg`) vs. Subsequent Reactive Bottom Light Glow (`second.jpg`, `Computer Screen34.jpg`)
+        controller.resetFirstPromptVoiceState()
+        check(!controller.hasDroppedComposerToBottom && !controller.isShowingFirstPromptCenterOrb && !controller.hasCompletedFirstVoiceOrTextInteraction,
+              "resetFirstPromptVoiceState() must reset session voice flags to initial landing state")
+
+        let freshRuleComposer = ComposerView(state: state, controller: controller, focusTick: 0)
+        check(!freshRuleComposer.isConsolidatedBar, "Before first mic click on untouched new session, composer must be in 2-container landing layout")
+
+        // First mic click on untouched new session (`first.jpg`) -> drops chat box to bottom AND shows center orb
+        let firstClickShowedOrb = freshRuleComposer.applyVoiceMicClickStateTransition()
+        check(firstClickShowedOrb, "First mic click on untouched new session must return true (show center orb)")
+        check(controller.hasDroppedComposerToBottom && freshRuleComposer.isConsolidatedBar,
+              "First mic click on untouched new session must immediately drop the chat box to the bottom consolidated bar (`first.jpg`)")
+        check(controller.isShowingFirstPromptCenterOrb,
+              "First mic click on untouched new session must show the 3D Voice Orb in the center (`first.jpg`)")
+
+        // Second / subsequent mic click afterwards (`second.jpg`, `Computer Screen34.jpg`) -> NO orb is shown, uses reactive bottom light glow
+        let secondClickShowedOrb = freshRuleComposer.applyVoiceMicClickStateTransition()
+        check(!secondClickShowedOrb, "Subsequent mic click after first interaction must return false (no orb shown)")
+        check(controller.hasDroppedComposerToBottom && freshRuleComposer.isConsolidatedBar,
+              "Subsequent mic click must keep the chat box at the bottom")
+        check(!controller.isShowingFirstPromptCenterOrb,
+              "Subsequent mic click must NOT show the Voice Orb (`second.jpg`, `Computer Screen34.jpg`)")
+
+        // Also verify that if the user types text first on a new session, clicking mic does NOT show the orb and instead uses the reactive bottom glow
+        controller.resetFirstPromptVoiceState()
+        controller.hasCompletedFirstVoiceOrTextInteraction = true
+        let afterTypingShowedOrb = freshRuleComposer.applyVoiceMicClickStateTransition()
+        check(!afterTypingShowedOrb && !controller.isShowingFirstPromptCenterOrb && controller.hasDroppedComposerToBottom,
+              "Clicking mic after user has typed in session must drop box to bottom with reactive glow and NO orb")
+        controller.resetFirstPromptVoiceState()
+
+        if ProcessInfo.processInfo.environment["MUSE_RENDER_ORB_SHEET"] == "1" {
+            let glowSpecs: [(label: String, level: Double, time: TimeInterval, transcribing: Bool)] = [
+                ("1. Calm / Idle Glow (Computer Screen34.jpg)", 0.08, 0.0, false),
+                ("2. Warm Amber-Coral Voice Swell (Computer Screen3445.jpeg / second.jpg)", 0.88, 0.60, false),
+                ("3. Cool Ice-Cyan Voice Swell (Computer Screen344.jpeg)", 0.88, 1.81, false),
+                ("4. Settling / Transcribing Glow (C6omputer Screen.jpg)", 0.24, 1.15, true)
+            ]
+            let ruleSheet = VStack(spacing: 18) {
+                // Panel A: `first.jpg` — Untouched new session first mic click: center hero + 3D Voice Orb AND bottom dropped chat box
+                ZStack {
+                    Color(red: 0.03, green: 0.03, blue: 0.04)
+                    VStack(spacing: 18) {
+                        Text("What should we build in gadget?")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.88))
+                        LiquidGlassVoiceOrbView(
+                            orbFrame: 9,
+                            descriptor: VoiceOrbFrameDescriptor.descriptor(forFrame: 9),
+                            isRecording: true,
+                            isTranscribing: false,
+                            audioLevel: 0.36,
+                            duration: 1.2,
+                            fixedTimeOverride: 0.45,
+                            onTap: {}
+                        )
+                    }
+                    .offset(y: -44)
+
+                    VStack {
+                        Spacer()
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("|Ask Anything")
+                                .font(.system(size: 14))
+                                .foregroundStyle(Color.white.opacity(0.45))
+                            HStack(spacing: 12) {
+                                Image(nsImage: .huge("add-01")).resizable().frame(width: 14, height: 14).opacity(0.8)
+                                Text("building  feat/smart-...wler-service  ✦ muse-wonder-full-1.0  Xhigh ⌄")
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(Color.white.opacity(0.86))
+                                Spacer()
+                                MuseMicrophoneIcon(isActive: true, size: 20)
+                            }
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
+                        .frame(width: 680)
+                        .background(
+                            LiquidGlassCardBackground(cornerRadius: ComposerMetrics.cornerRadius, isDarkTopPill: true)
+                        )
+                        .padding(.bottom, 16)
+                    }
+                }
+                .frame(width: 740, height: 340)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                // Panel B: `second.jpg` & `Computer Screen34*.jpg` — Subsequent interactions with Reactive Bottom Light Glow (no orb)
+                ForEach(Array(glowSpecs.enumerated()), id: \.offset) { _, spec in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("|Ask Anything")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color.white.opacity(0.45))
+                        HStack(spacing: 12) {
+                            Image(nsImage: .huge("add-01")).resizable().frame(width: 14, height: 14).opacity(0.8)
+                            Text("building  feat/smart-...wler-service  ✦ muse-wonder-full-1.0  Xhigh ⌄")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.86))
+                            Spacer()
+                            MuseMicrophoneIcon(isActive: true, size: 20)
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                    .frame(width: 680)
+                    .background(
+                        LiquidGlassCardBackground(cornerRadius: ComposerMetrics.cornerRadius, isDarkTopPill: true)
+                            .overlay(alignment: .bottom) {
+                                VoiceReactiveBottomGlowView(
+                                    isRecording: !spec.transcribing,
+                                    isTranscribing: spec.transcribing,
+                                    audioLevel: spec.level,
+                                    fixedTimeOverride: spec.time
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: ComposerMetrics.cornerRadius, style: .continuous))
+                            }
+                    )
+                }
+
+                // Panel C: `ff3.jpg` — Compact Muse Credit Gauge Popover + Active vs Inactive Filled Microphone Icon
+                HStack(spacing: 28) {
+                    MuseCreditBatteryButton(controller: controller)
+                        .popoverContent
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color(red: 0.11, green: 0.12, blue: 0.14))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                                )
+                        )
+                        .environment(\.colorScheme, .dark)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Microphone Icon States (ff3.jpg)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.85))
+                        HStack(spacing: 18) {
+                            VStack(spacing: 6) {
+                                MuseMicrophoneIcon(isActive: false, size: 24)
+                                    .padding(10)
+                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+                                Text("Inactive")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(Color.white.opacity(0.6))
+                            }
+                            VStack(spacing: 6) {
+                                MuseMicrophoneIcon(isActive: true, size: 24)
+                                    .padding(10)
+                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.10)))
+                                Text("Active (Filled Capsule)")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(Color.white.opacity(0.9))
+                            }
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(red: 0.08, green: 0.10, blue: 0.12))
+                    )
+                }
+            }
+            .padding(20)
+            .background(Color(red: 0.02, green: 0.02, blue: 0.03))
+            .environment(\.chatBackground, .solidBlack)
+            .environment(\.colorScheme, .dark)
+
+            let popoverHost = NSHostingView(rootView: MuseCreditBatteryButton(controller: controller).popoverContent)
+            let popoverSize = popoverHost.fittingSize
+            check(
+                popoverSize.width <= 230 && popoverSize.height <= 230,
+                "MuseCreditBatteryButton popover should be compact (<= 230x230), got \(popoverSize)"
+            )
+
+            let ruleRenderer = ImageRenderer(content: ruleSheet)
+            ruleRenderer.scale = 2.0
+            if let cgImg = ruleRenderer.cgImage {
+                let rep = NSBitmapImageRep(cgImage: cgImg)
+                if let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: "/tmp/muse_first_and_reactive_glow_sheet.png"))
+                    print("Saved /tmp/muse_first_and_reactive_glow_sheet.png")
+                }
+            }
+        }
+
+        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, and backend state transitions verified.")
         exit(0)
     }
 }

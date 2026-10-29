@@ -193,6 +193,16 @@ struct GeneralSettings: View {
                         label: { $0.label }
                     )
                 }
+                SettingsRow("Chat background", detail: "Backdrop artwork behind the Liquid Glass composer in the chat area.") {
+                    Dropdown(
+                        selection: Binding(
+                            get: { state.preferences.chatBackground },
+                            set: { state.preferences.chatBackground = $0; state.preferences.persist() }
+                        ),
+                        values: PreferencesStore.ChatBackground.allCases,
+                        label: { $0.label }
+                    )
+                }
                 SettingsRow("Reduce motion", detail: "Overrides the system setting for PiCode's animations only.") {
                     Toggle("", isOn: Binding(
                         get: { state.preferences.reducedMotionOverride ?? false },

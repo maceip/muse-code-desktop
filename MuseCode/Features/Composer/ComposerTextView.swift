@@ -17,10 +17,9 @@ struct ComposerTextView: NSViewRepresentable {
     /// overlay can put itself on exactly the same spot without a magic number.
     static let textInset = NSSize(width: 2, height: 2)
 
-    /// Same size as the transcript content and the sidebar menu — the app's one
-    /// reading size (`Typography.baseSize`), so the box you type into and the words
-    /// you are answering are set at the same scale.
-    static let fontSize: CGFloat = Typography.baseSize
+    /// Prominent reading size (`18.5pt`) matching the `Search or Ask` Liquid Glass
+    /// input capsule in `Screen Recording 2026-10-28 at 23.23.35.mov`.
+    static let fontSize: CGFloat = 18.5
 
     /// The composer input pill uses a dark smoked Liquid Glass surface in both
     /// light and dark appearances, so text and placeholder use crisp light ink.
@@ -62,6 +61,7 @@ struct ComposerTextView: NSViewRepresentable {
     var onEscape: () -> Void
     var onMoveSuggestion: (Int) -> Void
     var onAcceptSuggestion: () -> Void
+    var onUserDirectEdit: (() -> Void)? = nil
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         /// Command-Return does not reach a text view as a newline command at all
@@ -73,7 +73,7 @@ struct ComposerTextView: NSViewRepresentable {
 
         var parent: ComposerTextView
         weak var textView: NSTextView?
-        var lastFocusTick = 0
+        var lastFocusTick = -1
         var isProgrammaticChange = false
 
         init(parent: ComposerTextView) {
@@ -83,6 +83,7 @@ struct ComposerTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard !isProgrammaticChange, let textView else { return }
             parent.text = textView.string
+            parent.onUserDirectEdit?()
         }
 
         /// Which modifiers are down *now*. The selector alone cannot answer this:
@@ -228,19 +229,25 @@ struct ComposerTextView: NSViewRepresentable {
         (textView as? PlaceholderTextView)?.placeholder = placeholder
         textView.isEditable = isEnabled
 
-        if textView.string != text {
+        if !textView.hasMarkedText(), textView.string != text {
             context.coordinator.isProgrammaticChange = true
+            let oldLength = (textView.string as NSString).length
             let selected = textView.selectedRange()
             textView.string = text
             let limit = (text as NSString).length
-            textView.setSelectedRange(NSRange(location: min(selected.location, limit), length: 0))
+            let newLocation = selected.location >= oldLength ? limit : min(selected.location, limit)
+            textView.setSelectedRange(NSRange(location: newLocation, length: 0))
             context.coordinator.isProgrammaticChange = false
         }
 
         if context.coordinator.lastFocusTick != focusTick {
             context.coordinator.lastFocusTick = focusTick
             DispatchQueue.main.async {
-                textView.window?.makeFirstResponder(textView)
+                guard let window = textView.window else { return }
+                if window.firstResponder !== textView {
+                    window.makeFirstResponder(textView)
+                }
+                (textView as? PlaceholderTextView)?.refreshCaretState()
             }
         }
     }
@@ -256,6 +263,7 @@ final class PlaceholderTextView: NSTextView {
     private let glowingCaret = GlowingCaretView(frame: .zero)
     private var blinkTimer: Timer?
     private var lastActivityTime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    private var isUpdatingCaret = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -276,6 +284,11 @@ final class PlaceholderTextView: NSTextView {
         blinkTimer?.invalidate()
     }
 
+    override func paste(_ sender: Any?) {
+        // Always paste plain UTF-8 text directly to avoid main-thread RTF/HTML WebKit pasteboard conversion hangs.
+        super.pasteAsPlainText(sender)
+    }
+
     private func configureGlowingCaret() {
         wantsLayer = true
         layer?.masksToBounds = false
@@ -289,16 +302,30 @@ final class PlaceholderTextView: NSTextView {
 
     override func didAddSubview(_ subview: NSView) {
         super.didAddSubview(subview)
+        // Keep NSTextInsertionIndicator unhidden and alpha=1.0 so macOS Dictation (CampoLightweightUI)
+        // validates its positioningView layout rect, while setting its tint color to .clear so our
+        // custom GlowingCaretView renders the visible luminous cursor bar.
         if subview !== glowingCaret,
-           String(describing: type(of: subview)).localizedCaseInsensitiveContains("InsertionIndicator") {
-            subview.isHidden = true
-            subview.alphaValue = 0
+           let indicator = subview as? NSTextInsertionIndicator {
+            indicator.color = .clear
         }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        updateCaretGeometryAndVisibility(resetBlink: true)
+        if window == nil {
+            blinkTimer?.invalidate()
+            blinkTimer = nil
+        } else {
+            updateCaretGeometryAndVisibility(resetBlink: true)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window, self.isEditable else { return }
+                if window.firstResponder == nil || window.firstResponder === window {
+                    window.makeFirstResponder(self)
+                }
+                self.updateCaretGeometryAndVisibility(resetBlink: true)
+            }
+        }
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -315,13 +342,23 @@ final class PlaceholderTextView: NSTextView {
         if ok {
             blinkTimer?.invalidate()
             blinkTimer = nil
-            glowingCaret.isHidden = true
+            updateCaretGeometryAndVisibility(resetBlink: false)
         }
         return ok
     }
 
     override func didChangeText() {
         super.didChangeText()
+        updateCaretGeometryAndVisibility(resetBlink: true)
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        updateCaretGeometryAndVisibility(resetBlink: true)
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
         updateCaretGeometryAndVisibility(resetBlink: true)
     }
 
@@ -337,17 +374,17 @@ final class PlaceholderTextView: NSTextView {
     override func layout() {
         super.layout()
         for sub in subviews where sub !== glowingCaret {
-            if String(describing: type(of: sub)).localizedCaseInsensitiveContains("InsertionIndicator") {
-                sub.isHidden = true
-                sub.alphaValue = 0
+            if let indicator = sub as? NSTextInsertionIndicator {
+                indicator.color = .clear
             }
         }
-        updateCaretGeometryAndVisibility(resetBlink: false)
+        updateCaretGeometryAndVisibility(resetBlink: false, ensureLayout: false)
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-        // Suppress the stock 1px system caret; position our custom glowing capsule caret instead.
-        updateCaretGeometryAndVisibility(resetBlink: false)
+        // Call super with .clear so AppKit updates NSTextInsertionIndicator's geometry for
+        // macOS Dictation (CampoLightweightUI) without drawing the stock 1px caret.
+        super.drawInsertionPoint(in: rect, color: .clear, turnedOn: flag)
     }
 
     override func updateInsertionPointStateAndRestartTimer(_ restartFlag: Bool) {
@@ -355,24 +392,35 @@ final class PlaceholderTextView: NSTextView {
         updateCaretGeometryAndVisibility(resetBlink: restartFlag)
     }
 
+    func refreshCaretState() {
+        updateCaretGeometryAndVisibility(resetBlink: true)
+    }
+
     private func startBlinkTimer() {
         blinkTimer?.invalidate()
-        blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.085, repeats: true) { [weak self] _ in
             guard let self else { return }
+            guard !self.glowingCaret.isHidden, self.window?.isKeyWindow == true else { return }
             let elapsed = ProcessInfo.processInfo.systemUptime - self.lastActivityTime
+            let targetAlpha: CGFloat
             if elapsed < 0.55 {
-                self.glowingCaret.alphaValue = 1.0
+                targetAlpha = 1.0
             } else {
                 // Smooth sinusoidal pulse/blink so the glow breathes naturally
                 let phase = (elapsed - 0.55) * .pi * 1.85
                 let alpha = CGFloat(0.5 + 0.5 * cos(phase))
-                self.glowingCaret.alphaValue = max(0.08, min(1.0, alpha))
+                targetAlpha = max(0.08, min(1.0, alpha))
+            }
+            if abs(self.glowingCaret.alphaValue - targetAlpha) > 0.015 {
+                self.glowingCaret.alphaValue = targetAlpha
             }
         }
+        timer.tolerance = 0.025
+        blinkTimer = timer
     }
 
     /// Computes the exact insertion point rect in the text view's coordinate system.
-    func currentCaretRect() -> NSRect {
+    func currentCaretRect(ensureLayout: Bool = true) -> NSRect {
         let lineH = ComposerTextView.lineHeight
         let origin = textContainerOrigin
         let padding = textContainer?.lineFragmentPadding ?? 0
@@ -382,11 +430,13 @@ final class PlaceholderTextView: NSTextView {
             return NSRect(x: origin.x + padding, y: origin.y, width: 2.5, height: lineH)
         }
 
-        layoutManager.ensureLayout(for: textContainer)
+        if ensureLayout {
+            layoutManager.ensureLayout(for: textContainer)
+        }
         let charRange = selectedRange()
         let textLength = (string as NSString).length
 
-        if textLength == 0 {
+        if textLength == 0 || layoutManager.numberOfGlyphs == 0 {
             return NSRect(x: origin.x + padding, y: origin.y, width: 2.5, height: lineH)
         }
 
@@ -431,31 +481,43 @@ final class PlaceholderTextView: NSTextView {
         }
     }
 
-    private func updateCaretGeometryAndVisibility(resetBlink: Bool) {
+    private func updateCaretGeometryAndVisibility(resetBlink: Bool, ensureLayout: Bool = true) {
+        guard !isUpdatingCaret else { return }
+        isUpdatingCaret = true
+        defer { isUpdatingCaret = false }
+
         if resetBlink {
             lastActivityTime = ProcessInfo.processInfo.systemUptime
             glowingCaret.alphaValue = 1.0
         }
-        let isFocused = (window?.firstResponder === self) && isEditable && selectedRange().length == 0
-        glowingCaret.isHidden = !isFocused
-        guard isFocused else { return }
+        let isFocusedOrEmpty = ((window?.firstResponder === self) || string.isEmpty)
+            && isEditable
+            && selectedRange().length == 0
+            && !hasMarkedText()
+        glowingCaret.isHidden = !isFocusedOrEmpty
+        guard isFocusedOrEmpty else { return }
 
-        if blinkTimer == nil {
+        if blinkTimer == nil && (window?.firstResponder === self) {
             startBlinkTimer()
+        } else if window?.firstResponder !== self {
+            glowingCaret.alphaValue = 1.0
         }
 
-        let bleed: CGFloat = 6
-        let caretRect = currentCaretRect()
+        let bleed: CGFloat = 14
+        let caretRect = currentCaretRect(ensureLayout: ensureLayout)
         let frame = NSRect(
             x: caretRect.minX - bleed,
             y: caretRect.minY - bleed,
             width: 2.5 + bleed * 2,
             height: caretRect.height + bleed * 2
         )
+        let sizeChanged = glowingCaret.frame.size != frame.size
         if glowingCaret.frame != frame {
             glowingCaret.frame = frame
         }
-        glowingCaret.needsDisplay = true
+        if sizeChanged {
+            glowingCaret.needsDisplay = true
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -489,9 +551,9 @@ final class GlowingCaretView: NSView {
 
         ctx.clear(bounds)
 
-        let bleed: CGFloat = 6
+        let bleed: CGFloat = 14
         let barWidth: CGFloat = 2.4
-        let barHeight = max(14, bounds.height - bleed * 2)
+        let barHeight = max(16, bounds.height - bleed * 2)
         let barRect = CGRect(
             x: (bounds.width - barWidth) / 2,
             y: bleed,
@@ -499,19 +561,19 @@ final class GlowingCaretView: NSView {
             height: barHeight
         )
         let centerX = barRect.midX
-        let topFocus = CGPoint(x: centerX, y: barRect.minY + barHeight * 0.25)
-        let bottomFocus = CGPoint(x: centerX, y: barRect.minY + barHeight * 0.75)
+        let topFocus = CGPoint(x: centerX, y: barRect.minY + barHeight * 0.24)
+        let bottomFocus = CGPoint(x: centerX, y: barRect.minY + barHeight * 0.78)
         let midFocus = CGPoint(x: centerX, y: barRect.midY)
 
         let colorSpace = CGColorSpaceCreateDeviceRGB()
 
-        // 1. Tight upper icy-cyan / sky-blue radial bloom (fades to 0.0 inside bleed so it never clips into a box)
+        // 1. Soft upper icy-cyan / sky-blue radial bloom illuminating the dark pill (`Und 9.jpg` & `Untitled 9.jpg`, fades to 0.0 inside bleed)
         if let topGradient = CGGradient(
             colorsSpace: colorSpace,
             colors: [
-                NSColor(srgbRed: 0.62, green: 0.88, blue: 1.0, alpha: 0.42).cgColor,
-                NSColor(srgbRed: 0.45, green: 0.78, blue: 1.0, alpha: 0.14).cgColor,
-                NSColor(srgbRed: 0.45, green: 0.78, blue: 1.0, alpha: 0.0).cgColor
+                NSColor(srgbRed: 0.52, green: 0.88, blue: 1.0, alpha: 0.56).cgColor,
+                NSColor(srgbRed: 0.36, green: 0.76, blue: 1.0, alpha: 0.22).cgColor,
+                NSColor(srgbRed: 0.28, green: 0.68, blue: 1.0, alpha: 0.0).cgColor
             ] as CFArray,
             locations: [0.0, 0.45, 1.0]
         ) {
@@ -520,18 +582,18 @@ final class GlowingCaretView: NSView {
                 startCenter: topFocus,
                 startRadius: 0.4,
                 endCenter: topFocus,
-                endRadius: 4.8,
+                endRadius: 11.5,
                 options: []
             )
         }
 
-        // 2. Tight lower warm golden-amber radial bloom (fades to 0.0 inside bleed so it never clips into a box)
+        // 2. Soft lower warm golden-amber / orange radial bloom (`Und 9.jpg` & `Untitled 9.jpg`, fades to 0.0 inside bleed)
         if let bottomGradient = CGGradient(
             colorsSpace: colorSpace,
             colors: [
-                NSColor(srgbRed: 1.0, green: 0.78, blue: 0.44, alpha: 0.48).cgColor,
-                NSColor(srgbRed: 1.0, green: 0.68, blue: 0.32, alpha: 0.16).cgColor,
-                NSColor(srgbRed: 1.0, green: 0.68, blue: 0.32, alpha: 0.0).cgColor
+                NSColor(srgbRed: 1.0, green: 0.74, blue: 0.36, alpha: 0.62).cgColor,
+                NSColor(srgbRed: 1.0, green: 0.58, blue: 0.20, alpha: 0.26).cgColor,
+                NSColor(srgbRed: 1.0, green: 0.48, blue: 0.12, alpha: 0.0).cgColor
             ] as CFArray,
             locations: [0.0, 0.45, 1.0]
         ) {
@@ -540,7 +602,7 @@ final class GlowingCaretView: NSView {
                 startCenter: bottomFocus,
                 startRadius: 0.4,
                 endCenter: bottomFocus,
-                endRadius: 5.0,
+                endRadius: 12.0,
                 options: []
             )
         }
@@ -549,8 +611,8 @@ final class GlowingCaretView: NSView {
         ctx.saveGState()
         ctx.setShadow(
             offset: .zero,
-            blur: 3.2,
-            color: NSColor(srgbRed: 1.0, green: 0.88, blue: 0.68, alpha: 0.65).cgColor
+            blur: 4.5,
+            color: NSColor(srgbRed: 1.0, green: 0.86, blue: 0.64, alpha: 0.78).cgColor
         )
         let corePath = CGPath(
             roundedRect: barRect,

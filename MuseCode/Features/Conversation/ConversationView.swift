@@ -153,10 +153,10 @@ struct ConversationView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+                .scrollContentBackground(.hidden)
                 .defaultScrollAnchor(.bottom)
             }
             .coordinateSpace(name: transcriptSpace)
-            .background(AppTheme.background)
             .background(
                 GeometryReader { proxy in
                     Color.clear.preference(key: TranscriptViewportHeightKey.self,

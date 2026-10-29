@@ -21,9 +21,47 @@ import AppKit
 import SwiftUI
 
 enum AppTheme {
-    /// The base background: #181818 in the dark appearance, the system's text
+    /// The base chat area background: deep obsidian (#050607) in the dark appearance
+    /// matching `UntiSlehd 8.png` & `UntiSDDtlehd 8.png`, and the system's text
     /// background in the light one.
-    static let background = adaptive(dark: 0x181818, light: NSColor(white: 1, alpha: 1))
+    static let background = adaptive(dark: 0x050607, light: NSColor(white: 1, alpha: 1))
+
+    private static let chatBackgroundCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 8
+        return cache
+    }()
+
+    /// Loads the high-resolution chat area background artwork (`chat-bg-forest` or `chat-bg-midnight`)
+    /// from the app bundle's asset catalog or disk fallback (`Assets.xcassets/ChatBackgrounds`).
+    static func chatBackgroundImage(for style: PreferencesStore.ChatBackground) -> NSImage? {
+        guard let assetName = style.assetName else { return nil }
+        let key = assetName as NSString
+        if let cached = chatBackgroundCache.object(forKey: key) {
+            return cached
+        }
+        for candidate in [assetName, "ChatBackgrounds/\(assetName)"] {
+            if let img = NSImage(named: candidate) {
+                chatBackgroundCache.setObject(img, forKey: key)
+                return img
+            }
+        }
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let cwdRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("MuseCode")
+        for root in [repoRoot, cwdRoot] {
+            let pngURL = root.appendingPathComponent("Assets.xcassets/ChatBackgrounds/\(assetName).imageset/\(assetName).png")
+            if FileManager.default.fileExists(atPath: pngURL.path),
+               let img = NSImage(contentsOf: pngURL) {
+                chatBackgroundCache.setObject(img, forKey: key)
+                return img
+            }
+        }
+        return nil
+    }
 
     /// A surface one step above the base: #212121 in the dark appearance, the
     /// system's text background in the light one.
@@ -188,5 +226,67 @@ extension NSColor {
             blue: CGFloat(rgb & 0xff) / 255,
             alpha: 1
         )
+    }
+}
+
+// MARK: - Chat Area Background & Liquid Glass Environment Geometry (`UntiSlehd 8.png` & `UntiSDDtlehd 8.png`)
+
+private struct SessionPaneSizeEnvironmentKey: EnvironmentKey {
+    static let defaultValue: CGSize = CGSize(width: 1147, height: 820)
+}
+
+private struct ChatBackgroundEnvironmentKey: EnvironmentKey {
+    static let defaultValue: PreferencesStore.ChatBackground = .forestGlass
+}
+
+private struct HasRootChatBackgroundEnvironmentKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
+extension EnvironmentValues {
+    var sessionPaneSize: CGSize {
+        get { self[SessionPaneSizeEnvironmentKey.self] }
+        set { self[SessionPaneSizeEnvironmentKey.self] = newValue }
+    }
+
+    var chatBackground: PreferencesStore.ChatBackground {
+        get { self[ChatBackgroundEnvironmentKey.self] }
+        set { self[ChatBackgroundEnvironmentKey.self] = newValue }
+    }
+
+    var hasRootChatBackground: Bool {
+        get { self[HasRootChatBackgroundEnvironmentKey.self] }
+        set { self[HasRootChatBackgroundEnvironmentKey.self] = newValue }
+    }
+}
+
+/// Renders the active Muse chat area background (`Forest Glass` from `UntiSDDtlehd 8.png`,
+/// `Midnight Glow` from `UntiSlehd 8.png`, or `Obsidian Black`).
+struct MuseChatBackgroundView: View {
+    var style: PreferencesStore.ChatBackground
+
+    var body: some View {
+        GeometryReader { proxy in
+            let w = max(1, proxy.size.width)
+            let h = max(1, proxy.size.height)
+            ZStack {
+                switch style {
+                case .forestGlass:
+                    Color(red: 0.031, green: 0.035, blue: 0.031)
+                case .midnightGlow, .solidBlack:
+                    Color(red: 0.004, green: 0.008, blue: 0.012)
+                }
+
+                if let nsImage = AppTheme.chatBackgroundImage(for: style) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: w, height: h, alignment: .center)
+                        .clipped()
+                }
+            }
+            .frame(width: w, height: h)
+        }
+        .allowsHitTesting(false)
     }
 }

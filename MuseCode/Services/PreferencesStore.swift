@@ -49,7 +49,40 @@ final class PreferencesStore {
         }
     }
 
+    enum ChatBackground: String, CaseIterable, Identifiable {
+        case forestGlass
+        case midnightGlow
+        case solidBlack
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .forestGlass: return "Forest Glass (Liquid M)"
+            case .midnightGlow: return "Midnight Glow (Blurred M)"
+            case .solidBlack: return "Obsidian Black"
+            }
+        }
+
+        var shortLabel: String {
+            switch self {
+            case .forestGlass: return "Forest"
+            case .midnightGlow: return "Midnight"
+            case .solidBlack: return "Obsidian"
+            }
+        }
+
+        var assetName: String? {
+            switch self {
+            case .forestGlass: return "chat-bg-forest"
+            case .midnightGlow: return "chat-bg-midnight"
+            case .solidBlack: return nil
+            }
+        }
+    }
+
     var appearance: Appearance
+    var chatBackground: ChatBackground
     var sendKey: SendKey
     var showInspector: Bool
     var showSidebar: Bool
@@ -97,6 +130,7 @@ final class PreferencesStore {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         appearance = Appearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .system
+        chatBackground = ChatBackground(rawValue: defaults.string(forKey: Keys.chatBackground) ?? "") ?? .forestGlass
         sendKey = SendKey(rawValue: defaults.string(forKey: Keys.sendKey) ?? "") ?? .returnKey
         showInspector = defaults.object(forKey: Keys.showInspector) as? Bool ?? true
         showSidebar = defaults.object(forKey: Keys.showSidebar) as? Bool ?? true
@@ -132,6 +166,7 @@ final class PreferencesStore {
 
     func persist() {
         defaults.set(appearance.rawValue, forKey: Keys.appearance)
+        defaults.set(chatBackground.rawValue, forKey: Keys.chatBackground)
         defaults.set(sendKey.rawValue, forKey: Keys.sendKey)
         defaults.set(showInspector, forKey: Keys.showInspector)
         defaults.set(showSidebar, forKey: Keys.showSidebar)
@@ -228,6 +263,7 @@ final class PreferencesStore {
 
     private enum Keys {
         static let appearance = "appearance"
+        static let chatBackground = "chatBackground"
         static let sendKey = "sendKey"
         static let showInspector = "showInspector"
         static let showSidebar = "showSidebar"

@@ -42,6 +42,9 @@ struct SessionView: View {
 
     @State private var composerHeight: CGFloat = 0
     @State private var composerTop: CGFloat = 0
+    @State private var paneSize: CGSize = CGSize(width: 1147, height: 820)
+    @Environment(\.hasRootChatBackground) private var hasRootChatBackground
+    @Environment(\.sessionPaneSize) private var rootSessionPaneSize
     /// Whether the empty-chat landing is drawn: the question with the composer
     /// right under it, both centred in the pane. It trails `isLanding` so the
     /// change can be animated (or not) depending on what caused it.
@@ -76,16 +79,54 @@ struct SessionView: View {
                 // itself, and its first row appears exactly where the flying
                 // copy lands.
                 .opacity(isShowingLanding || flyingPrompt != nil ? 0 : 1)
+                .background {
+                    if !hasRootChatBackground {
+                        GeometryReader { geo in
+                            MuseChatBackgroundView(style: state.preferences.chatBackground)
+                                .onAppear {
+                                    if geo.size.width > 10 && geo.size.height > 10 {
+                                        paneSize = geo.size
+                                    }
+                                }
+                                .onChange(of: geo.size) { _, newSize in
+                                    if newSize.width > 10 && newSize.height > 10 {
+                                        paneSize = newSize
+                                    }
+                                }
+                        }
+                    }
+                }
                 .overlay(alignment: .bottom) { composerFade }
                 .overlay { composerLayer }
                 .overlay(alignment: .top) { promptFlight }
                 .coordinateSpace(name: Self.paneSpace)
+                .environment(\.sessionPaneSize, hasRootChatBackground ? rootSessionPaneSize : paneSize)
+                .environment(\.chatBackground, state.preferences.chatBackground)
+                .contextMenu {
+                    Section("Chat Area Background") {
+                        ForEach(PreferencesStore.ChatBackground.allCases) { bg in
+                            Button {
+                                state.preferences.chatBackground = bg
+                                state.preferences.persist()
+                            } label: {
+                                if state.preferences.chatBackground == bg {
+                                    Label(bg.label, systemImage: "checkmark")
+                                } else {
+                                    Text(bg.label)
+                                }
+                            }
+                        }
+                    }
+                }
         }
         // Notifications no longer float over the transcript: the content header's
         // bell opens them in the right panel, where the list has the full height
         // of the column and cannot cover the conversation.
         .animation(.easeInOut(duration: 0.18), value: controller.trustState)
         .onAppear { syncLanding() }
+        .onChange(of: ObjectIdentifier(controller)) { _, _ in
+            syncLanding()
+        }
         .onChange(of: isLanding) { wasLanding, landing in
             syncLanding(sent: wasLanding && !landing)
         }
@@ -99,6 +140,7 @@ struct SessionView: View {
         let waitingForOpen = state.sessionOpeningKey == state.selectedSessionKey
             && state.sessionOpenRevision != state.sessionOpenCompletedRevision
         return controller.items.isEmpty
+            && !controller.hasDroppedComposerToBottom
             && !controller.isLoadingTranscriptHistory
             && !waitingForOpen
     }
@@ -138,18 +180,29 @@ struct SessionView: View {
     /// both places (only the spacers around it come and go), so it keeps its
     /// focus and draft while it moves.
     private var composerLayer: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            if isShowingLanding {
-                BuildPromptHero(projectName: controller.projectName)
-                    .padding(.bottom, 6)
-                    .transition(.opacity.combined(with: .offset(y: -16)))
+        ZStack {
+            if controller.isShowingFirstPromptCenterOrb && controller.items.isEmpty {
+                VStack(spacing: 18) {
+                    BuildPromptHero(projectName: controller.projectName)
+                    FirstPromptCenterVoiceOrbView(controller: controller)
+                }
+                .offset(y: -36)
+                .transition(.opacity.combined(with: .scale(scale: 0.92)))
             }
-            ConversationColumn { composerStack }
-                .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
-                .onPreferenceChange(ComposerTopKey.self) { composerTop = $0 }
-            if isShowingLanding {
+
+            VStack(spacing: 0) {
                 Spacer(minLength: 0)
+                if isShowingLanding && state.preferences.chatBackground == .solidBlack {
+                    BuildPromptHero(projectName: controller.projectName)
+                        .padding(.bottom, 6)
+                        .transition(.opacity.combined(with: .offset(y: -16)))
+                }
+                ConversationColumn { composerStack }
+                    .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
+                    .onPreferenceChange(ComposerTopKey.self) { composerTop = $0 }
+                if isShowingLanding {
+                    Spacer(minLength: 0)
+                }
             }
         }
     }

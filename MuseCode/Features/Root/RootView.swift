@@ -36,6 +36,7 @@ struct RootView: View {
     @State private var sheet: RootSheet?
     @State private var inspectorWidth: CGFloat = 328
     @State private var inspectorWidthAtDragStart: CGFloat?
+    @State private var detailPaneSize: CGSize = CGSize(width: 1147, height: 820)
 
     private var showsAppRail: Bool {
         !isSidebarVisible || state.isSettingsPresented
@@ -325,6 +326,32 @@ struct RootView: View {
     private var titlebarTrailingControls: some View {
         if state.phase == .ready, state.activeController != nil, !state.isSettingsPresented {
             HStack(spacing: 8) {
+                TitlebarIconButton(
+                    systemImage: "image-01",
+                    help: "Chat background: \(state.preferences.chatBackground.label) (click to switch)",
+                    isActive: state.preferences.chatBackground != .solidBlack
+                ) {
+                    let all = PreferencesStore.ChatBackground.allCases
+                    if let idx = all.firstIndex(of: state.preferences.chatBackground) {
+                        state.preferences.chatBackground = all[(idx + 1) % all.count]
+                        state.preferences.persist()
+                    }
+                }
+                .contextMenu {
+                    ForEach(PreferencesStore.ChatBackground.allCases) { bg in
+                        Button {
+                            state.preferences.chatBackground = bg
+                            state.preferences.persist()
+                        } label: {
+                            if state.preferences.chatBackground == bg {
+                                Label(bg.label, systemImage: "checkmark")
+                            } else {
+                                Text(bg.label)
+                            }
+                        }
+                    }
+                }
+
                 TitlebarNotificationsButton(state: state)
 
                 TitlebarIconButton(
@@ -398,7 +425,41 @@ struct RootView: View {
             }
         }
         .clipped()
-        .background(AppTheme.background)
+        .background {
+            GeometryReader { geo in
+                MuseChatBackgroundView(style: state.preferences.chatBackground)
+                    .onAppear {
+                        if geo.size.width > 10 && geo.size.height > 10 {
+                            detailPaneSize = geo.size
+                        }
+                    }
+                    .onChange(of: geo.size) { _, newSize in
+                        if newSize.width > 10 && newSize.height > 10 {
+                            detailPaneSize = newSize
+                        }
+                    }
+            }
+        }
+        .coordinateSpace(name: "picode-session-pane")
+        .environment(\.sessionPaneSize, detailPaneSize)
+        .environment(\.chatBackground, state.preferences.chatBackground)
+        .environment(\.hasRootChatBackground, true)
+        .contextMenu {
+            Section("Chat Area Background") {
+                ForEach(PreferencesStore.ChatBackground.allCases) { bg in
+                    Button {
+                        state.preferences.chatBackground = bg
+                        state.preferences.persist()
+                    } label: {
+                        if state.preferences.chatBackground == bg {
+                            Label(bg.label, systemImage: "checkmark")
+                        } else {
+                            Text(bg.label)
+                        }
+                    }
+                }
+            }
+        }
         .animation(.easeInOut(duration: 0.22), value: state.isInspectorVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

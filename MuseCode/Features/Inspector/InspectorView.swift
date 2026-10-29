@@ -50,7 +50,9 @@ struct InspectorView: View {
                 )
             }
         }
-        .background(AppTheme.elevated)
+        .background(
+            LiquidGlassCardBackground(cornerRadius: 14, isDarkTopPill: false)
+        )
     }
 }
 
@@ -74,7 +76,6 @@ struct MuseRightSidebarPanel: View {
             .frame(maxWidth: .infinity)
         }
         .padding(10)
-        .background(AppTheme.elevated)
     }
 }
 
@@ -258,11 +259,11 @@ struct MuseOverviewCard: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(AppTheme.composerFill.opacity(0.55))
+                .fill(Color(red: 0.08, green: 0.11, blue: 0.14, opacity: 0.46))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(AppTheme.cardStroke, lineWidth: 1)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
         )
         .sheet(isPresented: $showContextSheet) {
             VStack(spacing: 0) {
@@ -612,11 +613,11 @@ struct MuseAgentMessagesCard: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(AppTheme.composerFill.opacity(0.55))
+                .fill(Color(red: 0.08, green: 0.11, blue: 0.14, opacity: 0.46))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(AppTheme.cardStroke, lineWidth: 1)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
         )
     }
 

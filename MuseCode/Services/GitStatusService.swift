@@ -203,37 +203,12 @@ struct GitStatusService {
         guard let gitURL = executable ?? PiDiscoveryService.resolveExecutable(named: "git") else {
             return PiDiscoveryService.CommandResult(stdout: "", stderr: "git executable not found on PATH", exitCode: -1)
         }
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = gitURL
-                process.arguments = arguments
-                process.standardInput = FileHandle.nullDevice
-                let out = Pipe()
-                let err = Pipe()
-                process.standardOutput = out
-                process.standardError = err
-
-                do {
-                    try process.run()
-                } catch {
-                    continuation.resume(returning: PiDiscoveryService.CommandResult(
-                        stdout: "",
-                        stderr: error.localizedDescription,
-                        exitCode: -1
-                    ))
-                    return
-                }
-
-                let outData = (try? out.fileHandleForReading.readToEnd()) ?? Data()
-                let errData = (try? err.fileHandleForReading.readToEnd()) ?? Data()
-                process.waitUntilExit()
-                continuation.resume(returning: PiDiscoveryService.CommandResult(
-                    stdout: String(data: outData, encoding: .utf8) ?? "",
-                    stderr: String(data: errData, encoding: .utf8) ?? "",
-                    exitCode: process.terminationStatus
-                ))
-            }
-        }
+        return await PiDiscoveryService().run(
+            executable: gitURL,
+            arguments: arguments,
+            directory: URL(fileURLWithPath: NSHomeDirectory()),
+            environment: ["GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"],
+            timeout: 8.0
+        )
     }
 }

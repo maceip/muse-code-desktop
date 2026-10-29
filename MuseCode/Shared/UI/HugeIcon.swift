@@ -41,11 +41,22 @@ extension Label where Title == Text, Icon == Image {
 }
 
 extension NSImage {
-    /// Resolves a glyph from `Assets.xcassets/Hugeicons` or `Assets.xcassets/SessionIcons`.
+    private static let hugeIconCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 256
+        return cache
+    }()
+
+    /// Resolves a glyph from `Assets.xcassets/Hugeicons` or `Assets.xcassets/SessionIcons` with an in-memory cache.
     static func huge(_ name: String) -> NSImage {
-        for assetName in ["Hugeicons/\(name)", "SessionIcons/\(name)", name] {
+        let key = name as NSString
+        if let cached = hugeIconCache.object(forKey: key) {
+            return cached
+        }
+        for assetName in [name, "Hugeicons/\(name)", "SessionIcons/\(name)"] {
             if let image = NSImage(named: assetName) {
                 image.isTemplate = true
+                hugeIconCache.setObject(image, forKey: key)
                 return image
             }
         }
@@ -62,12 +73,14 @@ extension NSImage {
                 if FileManager.default.fileExists(atPath: svgURL.path),
                    let image = NSImage(contentsOf: svgURL) {
                     image.isTemplate = true
+                    hugeIconCache.setObject(image, forKey: key)
                     return image
                 }
             }
         }
         if let sfSymbol = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
             sfSymbol.isTemplate = true
+            hugeIconCache.setObject(sfSymbol, forKey: key)
             return sfSymbol
         }
         let fallback = NSImage()

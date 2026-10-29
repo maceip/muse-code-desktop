@@ -750,6 +750,10 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
         entries.append(.object(entryObj))
     }
 
+    private var cachedCatalogModels: [JSONValue]?
+    private var cachedCatalogContributorMode: Bool?
+    private var cachedCatalogTimestamp: TimeInterval = 0
+
     private func resolveModelObject(for id: String) -> PiModel? {
         let normalized = Self.normalizeModelID(id) ?? id
         let catalog = availableModels().compactMap(PiModel.init(json:))
@@ -770,47 +774,60 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
 
     private func availableModels() -> [JSONValue] {
         let userSettings = Self.readUserSettings()
-        var models: [JSONValue] = []
-        var seen = Set<String>()
-
-        if let catalogFiles = try? FileManager.default.contentsOfDirectory(
-            at: PiPaths.modelCatalogDirectory,
-            includingPropertiesForKeys: nil
-        ) {
-            for file in catalogFiles where file.pathExtension == "json" {
-                guard let data = try? Data(contentsOf: file),
-                      let json = try? JSONCoding.decode(data),
-                      let rows = json.array("rows") else { continue }
-                for row in rows {
-                    guard let modelId = row.string("model_id"), !modelId.isEmpty else { continue }
-                    if row["supports_image_generation"]?.boolValue == true { continue }
-                    let visibility = row.string("visibility") ?? "visible"
-                    let isContributor = modelId.hasSuffix("-contributor")
-                    if visibility == "hidden" && !(isContributor && userSettings.contributorModeEnabled) {
-                        continue
+        let now = ProcessInfo.processInfo.systemUptime
+        let baseModels: [JSONValue]
+        if let cached = cachedCatalogModels,
+           cachedCatalogContributorMode == userSettings.contributorModeEnabled,
+           now - cachedCatalogTimestamp < 30.0 {
+            baseModels = cached
+        } else {
+            var parsed: [JSONValue] = []
+            var seenCatalog = Set<String>()
+            if let catalogFiles = try? FileManager.default.contentsOfDirectory(
+                at: PiPaths.modelCatalogDirectory,
+                includingPropertiesForKeys: nil
+            ) {
+                for file in catalogFiles where file.pathExtension == "json" {
+                    guard let data = try? Data(contentsOf: file),
+                          let json = try? JSONCoding.decode(data),
+                          let rows = json.array("rows") else { continue }
+                    for row in rows {
+                        guard let modelId = row.string("model_id"), !modelId.isEmpty else { continue }
+                        if row["supports_image_generation"]?.boolValue == true { continue }
+                        let visibility = row.string("visibility") ?? "visible"
+                        let isContributor = modelId.hasSuffix("-contributor")
+                        if visibility == "hidden" && !(isContributor && userSettings.contributorModeEnabled) {
+                            continue
+                        }
+                        guard seenCatalog.insert(modelId).inserted else { continue }
+                        let label = row.string("display_label") ?? modelId
+                        let provider = row.string("provider_id") ?? "meta"
+                        let contextLimit = row.int("context_limit")
+                        let outputLimit = row.int("output_limit")
+                        let efforts = row.array("reasoning_effort_variants")?
+                            .compactMap { $0.string("tier") } ?? Self.efforts
+                        parsed.append(AgentWire.model(
+                            id: modelId,
+                            name: label,
+                            provider: provider,
+                            reasoning: !efforts.isEmpty,
+                            thinkingEfforts: efforts.isEmpty ? Self.efforts : efforts,
+                            images: true,
+                            contextWindow: contextLimit,
+                            maxTokens: outputLimit
+                        ))
                     }
-                    guard seen.insert(modelId).inserted else { continue }
-                    let label = row.string("display_label") ?? modelId
-                    let provider = row.string("provider_id") ?? "meta"
-                    let contextLimit = row.int("context_limit")
-                    let outputLimit = row.int("output_limit")
-                    let efforts = row.array("reasoning_effort_variants")?
-                        .compactMap { $0.string("tier") } ?? Self.efforts
-                    models.append(AgentWire.model(
-                        id: modelId,
-                        name: label,
-                        provider: provider,
-                        reasoning: !efforts.isEmpty,
-                        thinkingEfforts: efforts.isEmpty ? Self.efforts : efforts,
-                        images: true,
-                        contextWindow: contextLimit,
-                        maxTokens: outputLimit
-                    ))
                 }
             }
+            cachedCatalogModels = parsed
+            cachedCatalogContributorMode = userSettings.contributorModeEnabled
+            cachedCatalogTimestamp = now
+            baseModels = parsed
         }
 
-        if !selectedModel.isEmpty, selectedModel != "default", seen.insert(selectedModel).inserted {
+        var models = baseModels
+        let hasSelected = models.contains { $0.string("id") == selectedModel }
+        if !selectedModel.isEmpty, selectedModel != "default", !hasSelected {
             models.insert(AgentWire.model(
                 id: selectedModel,
                 name: selectedModel,
@@ -872,14 +889,30 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
         process.standardInput = FileHandle.nullDevice
         currentBashProcess = process
         defer { currentBashProcess = nil }
+
+        var outData = Data()
+        var errData = Data()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            outData = (try? stdout.fileHandleForReading.readToEnd()) ?? Data()
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errData = (try? stderr.fileHandleForReading.readToEnd()) ?? Data()
+            group.leave()
+        }
+
         do {
             try process.run()
             process.waitUntilExit()
         } catch {
             return (error.localizedDescription, 1, false)
         }
-        let outText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let errText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        _ = group.wait(timeout: .now() + 2)
+        let outText = String(data: outData, encoding: .utf8) ?? ""
+        let errText = String(data: errData, encoding: .utf8) ?? ""
         let combined = [outText, errText]
             .filter { !$0.isEmpty }
             .joined(separator: outText.hasSuffix("\n") || outText.isEmpty ? "" : "\n")

@@ -53,6 +53,28 @@ final class PiSessionController {
     var onSessionForked: (() -> Void)?
     var isChangingBranch = false
 
+    /// Whether the composer has dropped from the center landing position to the bottom
+    /// consolidated bar (e.g. when the user clicks the mic button on an untouched new session).
+    var hasDroppedComposerToBottom: Bool = false
+
+    /// Whether the user has already triggered the first-prompt Voice Orb or typed text in this session,
+    /// so any subsequent mic clicks use the bottom reactive light glow instead of showing the orb.
+    var hasCompletedFirstVoiceOrTextInteraction: Bool = false
+
+    /// Whether the 3D Voice Orb is currently displayed in the center of the landing pane
+    /// (`first.jpg`: first mic click on a new session before the user has typed anything).
+    var isShowingFirstPromptCenterOrb: Bool = false
+
+    /// Current 23-frame Voice Orb stage when `isShowingFirstPromptCenterOrb` is active.
+    var firstPromptOrbFrame: Int = 7
+
+    func resetFirstPromptVoiceState() {
+        hasDroppedComposerToBottom = false
+        hasCompletedFirstVoiceOrTextInteraction = false
+        isShowingFirstPromptCenterOrb = false
+        firstPromptOrbFrame = 7
+    }
+
     /// The background title run and the one-shot latch that keeps it to the first
     /// message. Nothing is retried: a chat that failed to earn a name is not worth
     /// another model call.
@@ -2072,6 +2094,7 @@ final class PiSessionController {
         titleTask?.cancel()
         titleTask = nil
         titleGenerationStarted = false
+        resetFirstPromptVoiceState()
         for task in dialogTimeouts.values { task.cancel() }
         dialogTimeouts = [:]
         dialogs = []

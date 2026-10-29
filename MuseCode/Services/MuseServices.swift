@@ -213,22 +213,51 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
     /// Normalized live microphone voice energy (`0.0...1.0`) sampled from `AVAudioRecorder` meters
     /// to drive the 3D Liquid Glass Voice Orb `mic interactivity` plasma flare states.
     private(set) var audioLevel: Double = 0.0
+    /// Most recent voice transcription phrase (displayed in the subcontainer voice row matching `Untitled 9.jpg`).
+    var lastTranscript: String?
     private(set) var lastError: String?
 
     private var recorder: AVAudioRecorder?
     private var recordingURL: URL?
     private var timerTask: Task<Void, Never>?
+    private var activeTranscriptionID = UUID()
+    private var pendingInstallation: PiInstallation?
+    private var pendingOnTranscribed: (@MainActor (String) -> Void)?
 
     func toggleRecording(installation: PiInstallation?, onTranscribed: @escaping @MainActor (String) -> Void) async {
         if isRecording {
-            await stopAndTranscribe(installation: installation, onTranscribed: onTranscribed)
+            await stopAndTranscribe(installation: installation ?? pendingInstallation, onTranscribed: onTranscribed)
+        } else if isTranscribing {
+            cancel()
         } else {
-            await startRecording()
+            await startRecording(installation: installation, onTranscribed: onTranscribed)
         }
     }
 
-    func startRecording() async {
+    func cancel() {
+        activeTranscriptionID = UUID()
+        timerTask?.cancel()
+        timerTask = nil
+        pendingInstallation = nil
+        pendingOnTranscribed = nil
+        recorder?.stop()
+        recorder = nil
+        if let url = recordingURL {
+            recordingURL = nil
+            try? FileManager.default.removeItem(at: url)
+        }
+        isRecording = false
+        isTranscribing = false
+        audioLevel = 0.0
+    }
+
+    func startRecording(
+        installation: PiInstallation? = nil,
+        onTranscribed: (@MainActor (String) -> Void)? = nil
+    ) async {
         lastError = nil
+        pendingInstallation = installation
+        pendingOnTranscribed = onTranscribed
         let granted = await AVCaptureDevice.requestAccess(for: .audio)
         guard granted else {
             lastError = "Microphone access was denied in System Settings ▸ Privacy & Security ▸ Microphone."
@@ -250,6 +279,7 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
             let newRecorder = try AVAudioRecorder(url: tempURL, settings: settings)
             newRecorder.delegate = self
             newRecorder.isMeteringEnabled = true
+            newRecorder.prepareToRecord()
             guard newRecorder.record() else {
                 lastError = "Could not start microphone capture."
                 return
@@ -263,10 +293,14 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
             timerTask = Task { [weak self] in
                 let start = Date()
                 var noiseFloorDb: Double = -48.0
+                var speechFramesHeard: Int = 0
+                var lastSpeechTime: Date?
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 33_000_000)
                     guard let self, self.isRecording else { break }
-                    self.recordingDuration = Date().timeIntervalSince(start)
+                    let now = Date()
+                    let elapsed = now.timeIntervalSince(start)
+                    self.recordingDuration = elapsed
                     if let rec = self.recorder {
                         rec.updateMeters()
                         let avgDb = Double(rec.averagePower(forChannel: 0))
@@ -285,6 +319,25 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
                         } else {
                             self.audioLevel = self.audioLevel * 0.72 + shaped * 0.28
                         }
+
+                        // Voice Activity Detection (VAD) endpointing (`Und 9.jpg` -> `Untitled 9.jpg`):
+                        // Once the user has spoken (`>= 6` frames of speech energy after the orb settles)
+                        // and then pauses for 1.15s of silence, automatically stop and transcribe!
+                        if elapsed > 0.30 {
+                            if shaped >= 0.15 {
+                                speechFramesHeard += 1
+                                lastSpeechTime = now
+                            } else if speechFramesHeard >= 6,
+                                      let lastSpeech = lastSpeechTime,
+                                      now.timeIntervalSince(lastSpeech) >= 1.15 {
+                                let inst = self.pendingInstallation
+                                let callback = self.pendingOnTranscribed
+                                await self.stopAndTranscribe(installation: inst) { text in
+                                    callback?(text)
+                                }
+                                break
+                            }
+                        }
                     }
                 }
             }
@@ -293,24 +346,47 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
         }
     }
 
-    func stopAndTranscribe(installation: PiInstallation?, onTranscribed: @escaping @MainActor (String) -> Void) async {
+    func stopAndTranscribe(installation: PiInstallation?, onTranscribed: (@MainActor (String) -> Void)? = nil) async {
         timerTask?.cancel()
         timerTask = nil
+        let effectiveInstallation = installation ?? pendingInstallation
+        let effectiveCallback = onTranscribed ?? pendingOnTranscribed
+        pendingInstallation = nil
+        pendingOnTranscribed = nil
         recorder?.stop()
         recorder = nil
-        isRecording = false
         audioLevel = 0.0
 
-        guard let url = recordingURL else { return }
+        guard let url = recordingURL else {
+            isRecording = false
+            isTranscribing = false
+            return
+        }
         recordingURL = nil
-        defer { try? FileManager.default.removeItem(at: url) }
+        let runID = UUID()
+        activeTranscriptionID = runID
+        // Set `isTranscribing = true` BEFORE `isRecording = false` so observers never see both as false while starting STT.
+        isTranscribing = true
+        isRecording = false
+        defer {
+            if activeTranscriptionID == runID {
+                isTranscribing = false
+            }
+            try? FileManager.default.removeItem(at: url)
+        }
 
-        if let transcript = await transcribeFile(at: url, installation: installation), !transcript.isEmpty {
-            onTranscribed(transcript)
+        // Allow CoreAudio's AudioQueue to finish flushing the trailing PCM buffer and updating the WAV RIFF header chunk sizes.
+        try? await Task.sleep(nanoseconds: 65_000_000)
+        guard activeTranscriptionID == runID else { return }
+
+        if let transcript = await transcribeFile(at: url, installation: effectiveInstallation, runID: runID),
+           activeTranscriptionID == runID,
+           !transcript.isEmpty {
+            effectiveCallback?(transcript)
         }
     }
 
-    func transcribeFile(at fileURL: URL, installation: PiInstallation?) async -> String? {
+    func transcribeFile(at fileURL: URL, installation: PiInstallation?, runID: UUID? = nil) async -> String? {
         guard let resolved = await MuseUsageService.resolveInstallation(installation) else {
             lastError = "Muse CLI executable not found."
             return nil
@@ -321,9 +397,17 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
             return nil
         }
 
-        isTranscribing = true
+        let effectiveID = runID ?? UUID()
+        if runID == nil {
+            activeTranscriptionID = effectiveID
+            isTranscribing = true
+        }
         lastError = nil
-        defer { isTranscribing = false }
+        defer {
+            if runID == nil && activeTranscriptionID == effectiveID {
+                isTranscribing = false
+            }
+        }
 
         let env = PiDiscoveryService.launchEnvironment(
             executable: executable,
@@ -333,15 +417,30 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
             executable: executable,
             arguments: ["voice", "transcribe", fileURL.path],
             directory: URL(fileURLWithPath: NSHomeDirectory()),
-            environment: env
+            environment: env,
+            timeout: 15.0
         )
+        guard activeTranscriptionID == effectiveID else { return nil }
         let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if result.exitCode == 0, !stdout.isEmpty {
+            lastTranscript = Self.normalizedVoiceDisplayQuote(from: stdout)
             return stdout
         }
         let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         lastError = stderr.isEmpty ? "Muse STT returned no speech text." : stderr
         return nil
+    }
+
+    /// Normalizes a raw STT transcript (e.g. `"Talk about food."`) into the lowercase
+    /// conversational quote string shown in the subcontainer voice row (`"talk about food"` in `Untitled 9.jpg`).
+    static func normalizedVoiceDisplayQuote(from raw: String) -> String {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = cleaned.last, [".", ",", "!", "?"].contains(last) {
+            cleaned.removeLast()
+        }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return raw.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return cleaned.lowercased()
     }
 }
 
@@ -515,22 +614,48 @@ enum MuseSessionMessageService {
             process.standardOutput = stdoutPipe
             process.standardError = stderrPipe
 
+            var outData = Data()
+            var errData = Data()
+            let group = DispatchGroup()
+            group.enter()
+            DispatchQueue.global(qos: .utility).async {
+                outData = (try? stdoutPipe.fileHandleForReading.readToEnd()) ?? Data()
+                group.leave()
+            }
+            group.enter()
+            DispatchQueue.global(qos: .utility).async {
+                errData = (try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data()
+                group.leave()
+            }
+
+            let watchdog = DispatchWorkItem {
+                if process.isRunning {
+                    process.terminate()
+                    try? stdoutPipe.fileHandleForReading.close()
+                    try? stderrPipe.fileHandleForReading.close()
+                }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10.0, execute: watchdog)
+
             do {
                 try process.run()
                 if let data = body.data(using: .utf8) {
-                    stdinPipe.fileHandleForWriting.write(data)
+                    try? stdinPipe.fileHandleForWriting.write(contentsOf: data)
                 }
                 try? stdinPipe.fileHandleForWriting.close()
                 process.waitUntilExit()
-                let out = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                watchdog.cancel()
+                _ = group.wait(timeout: .now() + 2)
+                let out = String(data: outData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let err = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                let err = String(data: errData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if process.terminationStatus == 0 {
                     return (true, out.isEmpty ? "Sent to \(target)" : out)
                 }
                 return (false, err.isEmpty ? out : err)
             } catch {
+                watchdog.cancel()
                 return (false, error.localizedDescription)
             }
         }.value
