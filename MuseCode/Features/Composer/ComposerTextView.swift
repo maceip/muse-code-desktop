@@ -213,6 +213,10 @@ struct ComposerTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
 
         scrollView.documentView = textView
+        scrollView.wantsLayer = true
+        scrollView.layer?.masksToBounds = false
+        scrollView.contentView.wantsLayer = true
+        scrollView.contentView.layer?.masksToBounds = false
         context.coordinator.textView = textView
         return scrollView
     }
@@ -275,6 +279,10 @@ final class PlaceholderTextView: NSTextView {
     private func configureGlowingCaret() {
         wantsLayer = true
         layer?.masksToBounds = false
+        glowingCaret.wantsLayer = true
+        glowingCaret.layer?.backgroundColor = NSColor.clear.cgColor
+        glowingCaret.layer?.isOpaque = false
+        glowingCaret.layer?.masksToBounds = false
         glowingCaret.isHidden = true
         addSubview(glowingCaret)
     }
@@ -436,8 +444,8 @@ final class PlaceholderTextView: NSTextView {
             startBlinkTimer()
         }
 
+        let bleed: CGFloat = 6
         let caretRect = currentCaretRect()
-        let bleed: CGFloat = 14
         let frame = NSRect(
             x: caretRect.minX - bleed,
             y: caretRect.minY - bleed,
@@ -466,9 +474,11 @@ final class PlaceholderTextView: NSTextView {
 }
 
 /// Renders the glowing rounded-capsule cursor with a cool icy-blue upper bloom,
-/// a warm amber-gold lower bloom, and a bright white core (`cursor.png`).
+/// a warm amber-gold lower bloom, and a bright white core (`cursor.png`), without
+/// any rectangular background or clipped halo box.
 final class GlowingCaretView: NSView {
     override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -477,8 +487,10 @@ final class GlowingCaretView: NSView {
         ctx.saveGState()
         defer { ctx.restoreGState() }
 
-        let bleed: CGFloat = 14
-        let barWidth: CGFloat = 2.5
+        ctx.clear(bounds)
+
+        let bleed: CGFloat = 6
+        let barWidth: CGFloat = 2.4
         let barHeight = max(14, bounds.height - bleed * 2)
         let barRect = CGRect(
             x: (bounds.width - barWidth) / 2,
@@ -487,38 +499,38 @@ final class GlowingCaretView: NSView {
             height: barHeight
         )
         let centerX = barRect.midX
-        let topFocus = CGPoint(x: centerX, y: barRect.minY + barHeight * 0.26)
-        let bottomFocus = CGPoint(x: centerX, y: barRect.minY + barHeight * 0.76)
+        let topFocus = CGPoint(x: centerX, y: barRect.minY + barHeight * 0.25)
+        let bottomFocus = CGPoint(x: centerX, y: barRect.minY + barHeight * 0.75)
         let midFocus = CGPoint(x: centerX, y: barRect.midY)
 
         let colorSpace = CGColorSpaceCreateDeviceRGB()
 
-        // 1. Upper icy-cyan / sky-blue radial bloom
+        // 1. Tight upper icy-cyan / sky-blue radial bloom (fades to 0.0 inside bleed so it never clips into a box)
         if let topGradient = CGGradient(
             colorsSpace: colorSpace,
             colors: [
-                NSColor(srgbRed: 0.62, green: 0.88, blue: 1.0, alpha: 0.62).cgColor,
-                NSColor(srgbRed: 0.45, green: 0.78, blue: 1.0, alpha: 0.25).cgColor,
+                NSColor(srgbRed: 0.62, green: 0.88, blue: 1.0, alpha: 0.42).cgColor,
+                NSColor(srgbRed: 0.45, green: 0.78, blue: 1.0, alpha: 0.14).cgColor,
                 NSColor(srgbRed: 0.45, green: 0.78, blue: 1.0, alpha: 0.0).cgColor
             ] as CFArray,
-            locations: [0.0, 0.42, 1.0]
+            locations: [0.0, 0.45, 1.0]
         ) {
             ctx.drawRadialGradient(
                 topGradient,
                 startCenter: topFocus,
-                startRadius: 0.5,
+                startRadius: 0.4,
                 endCenter: topFocus,
-                endRadius: 11.5,
+                endRadius: 4.8,
                 options: []
             )
         }
 
-        // 2. Lower warm golden-amber radial bloom
+        // 2. Tight lower warm golden-amber radial bloom (fades to 0.0 inside bleed so it never clips into a box)
         if let bottomGradient = CGGradient(
             colorsSpace: colorSpace,
             colors: [
-                NSColor(srgbRed: 1.0, green: 0.78, blue: 0.44, alpha: 0.72).cgColor,
-                NSColor(srgbRed: 1.0, green: 0.68, blue: 0.32, alpha: 0.30).cgColor,
+                NSColor(srgbRed: 1.0, green: 0.78, blue: 0.44, alpha: 0.48).cgColor,
+                NSColor(srgbRed: 1.0, green: 0.68, blue: 0.32, alpha: 0.16).cgColor,
                 NSColor(srgbRed: 1.0, green: 0.68, blue: 0.32, alpha: 0.0).cgColor
             ] as CFArray,
             locations: [0.0, 0.45, 1.0]
@@ -526,19 +538,19 @@ final class GlowingCaretView: NSView {
             ctx.drawRadialGradient(
                 bottomGradient,
                 startCenter: bottomFocus,
-                startRadius: 0.5,
+                startRadius: 0.4,
                 endCenter: bottomFocus,
-                endRadius: 12.0,
+                endRadius: 5.0,
                 options: []
             )
         }
 
-        // 3. Tight luminous halo around the entire capsule bar
+        // 3. Tight luminous halo around the capsule bar
         ctx.saveGState()
         ctx.setShadow(
             offset: .zero,
-            blur: 5.5,
-            color: NSColor(srgbRed: 1.0, green: 0.88, blue: 0.68, alpha: 0.85).cgColor
+            blur: 3.2,
+            color: NSColor(srgbRed: 1.0, green: 0.88, blue: 0.68, alpha: 0.65).cgColor
         )
         let corePath = CGPath(
             roundedRect: barRect,
@@ -572,14 +584,5 @@ final class GlowingCaretView: NSView {
             )
         }
         ctx.restoreGState()
-
-        // Subtle outer hairline so the white core also stands out sharply on pure-white light-mode backgrounds
-        let isLight = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) != .darkAqua
-        if isLight {
-            ctx.addPath(corePath)
-            ctx.setStrokeColor(NSColor(srgbRed: 0.85, green: 0.62, blue: 0.28, alpha: 0.45).cgColor)
-            ctx.setLineWidth(0.6)
-            ctx.strokePath()
-        }
     }
 }

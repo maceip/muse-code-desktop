@@ -1576,6 +1576,7 @@ struct LiquidGlassBlurBackground: NSViewRepresentable {
         view.blendingMode = blendingMode
         view.state = .active
         view.isEmphasized = true
+        view.appearance = NSAppearance(named: .darkAqua)
         return view
     }
 
@@ -1583,6 +1584,7 @@ struct LiquidGlassBlurBackground: NSViewRepresentable {
         nsView.material = material
         nsView.blendingMode = blendingMode
         nsView.state = .active
+        nsView.appearance = NSAppearance(named: .darkAqua)
     }
 }
 
@@ -1600,36 +1602,26 @@ struct LiquidGlassCardBackground: View {
             )
 
             if isDarkTopPill {
-                // Clean, uniform dark smoked obsidian glass without bottom-edge or corner discoloration
+                // Deep obsidian black top fading smoothly into dark smoked glass at the bottom (matching 15.23.15 & enter-anim.gif)
                 LinearGradient(
                     stops: [
-                        .init(color: Color(red: 0.08, green: 0.08, blue: 0.10, opacity: 0.94), location: 0.0),
-                        .init(color: Color(red: 0.12, green: 0.12, blue: 0.15, opacity: 0.90), location: 0.65),
-                        .init(color: Color(red: 0.16, green: 0.16, blue: 0.19, opacity: 0.86), location: 1.0)
+                        .init(color: Color(red: 0.03, green: 0.03, blue: 0.05, opacity: 0.97), location: 0.0),
+                        .init(color: Color(red: 0.09, green: 0.09, blue: 0.12, opacity: 0.92), location: 0.56),
+                        .init(color: Color(red: 0.20, green: 0.20, blue: 0.24, opacity: 0.86), location: 1.0)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             } else {
-                // Translucent smoky frosted glass card for the lower control deck
+                // Dark translucent smoked glass subcontainer without milky grey/white tint overlays (matching enter-anim.gif)
                 LinearGradient(
                     stops: [
-                        .init(color: Color(red: 0.39, green: 0.38, blue: 0.42, opacity: 0.72), location: 0.0),
-                        .init(color: Color(red: 0.48, green: 0.47, blue: 0.51, opacity: 0.62), location: 0.55),
-                        .init(color: Color(red: 0.55, green: 0.54, blue: 0.58, opacity: 0.56), location: 1.0)
+                        .init(color: Color(red: 0.11, green: 0.11, blue: 0.13, opacity: 0.88), location: 0.0),
+                        .init(color: Color(red: 0.14, green: 0.14, blue: 0.16, opacity: 0.84), location: 0.55),
+                        .init(color: Color(red: 0.17, green: 0.17, blue: 0.20, opacity: 0.80), location: 1.0)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
-                )
-
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.10),
-                        Color.clear,
-                        Color.white.opacity(0.08)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
                 )
             }
         }
@@ -1641,19 +1633,19 @@ struct LiquidGlassCardBackground: View {
                     : AnyShapeStyle(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isDarkTopPill ? 0.38 : 0.48),
-                                Color.white.opacity(0.22),
-                                Color.white.opacity(isDarkTopPill ? 0.52 : 0.38)
+                                Color.white.opacity(isDarkTopPill ? 0.28 : 0.22),
+                                Color.white.opacity(0.14),
+                                Color.white.opacity(isDarkTopPill ? 0.36 : 0.20)
                             ],
                             startPoint: .top,
                             endPoint: .bottom
                         )
                     ),
-                lineWidth: isDropTargeted ? 2.0 : 1.1
+                lineWidth: isDropTargeted ? 2.0 : 1.0
             )
         )
         .shadow(
-            color: Color.black.opacity(isDarkTopPill ? 0.26 : 0.18),
+            color: Color.black.opacity(isDarkTopPill ? 0.28 : 0.22),
             radius: isDarkTopPill ? 18 : 16,
             y: isDarkTopPill ? 8 : 7
         )
