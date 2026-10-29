@@ -74,7 +74,26 @@ struct PiCodeApp: App {
             fputs("FAIL: ComposerEnterExitPhase self-test failed\n", stderr)
             exit(1)
         }
-        print("PASS: MuseCode --selftest verified (\(bundleId) v\(version), \(SessionIconCatalog.all.count) icons)")
+        let f1 = VoiceOrbFrameDescriptor.descriptor(forFrame: 1)
+        let f2 = VoiceOrbFrameDescriptor.descriptor(forFrame: 2)
+        let f4 = VoiceOrbFrameDescriptor.descriptor(forFrame: 4)
+        let f8 = VoiceOrbFrameDescriptor.descriptor(forFrame: 8)
+        let f19 = VoiceOrbFrameDescriptor.descriptor(forFrame: 19)
+        let f20 = VoiceOrbFrameDescriptor.descriptor(forFrame: 20)
+        let f21 = VoiceOrbFrameDescriptor.descriptor(forFrame: 21)
+        let f23 = VoiceOrbFrameDescriptor.descriptor(forFrame: 23)
+        guard f1.pillFixedWidth == nil, f1.waveOpacity == 0.0,
+              f2.pillFixedWidth == nil, f2.waveOpacity > 0.9, f2.subcontainerOpacity == 1.0,
+              f4.pillFixedWidth == 240, f4.subcontainerBlur == 14.0,
+              f8.orbPhase == .darkBlink, f8.waveOpacity < 0.1,
+              f19.orbPhase == .centralAlmondLens,
+              f20.orbPhase == .centralGlowingSun,
+              f21.orbPhase == .singleCenterDot,
+              f23.orbPhase == .constellationDots else {
+            fputs("FAIL: VoiceOrbFrameDescriptor 23-frame progression self-test failed\n", stderr)
+            exit(1)
+        }
+        print("PASS: MuseCode --selftest verified (\(bundleId) v\(version), \(SessionIconCatalog.all.count) icons, 23-frame orb verified)")
         exit(0)
     }
 

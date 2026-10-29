@@ -210,6 +210,9 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
     private(set) var isRecording = false
     private(set) var isTranscribing = false
     private(set) var recordingDuration: TimeInterval = 0
+    /// Normalized live microphone voice energy (`0.0...1.0`) sampled from `AVAudioRecorder` meters
+    /// to drive the 3D Liquid Glass Voice Orb `mic interactivity` plasma flare states.
+    private(set) var audioLevel: Double = 0.0
     private(set) var lastError: String?
 
     private var recorder: AVAudioRecorder?
@@ -246,6 +249,7 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
         do {
             let newRecorder = try AVAudioRecorder(url: tempURL, settings: settings)
             newRecorder.delegate = self
+            newRecorder.isMeteringEnabled = true
             guard newRecorder.record() else {
                 lastError = "Could not start microphone capture."
                 return
@@ -254,13 +258,34 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
             recordingURL = tempURL
             isRecording = true
             recordingDuration = 0
+            audioLevel = 0.0
             timerTask?.cancel()
             timerTask = Task { [weak self] in
                 let start = Date()
+                var noiseFloorDb: Double = -48.0
                 while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    try? await Task.sleep(nanoseconds: 33_000_000)
                     guard let self, self.isRecording else { break }
                     self.recordingDuration = Date().timeIntervalSince(start)
+                    if let rec = self.recorder {
+                        rec.updateMeters()
+                        let avgDb = Double(rec.averagePower(forChannel: 0))
+                        let peakDb = Double(rec.peakPower(forChannel: 0))
+                        let combinedDb = avgDb * 0.50 + peakDb * 0.50
+                        // Track ambient room noise floor gently when quiet so speech syllables pop cleanly
+                        if combinedDb < noiseFloorDb + 3.0 {
+                            noiseFloorDb = max(-58.0, min(-36.0, noiseFloorDb * 0.92 + combinedDb * 0.08))
+                        }
+                        // Map (noiseFloor + 2 dB) ... (noiseFloor + 26 dB) -> 0.0 ... 1.0
+                        let rawLevel = max(0.0, min(1.0, (combinedDb - (noiseFloorDb + 2.0)) / 24.0))
+                        let shaped = pow(rawLevel, 0.82)
+                        // Snappy syllabic attack, smooth conversational release
+                        if shaped > self.audioLevel {
+                            self.audioLevel = self.audioLevel * 0.22 + shaped * 0.78
+                        } else {
+                            self.audioLevel = self.audioLevel * 0.72 + shaped * 0.28
+                        }
+                    }
                 }
             }
         } catch {
@@ -274,6 +299,7 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
         recorder?.stop()
         recorder = nil
         isRecording = false
+        audioLevel = 0.0
 
         guard let url = recordingURL else { return }
         recordingURL = nil

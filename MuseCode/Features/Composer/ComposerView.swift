@@ -80,8 +80,9 @@ struct ComposerView: View {
     @State private var attachmentError: String?
     @State private var isDropTargeted = false
     @State private var isModelPickerPresented = false
-    @State private var isWaveIgniting = false
-    @State private var isContractedToOrb = false
+    @State private var orbFrame: Int = 1
+    @State private var orbAnimationTask: Task<Void, Never>?
+    @State private var isTransitioningOutOfOrb = false
     @State private var isShowingVoiceErrorPopover = false
     @State private var enterExitPhase: ComposerEnterExitPhase = .hidden
     @State private var animationTask: Task<Void, Never>?
@@ -90,6 +91,18 @@ struct ComposerView: View {
 
     private var isVoiceActive: Bool {
         stt.isRecording || stt.isTranscribing
+    }
+
+    private var orbDescriptor: VoiceOrbFrameDescriptor {
+        VoiceOrbFrameDescriptor.descriptor(forFrame: orbFrame)
+    }
+
+    private var isWaveIgniting: Bool {
+        orbFrame >= 2 && orbFrame <= 5
+    }
+
+    private var isContractedToOrb: Bool {
+        orbFrame >= 6
     }
 
     /// Before the first turn (`controller.items.isEmpty`), the composer renders as two
@@ -140,34 +153,45 @@ struct ComposerView: View {
             if !isContractedToOrb && !isConsolidatedBar {
                 liquidGlassControlCard
                     .scaleEffect(
-                        x: isWaveIgniting ? 0.44 : enterExitPhase.subcontainerScaleX,
-                        y: isWaveIgniting ? 0.42 : enterExitPhase.subcontainerScaleY,
+                        x: orbFrame > 1 ? orbDescriptor.subcontainerScaleX : enterExitPhase.subcontainerScaleX,
+                        y: orbFrame > 1 ? orbDescriptor.subcontainerScaleY : enterExitPhase.subcontainerScaleY,
                         anchor: .top
                     )
-                    .offset(y: isWaveIgniting ? -8 : enterExitPhase.subcontainerOffsetY)
-                    .blur(radius: isWaveIgniting ? 12 : enterExitPhase.subcontainerBlur)
-                    .opacity(isWaveIgniting ? 0.0 : enterExitPhase.subcontainerOpacity)
+                    .offset(y: orbFrame > 1 ? orbDescriptor.subcontainerOffsetY : enterExitPhase.subcontainerOffsetY)
+                    .blur(radius: orbFrame > 1 ? orbDescriptor.subcontainerBlur : enterExitPhase.subcontainerBlur)
+                    .opacity(orbFrame > 1 ? orbDescriptor.subcontainerOpacity : enterExitPhase.subcontainerOpacity)
                     .transition(.museSubcontainerEnterExit)
             }
         }
         .animation(.spring(response: 0.44, dampingFraction: 0.84), value: isConsolidatedBar)
-        .animation(.spring(response: 0.44, dampingFraction: 0.80), value: isContractedToOrb)
-        .animation(.easeOut(duration: 0.22), value: isWaveIgniting)
-        .onChange(of: isVoiceActive) { _, active in
-            syncOrbAnimationState(active: active)
+        .animation(.interactiveSpring(response: 0.14, dampingFraction: 0.86), value: orbFrame)
+        .onChange(of: stt.isRecording) { _, recording in
+            if recording {
+                if orbFrame == 1 {
+                    startVoiceOrb23FrameEntry()
+                }
+            } else if stt.isTranscribing {
+                playVoiceOrbFrames19To23(collapseWhenDone: false)
+            }
+        }
+        .onChange(of: stt.isTranscribing) { _, transcribing in
+            if !transcribing && !stt.isRecording && orbFrame > 1 && !isTransitioningOutOfOrb {
+                playVoiceOrbFrames19To23(collapseWhenDone: true)
+            }
         }
         .onAppear {
             loadDraft()
             if isVoiceActive {
-                isWaveIgniting = true
-                isContractedToOrb = true
+                orbFrame = stt.isTranscribing ? 22 : 9
                 enterExitPhase = .settled
             } else {
+                orbFrame = 1
                 playComposerEnterAnimation(withLeadingExit: false)
             }
         }
         .onDisappear {
             animationTask?.cancel()
+            orbAnimationTask?.cancel()
             enterExitPhase = .hidden
         }
         .onChange(of: ObjectIdentifier(controller)) { _, _ in
@@ -204,22 +228,26 @@ struct ComposerView: View {
         }
     }
 
-    // MARK: - Liquid Glass Top Input Pill & Morphing 3D Voice Orb (`orb1.gif`)
+    // MARK: - Liquid Glass Top Input Pill & Morphing 3D Voice Orb (`orb1.gif`, 23 Frames)
 
     private var morphingTopInputOrOrb: some View {
-        ZStack {
+        let desc = orbDescriptor
+        return ZStack {
             if isContractedToOrb {
                 LiquidGlassVoiceOrbView(
+                    orbFrame: orbFrame,
+                    descriptor: desc,
                     isRecording: stt.isRecording,
                     isTranscribing: stt.isTranscribing,
+                    audioLevel: stt.audioLevel,
                     duration: stt.recordingDuration,
                     onTap: { toggleVoiceOrbRecording() }
                 )
-                .frame(width: 96, height: 96)
-                .transition(.scale(scale: 0.86).combined(with: .opacity))
+                .frame(width: desc.pillFixedWidth ?? 92, height: desc.pillHeight ?? 92)
+                .transition(.identity)
             } else {
                 liquidGlassInputPill
-                    .transition(.opacity)
+                    .transition(.identity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -229,8 +257,9 @@ struct ComposerView: View {
     }
 
     private var liquidGlassInputPill: some View {
-        let barCornerRadius: CGFloat = isConsolidatedBar ? 22 : 28
-        return VStack(alignment: .leading, spacing: isConsolidatedBar ? 8 : 0) {
+        let desc = orbDescriptor
+        let barCornerRadius: CGFloat = orbFrame > 1 ? desc.pillCornerRadius : (isConsolidatedBar ? 22 : 28)
+        return VStack(alignment: .leading, spacing: (isConsolidatedBar && orbFrame == 1) ? 8 : 0) {
             HStack(alignment: .center, spacing: 10) {
                 ComposerTextView(
                     text: $text,
@@ -247,7 +276,7 @@ struct ComposerView: View {
                 )
                 .frame(minHeight: ComposerMetrics.editorMinHeight, maxHeight: ComposerMetrics.editorMaxHeight)
                 .fixedSize(horizontal: false, vertical: true)
-                .opacity(isWaveIgniting ? 0.15 : 1.0)
+                .opacity(desc.editorAndControlsOpacity)
 
                 if !isConsolidatedBar {
                     HStack(spacing: 8) {
@@ -259,14 +288,14 @@ struct ComposerView: View {
                                 .matchedGeometryEffect(id: "composerPrimaryAction", in: morphNamespace)
                         }
                     }
-                    .opacity(isWaveIgniting ? 0.0 : 1.0)
+                    .opacity(desc.editorAndControlsOpacity)
                 }
             }
 
-            if isConsolidatedBar {
+            if isConsolidatedBar && orbFrame == 1 {
                 if !attachments.isEmpty {
                     attachmentRow
-                        .opacity(isWaveIgniting ? 0.0 : 1.0)
+                        .opacity(desc.editorAndControlsOpacity)
                 }
 
                 // Consolidated single-bar control strip (minimized attachment +, folder, branch, model, access, tachometer, mic, send)
@@ -306,30 +335,41 @@ struct ComposerView: View {
                     primaryActionButton
                         .matchedGeometryEffect(id: "composerPrimaryAction", in: morphNamespace)
                 }
-                .opacity(isWaveIgniting ? 0.0 : 1.0)
+                .opacity(desc.editorAndControlsOpacity)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .padding(.leading, isConsolidatedBar ? 16 : 18)
-        .padding(.trailing, 14)
-        .padding(.vertical, isConsolidatedBar ? 10 : 11)
+        .padding(.leading, orbFrame >= 4 ? 0 : (isConsolidatedBar ? 16 : 18))
+        .padding(.trailing, orbFrame >= 4 ? 0 : 14)
+        .padding(.vertical, orbFrame >= 4 ? 0 : (isConsolidatedBar ? 10 : 11))
+        .frame(
+            maxWidth: desc.pillFixedWidth ?? .infinity,
+            minHeight: desc.pillHeight
+        )
         .background(
             ZStack {
                 LiquidGlassCardBackground(
                     cornerRadius: barCornerRadius,
                     isDarkTopPill: true,
-                    isDropTargeted: isDropTargeted
+                    isDropTargeted: isDropTargeted,
+                    sphereMix: desc.sphereMix
                 )
 
-                // Stage 1 of `orb1.gif`: Horizontal chromatic plasma wave igniting across the pill before contracting into the 3D orb
-                if isWaveIgniting {
-                    PlasmaHorizonWaveCanvas(isCircularOrb: false)
-                        .clipShape(RoundedRectangle(cornerRadius: barCornerRadius, style: .continuous))
-                        .transition(.opacity)
+                // Frames 2–5 of `Screenshot 2026-10-28 at 14.58.49.png`:
+                // Frame 2 ignites the full-width chromatic plasma wave across the top pill while placeholder & mic are still visible;
+                // Frames 3–5 contract the pill horizontally into the 3D sphere while the lower subcontainer blurs and dissolves.
+                if orbFrame >= 2 {
+                    PlasmaHorizonWaveCanvas(
+                        isCircularOrb: orbFrame >= 5,
+                        orbFrame: orbFrame,
+                        audioLevel: stt.audioLevel,
+                        waveOpacity: desc.waveOpacity
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: barCornerRadius, style: .continuous))
+                    .transition(.opacity)
                 }
             }
         )
-        .frame(maxWidth: isWaveIgniting ? 280 : .infinity)
         .dropDestination(for: URL.self) { urls, _ in
             addAttachments(urls)
             return true
@@ -537,63 +577,114 @@ struct ComposerView: View {
         }
     }
 
-    // MARK: - Voice Orb Morphing & STT Recording Actions
+    // MARK: - 23-Frame Voice Orb Morphing & STT Recording Actions (`Screenshot 2026-10-28 at 14.58.49.png`)
 
     private func toggleVoiceOrbRecording() {
-        if !isVoiceActive && !isContractedToOrb {
-            // Stage 1: Ignite the horizontal plasma wave inside the dark Liquid Glass input pill
-            withAnimation(.easeOut(duration: 0.18)) {
-                isWaveIgniting = true
-            }
-            // Stage 2: Contract pill horizontally into the centered 3D Liquid Glass Orb
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
-                    isContractedToOrb = true
+        if orbFrame == 1 && !isVoiceActive {
+            startVoiceOrb23FrameEntry()
+            Task {
+                await stt.toggleRecording(installation: controller.museInstallation) { transcribed in
+                    appendTranscription(transcribed)
+                }
+                if stt.lastError != nil {
+                    isShowingVoiceErrorPopover = true
+                }
+                if !stt.isRecording && !stt.isTranscribing && !isTransitioningOutOfOrb {
+                    playVoiceOrbFrames19To23(collapseWhenDone: true)
                 }
             }
-        }
-
-        Task {
-            await stt.toggleRecording(installation: controller.museInstallation) { transcribed in
-                appendTranscription(transcribed)
-            }
-            if stt.lastError != nil {
-                isShowingVoiceErrorPopover = true
-            }
-            if !stt.isRecording && !stt.isTranscribing {
-                collapseOrbBackToInputPill()
+        } else {
+            // Stopping recording: step through Frames 19 -> 20 -> 21 -> 22 -> 23 (almond lens -> white sun -> single dot -> 6-dot constellation)
+            playVoiceOrbFrames19To23(collapseWhenDone: true)
+            Task {
+                if stt.isRecording {
+                    await stt.toggleRecording(installation: controller.museInstallation) { transcribed in
+                        appendTranscription(transcribed)
+                    }
+                    if stt.lastError != nil {
+                        isShowingVoiceErrorPopover = true
+                    }
+                }
             }
         }
     }
 
-    private func syncOrbAnimationState(active: Bool) {
-        if active {
-            if !isContractedToOrb {
-                withAnimation(.easeOut(duration: 0.16)) {
-                    isWaveIgniting = true
+    /// Steps deterministically through Frames 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 (dark pulse) -> 9..18 (active listening loop).
+    private func startVoiceOrb23FrameEntry() {
+        orbAnimationTask?.cancel()
+        isTransitioningOutOfOrb = false
+        orbAnimationTask = Task { @MainActor in
+            // Frames 2..7: Full pill ignition -> progressive horizontal contraction & subcontainer blur -> 3D sphere
+            for frame in 2...7 {
+                guard !Task.isCancelled else { return }
+                withAnimation(.interactiveSpring(response: 0.12, dampingFraction: 0.86)) {
+                    orbFrame = frame
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
-                        isContractedToOrb = true
-                    }
+                try? await Task.sleep(nanoseconds: 75_000_000)
+            }
+
+            // Frame 8: Dark obsidian pulse / blink right before active voice listening
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.08)) {
+                orbFrame = 8
+            }
+            try? await Task.sleep(nanoseconds: 85_000_000)
+
+            // Frames 9..18: Active listening loop with undulating horizon wave & live `mic interactivity`
+            var activeFrame = 9
+            while !Task.isCancelled && (stt.isRecording || (!stt.isTranscribing && !isTransitioningOutOfOrb && orbFrame >= 8 && orbFrame <= 18)) {
+                withAnimation(.linear(duration: 0.09)) {
+                    orbFrame = activeFrame
+                }
+                try? await Task.sleep(nanoseconds: 95_000_000)
+                activeFrame = activeFrame < 18 ? (activeFrame + 1) : 9
+                if !stt.isRecording && !stt.isTranscribing {
+                    break
                 }
             }
-        } else {
-            collapseOrbBackToInputPill()
+        }
+    }
+
+    /// Plays Frames 19 -> 20 -> 21 -> 22 -> 23 (central almond lens -> glowing white sun -> single dot -> 6 orbiting dots)
+    /// and then smoothly expands back to the full composer panel once transcription finishes.
+    private func playVoiceOrbFrames19To23(collapseWhenDone: Bool) {
+        guard !isTransitioningOutOfOrb else { return }
+        isTransitioningOutOfOrb = true
+        orbAnimationTask?.cancel()
+        orbAnimationTask = Task { @MainActor in
+            for frame in 19...23 {
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.09)) {
+                    orbFrame = frame
+                }
+                try? await Task.sleep(nanoseconds: 95_000_000)
+            }
+
+            // Hold on the 6-dot constellation (Frames 22-23) while `muse voice transcribe` is still running
+            while !Task.isCancelled && stt.isTranscribing {
+                try? await Task.sleep(nanoseconds: 110_000_000)
+            }
+
+            guard collapseWhenDone || !stt.isTranscribing else {
+                isTransitioningOutOfOrb = false
+                return
+            }
+
+            // Smoothly morph back through Frames 5 -> 4 -> 3 -> 2 -> 1 into the full composer panel
+            enterExitPhase = .settled
+            for reverseFrame in [5, 4, 3, 2, 1] {
+                guard !Task.isCancelled else { return }
+                withAnimation(.spring(response: 0.16, dampingFraction: 0.86)) {
+                    orbFrame = reverseFrame
+                }
+                try? await Task.sleep(nanoseconds: 55_000_000)
+            }
+            isTransitioningOutOfOrb = false
         }
     }
 
     private func collapseOrbBackToInputPill() {
-        enterExitPhase = .pillWithBlurredCapsule
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
-            isContractedToOrb = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-            withAnimation(.easeOut(duration: 0.18)) {
-                isWaveIgniting = false
-            }
-            playComposerEnterAnimation(withLeadingExit: false)
-        }
+        playVoiceOrbFrames19To23(collapseWhenDone: true)
     }
 
     private func appendTranscription(_ transcribed: String) {
@@ -1588,10 +1679,267 @@ struct LiquidGlassBlurBackground: NSViewRepresentable {
     }
 }
 
+// MARK: - 23-Frame Voice Orb Transition Specification (`14.58.49.png` & `orb1.gif`)
+
+enum VoiceOrbVisualPhase: Equatable {
+    case ribbonWave
+    case darkBlink
+    case centralAlmondLens
+    case centralGlowingSun
+    case singleCenterDot
+    case constellationDots
+}
+
+struct VoiceOrbFrameDescriptor: Equatable {
+    let frameIndex: Int
+    /// `nil` means full width (`maxWidth: .infinity`, Frames 1 & 2).
+    let pillFixedWidth: CGFloat?
+    /// `nil` means natural height (`minHeight: 54`, Frames 1 & 2).
+    let pillHeight: CGFloat?
+    let pillCornerRadius: CGFloat
+    let editorAndControlsOpacity: Double
+    let waveOpacity: Double
+    let sphereMix: Double
+    let subcontainerScaleX: CGFloat
+    let subcontainerScaleY: CGFloat
+    let subcontainerOffsetY: CGFloat
+    let subcontainerBlur: CGFloat
+    let subcontainerOpacity: Double
+    let orbPhase: VoiceOrbVisualPhase
+
+    static func descriptor(forFrame rawFrame: Int) -> VoiceOrbFrameDescriptor {
+        let frame = min(max(rawFrame, 1), 23)
+        switch frame {
+        case 1:
+            // Frame 1: Idle full composer panel — 100% width dark top pill + crisp bottom subcontainer
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 1,
+                pillFixedWidth: nil,
+                pillHeight: nil,
+                pillCornerRadius: 27,
+                editorAndControlsOpacity: 1.0,
+                waveOpacity: 0.0,
+                sphereMix: 0.0,
+                subcontainerScaleX: 1.0,
+                subcontainerScaleY: 1.0,
+                subcontainerOffsetY: 0,
+                subcontainerBlur: 0,
+                subcontainerOpacity: 1.0,
+                orbPhase: .ribbonWave
+            )
+        case 2:
+            // Frame 2: Full-width plasma wave ignition inside the 100%-width top pill while placeholder & mic button remain visible
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 2,
+                pillFixedWidth: nil,
+                pillHeight: nil,
+                pillCornerRadius: 27,
+                editorAndControlsOpacity: 0.90,
+                waveOpacity: 0.96,
+                sphereMix: 0.14,
+                subcontainerScaleX: 1.0,
+                subcontainerScaleY: 1.0,
+                subcontainerOffsetY: 0,
+                subcontainerBlur: 0,
+                subcontainerOpacity: 1.0,
+                orbPhase: .ribbonWave
+            )
+        case 3:
+            // Frame 3: Horizontal contraction stage 1 — top pill contracts toward center while bottom subcontainer blurs in place
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 3,
+                pillFixedWidth: 380,
+                pillHeight: 58,
+                pillCornerRadius: 29,
+                editorAndControlsOpacity: 0.16,
+                waveOpacity: 1.0,
+                sphereMix: 0.35,
+                subcontainerScaleX: 0.98,
+                subcontainerScaleY: 0.97,
+                subcontainerOffsetY: -2,
+                subcontainerBlur: 6.5,
+                subcontainerOpacity: 0.82,
+                orbPhase: .ribbonWave
+            )
+        case 4:
+            // Frame 4: Horizontal contraction stage 2 — compact capsule & heavy subcontainer motion blur
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 4,
+                pillFixedWidth: 240,
+                pillHeight: 66,
+                pillCornerRadius: 33,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 0.62,
+                subcontainerScaleX: 0.92,
+                subcontainerScaleY: 0.90,
+                subcontainerOffsetY: -6,
+                subcontainerBlur: 14.0,
+                subcontainerOpacity: 0.44,
+                orbPhase: .ribbonWave
+            )
+        case 5:
+            // Frame 5: Wide squircle & subcontainer dissolve out
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 5,
+                pillFixedWidth: 118,
+                pillHeight: 84,
+                pillCornerRadius: 42,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 0.85,
+                subcontainerScaleX: 0.82,
+                subcontainerScaleY: 0.76,
+                subcontainerOffsetY: -12,
+                subcontainerBlur: 22.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .ribbonWave
+            )
+        case 6:
+            // Frame 6: Slightly oblate 3D Liquid Glass sphere (`98x88`)
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 6,
+                pillFixedWidth: 98,
+                pillHeight: 88,
+                pillCornerRadius: 44,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 0.95,
+                subcontainerScaleX: 0.76,
+                subcontainerScaleY: 0.70,
+                subcontainerOffsetY: -16,
+                subcontainerBlur: 24.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .ribbonWave
+            )
+        case 7:
+            // Frame 7: Full circular 3D Liquid Glass sphere (`90x90`)
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 7,
+                pillFixedWidth: 90,
+                pillHeight: 90,
+                pillCornerRadius: 45,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 1.0,
+                subcontainerScaleX: 0.74,
+                subcontainerScaleY: 0.68,
+                subcontainerOffsetY: -18,
+                subcontainerBlur: 24.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .ribbonWave
+            )
+        case 8:
+            // Frame 8: Single-frame dark obsidian pulse/blink right before active listening begins (`14.58.49.png` Frame 8)
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 8,
+                pillFixedWidth: 90,
+                pillHeight: 90,
+                pillCornerRadius: 45,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 0.06,
+                sphereMix: 1.0,
+                subcontainerScaleX: 0.74,
+                subcontainerScaleY: 0.68,
+                subcontainerOffsetY: -18,
+                subcontainerBlur: 24.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .darkBlink
+            )
+        case 9...18:
+            // Frames 9–18: Active listening loop (`90x90`) with undulating chromatic equator wave + mic interactivity
+            return VoiceOrbFrameDescriptor(
+                frameIndex: frame,
+                pillFixedWidth: 90,
+                pillHeight: 90,
+                pillCornerRadius: 45,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 1.0,
+                subcontainerScaleX: 0.74,
+                subcontainerScaleY: 0.68,
+                subcontainerOffsetY: -18,
+                subcontainerBlur: 24.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .ribbonWave
+            )
+        case 19:
+            // Frame 19: Wave contracts horizontally toward sphere center into a bright white almond lens (`88x88`)
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 19,
+                pillFixedWidth: 88,
+                pillHeight: 88,
+                pillCornerRadius: 44,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 1.0,
+                subcontainerScaleX: 0.74,
+                subcontainerScaleY: 0.68,
+                subcontainerOffsetY: -18,
+                subcontainerBlur: 24.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .centralAlmondLens
+            )
+        case 20:
+            // Frame 20: Central almond lens rounds into a glowing circular white sun (`86x86`)
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 20,
+                pillFixedWidth: 86,
+                pillHeight: 86,
+                pillCornerRadius: 43,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 1.0,
+                subcontainerScaleX: 0.74,
+                subcontainerScaleY: 0.68,
+                subcontainerOffsetY: -18,
+                subcontainerBlur: 24.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .centralGlowingSun
+            )
+        case 21:
+            // Frame 21: Condenses into a single crisp solid white dot centered inside the sphere (`86x86`)
+            return VoiceOrbFrameDescriptor(
+                frameIndex: 21,
+                pillFixedWidth: 86,
+                pillHeight: 86,
+                pillCornerRadius: 43,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 1.0,
+                subcontainerScaleX: 0.74,
+                subcontainerScaleY: 0.68,
+                subcontainerOffsetY: -18,
+                subcontainerBlur: 24.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .singleCenterDot
+            )
+        default:
+            // Frames 22–23: Bursts into the 6-dot constellation rotating inside the dark-top / frosted-bottom sphere (`86x86`)
+            return VoiceOrbFrameDescriptor(
+                frameIndex: frame,
+                pillFixedWidth: 86,
+                pillHeight: 86,
+                pillCornerRadius: 43,
+                editorAndControlsOpacity: 0.0,
+                waveOpacity: 1.0,
+                sphereMix: 1.0,
+                subcontainerScaleX: 0.74,
+                subcontainerScaleY: 0.68,
+                subcontainerOffsetY: -18,
+                subcontainerBlur: 24.0,
+                subcontainerOpacity: 0.0,
+                orbPhase: .constellationDots
+            )
+        }
+    }
+}
+
 struct LiquidGlassCardBackground: View {
     var cornerRadius: CGFloat
     var isDarkTopPill: Bool
     var isDropTargeted: Bool = false
+    var sphereMix: Double = 0.0
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -1612,6 +1960,21 @@ struct LiquidGlassCardBackground: View {
                     startPoint: .top,
                     endPoint: .bottom
                 )
+
+                // As the pill contracts through Frames 2–5 (`sphereMix > 0`), blend in the 3D sphere's frosted silver-grey lower hemisphere
+                if sphereMix > 0.01 {
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color(red: 0.02, green: 0.02, blue: 0.04, opacity: 0.98), location: 0.0),
+                            .init(color: Color(red: 0.05, green: 0.06, blue: 0.09, opacity: 0.94), location: 0.46),
+                            .init(color: Color(red: 0.54, green: 0.55, blue: 0.60, opacity: 0.60), location: 0.74),
+                            .init(color: Color(red: 0.74, green: 0.75, blue: 0.79, opacity: 0.54), location: 1.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .opacity(sphereMix)
+                }
             } else {
                 // Dark translucent smoked glass subcontainer without milky grey/white tint overlays (matching enter-anim.gif)
                 LinearGradient(
@@ -1633,15 +1996,15 @@ struct LiquidGlassCardBackground: View {
                     : AnyShapeStyle(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isDarkTopPill ? 0.28 : 0.22),
-                                Color.white.opacity(0.14),
-                                Color.white.opacity(isDarkTopPill ? 0.36 : 0.20)
+                                Color.white.opacity(isDarkTopPill ? (0.28 + 0.16 * sphereMix) : 0.22),
+                                Color.white.opacity(0.14 + 0.08 * sphereMix),
+                                Color.white.opacity(isDarkTopPill ? (0.36 + 0.30 * sphereMix) : 0.20)
                             ],
                             startPoint: .top,
                             endPoint: .bottom
                         )
                     ),
-                lineWidth: isDropTargeted ? 2.0 : 1.0
+                lineWidth: isDropTargeted ? 2.0 : (1.0 + 0.3 * sphereMix)
             )
         )
         .shadow(
@@ -1653,112 +2016,193 @@ struct LiquidGlassCardBackground: View {
 }
 
 /// The 3D Liquid Glass Sphere / Voice Orb that the top input pill morphs into
-/// when the microphone button is clicked (`orb1.gif`, frames 6–22).
+/// when the microphone button is clicked (`14.58.49.png` & `orb1.gif`, Frames 6–23).
 struct LiquidGlassVoiceOrbView: View {
+    var orbFrame: Int
+    var descriptor: VoiceOrbFrameDescriptor
     var isRecording: Bool
     var isTranscribing: Bool
+    var audioLevel: Double
     var duration: TimeInterval
+    var fixedTimeOverride: TimeInterval? = nil
     var onTap: () -> Void
 
+    @State private var hoverEnergy: Double = 0.0
+
     var body: some View {
+        let orbWidth = descriptor.pillFixedWidth ?? 90
+        let orbHeight = descriptor.pillHeight ?? 90
+        let cornerRadius = descriptor.pillCornerRadius
+        let effectiveAudio = min(1.0, max(audioLevel, hoverEnergy))
+        let orbShape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
         Button(action: onTap) {
             ZStack {
-                // Soft outer ambient glass halo
-                Circle()
+                // Soft downward ambient drop shadow cast onto the background bitmap below the sphere (`14.58.49.png`)
+                Ellipse()
                     .fill(
                         RadialGradient(
-                            colors: [
-                                Color.black.opacity(0.28),
-                                Color(red: 0.22, green: 0.58, blue: 0.95).opacity(0.10),
-                                Color.clear
+                            stops: [
+                                .init(color: Color.black.opacity(0.22), location: 0.0),
+                                .init(color: Color.black.opacity(0.11), location: 0.50),
+                                .init(color: Color.black.opacity(0.03), location: 0.80),
+                                .init(color: Color.clear, location: 1.0)
                             ],
                             center: .center,
-                            startRadius: 32,
-                            endRadius: 58
+                            startRadius: 6,
+                            endRadius: orbWidth * 0.58
                         )
                     )
-                    .frame(width: 114, height: 114)
+                    .frame(width: orbWidth * 1.16, height: orbHeight * 0.72)
+                    .offset(y: 14)
+                    .blur(radius: 5)
 
-                // Core 96x96 3D Liquid Glass Sphere
+                // Core 3D Liquid Glass Sphere (`98x88` in Frame 6 -> `90x90` in Frames 7–18 -> `88x88` in Frame 19 -> `86x86` in Frames 20–23)
                 ZStack {
+                    // Upper hemisphere only: opaque dark backing so the upper obsidian dome is pure jet-black while the lower glass hemisphere lets the background bitmap show through with 3D spherical shadows (`14.58.49.png`)
                     LiquidGlassBlurBackground(
                         material: .hudWindow,
                         blendingMode: .withinWindow
                     )
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0.0),
+                                .init(color: .black, location: 0.44),
+                                .init(color: .clear, location: 0.53),
+                                .init(color: .clear, location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
 
-                    // Base sphere gradient: glossy obsidian-black upper hemisphere, smoky silver-frosted glass lower hemisphere
+                    // Base sphere vertical shading matching `14.58.49.png`:
+                    // - Upper hemisphere (`0.0...0.47`): pure jet-black obsidian (`#020204`)
+                    // - Equatorial shadow band (`0.47...0.58`): casts a rich dark shadow onto the bitmap behind the middle of the orb
+                    // - Lower hemisphere (`0.58...1.0`): translucent smoked grey glass grading into a frosted silver-grey bottom rim
                     LinearGradient(
                         stops: [
-                            .init(color: Color(red: 0.02, green: 0.02, blue: 0.04, opacity: 0.98), location: 0.0),
-                            .init(color: Color(red: 0.05, green: 0.06, blue: 0.09, opacity: 0.95), location: 0.44),
-                            .init(color: Color(red: 0.56, green: 0.56, blue: 0.60, opacity: 0.58), location: 0.72),
-                            .init(color: Color(red: 0.74, green: 0.74, blue: 0.78, opacity: 0.50), location: 1.0)
+                            .init(color: Color(red: 0.01, green: 0.01, blue: 0.02, opacity: 0.99), location: 0.0),
+                            .init(color: Color(red: 0.02, green: 0.02, blue: 0.04, opacity: 0.98), location: 0.45),
+                            .init(color: Color(red: 0.06, green: 0.07, blue: 0.09, opacity: 0.86), location: 0.52),
+                            .init(color: Color(red: 0.24, green: 0.25, blue: 0.28, opacity: 0.56), location: 0.66),
+                            .init(color: Color(red: 0.48, green: 0.49, blue: 0.53, opacity: 0.44), location: 0.85),
+                            .init(color: Color(red: 0.68, green: 0.69, blue: 0.73, opacity: 0.46), location: 1.0)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
 
-                    // 60fps undulating chromatic plasma horizon wave (icy sky-blue top bloom, blazing white core ribbon, warm amber-gold bottom bloom)
-                    PlasmaHorizonWaveCanvas(isCircularOrb: true)
-
-                    // Top-left 3D glass dome specular highlight
-                    Ellipse()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.26),
-                                    Color.white.opacity(0.04),
-                                    Color.clear
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
+                    // Interior 3D spherical limb darkening on the lower hemisphere:
+                    // Illuminates the center-bottom window with a soft white caustic glow while shading the curved left & right flanks over the background bitmap (`14.58.49.png`)
+                    RadialGradient(
+                        stops: [
+                            .init(color: Color.white.opacity(0.32 + 0.14 * effectiveAudio), location: 0.0),
+                            .init(color: Color.white.opacity(0.12), location: 0.32),
+                            .init(color: Color(red: 0.06, green: 0.07, blue: 0.09, opacity: 0.46), location: 0.72),
+                            .init(color: Color(red: 0.02, green: 0.03, blue: 0.05, opacity: 0.68), location: 0.92),
+                            .init(color: Color.white.opacity(0.28), location: 1.0)
+                        ],
+                        center: UnitPoint(x: 0.5, y: 0.58),
+                        startRadius: 2,
+                        endRadius: orbWidth * 0.50
+                    )
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0.0),
+                                .init(color: .clear, location: 0.45),
+                                .init(color: .black, location: 0.53),
+                                .init(color: .black, location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
                         )
-                        .frame(width: 62, height: 30)
-                        .offset(y: -26)
-                        .blur(radius: 2)
+                    )
 
-                    // Bottom inner crescent glass reflection
-                    Circle()
-                        .trim(from: 0.08, to: 0.42)
+                    // 60fps undulating chromatic plasma wave (Frames 6–18 + mic interactivity) and Frame 19–23 condensation & constellation states
+                    PlasmaHorizonWaveCanvas(
+                        isCircularOrb: true,
+                        orbFrame: orbFrame,
+                        audioLevel: effectiveAudio,
+                        waveOpacity: descriptor.waveOpacity,
+                        fixedTimeOverride: fixedTimeOverride
+                    )
+
+                    // Subtle top-left curved glass rim reflection (keeps the upper obsidian dome deep jet-black like Frame 7 & 8 of `14.58.49.png`)
+                    Ellipse()
+                        .trim(from: 0.56, to: 0.88)
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.10),
-                                    Color.white.opacity(0.65),
-                                    Color.white.opacity(0.10)
+                                    Color.white.opacity(0.28),
+                                    Color.white.opacity(0.08),
+                                    Color.clear
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             ),
-                            style: StrokeStyle(lineWidth: 2.2, lineCap: .round)
+                            style: StrokeStyle(lineWidth: 1.4, lineCap: .round)
                         )
-                        .frame(width: 88, height: 88)
+                        .frame(width: orbWidth - 3, height: orbHeight - 3)
+
+                    // Bottom inner crescent glass refraction rim
+                    Ellipse()
+                        .trim(from: 0.06, to: 0.44)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.18),
+                                    Color.white.opacity(0.82),
+                                    Color.white.opacity(0.18)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            style: StrokeStyle(lineWidth: 2.0, lineCap: .round)
+                        )
+                        .frame(width: orbWidth - 3.0, height: orbHeight - 3.0)
                 }
-                .frame(width: 92, height: 92)
-                .clipShape(Circle())
+                .frame(width: orbWidth, height: orbHeight)
+                .clipShape(orbShape)
                 .overlay(
-                    Circle()
+                    orbShape
                         .strokeBorder(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.45),
-                                    Color.white.opacity(0.22),
-                                    Color.white.opacity(0.68)
+                                    Color.white.opacity(0.28),
+                                    Color.white.opacity(0.20),
+                                    Color.white.opacity(0.78)
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
                             ),
-                            lineWidth: 1.3
+                            lineWidth: 1.25
                         )
-                        .frame(width: 92, height: 92)
+                        .frame(width: orbWidth, height: orbHeight)
                 )
-                .shadow(color: Color.black.opacity(0.32), radius: 18, y: 9)
+                .shadow(color: Color.black.opacity(0.14), radius: 10, x: 0, y: 6)
             }
-            .contentShape(Circle())
+            .contentShape(orbShape)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location):
+                let center = CGPoint(x: orbWidth * 0.58, y: orbHeight * 0.50)
+                let dist = hypot(location.x - center.x, location.y - center.y)
+                let norm = max(0.0, min(1.0, 1.0 - Double(dist) / 48.0))
+                withAnimation(.easeOut(duration: 0.14)) {
+                    hoverEnergy = 0.35 + 0.60 * norm
+                }
+            case .ended:
+                withAnimation(.easeOut(duration: 0.22)) {
+                    hoverEnergy = 0.0
+                }
+            }
+        }
         .help(
             isTranscribing
                 ? "Transcribing voice via `muse voice transcribe`…"
@@ -1767,105 +2211,601 @@ struct LiquidGlassVoiceOrbView: View {
     }
 }
 
-/// 60fps animated chromatic plasma wave rendered inside the contracting pill (Frames 3–5)
-/// and across the equator of the 3D Liquid Glass Voice Orb (Frames 6–22 of `orb1.gif`).
+/// 60fps animated chromatic plasma wave rendered across the full-width/contracting pill (Frames 2–5),
+/// across the equator of the 3D Liquid Glass Voice Orb with `mic interactivity` (Frames 6–18),
+/// and through the Frame 19–23 almond-lens -> glowing-sun -> single-dot -> 6-dot constellation states (`14.58.49.png`).
 struct PlasmaHorizonWaveCanvas: View {
     var isCircularOrb: Bool
+    var orbFrame: Int = 9
+    var audioLevel: Double = 0.0
+    var waveOpacity: Double = 1.0
+    /// Optional fixed timestamp for deterministic snapshot verification of the 6 `mic interactivity` states.
+    var fixedTimeOverride: TimeInterval? = nil
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
+            let t = fixedTimeOverride ?? timeline.date.timeIntervalSinceReferenceDate
             Canvas { context, size in
-                let midY = size.height * (isCircularOrb ? 0.53 : 0.56)
                 let width = size.width
-                let steps = 48
+                let height = size.height
+                let center = CGPoint(x: width * 0.5, y: height * 0.5)
 
-                func waveY(xNorm: Double, phaseOffset: Double, ampScale: Double) -> CGFloat {
-                    // Envelope tapers gently near edges inside the sphere
-                    let edgeEnvelope = isCircularOrb
-                        ? sin(xNorm * .pi)
-                        : (0.45 + 0.55 * sin(xNorm * .pi))
-                    let primary = sin(xNorm * .pi * 2.15 - t * 3.8 + phaseOffset)
-                    let secondary = 0.45 * cos(xNorm * .pi * 3.4 + t * 2.6 - phaseOffset * 0.7)
-                    let amp = (isCircularOrb ? 6.5 : 5.0) * ampScale * edgeEnvelope
-                    return midY + CGFloat(primary + secondary) * CGFloat(amp)
-                }
-
-                func buildRibbonPath(phaseOffset: Double, yOffset: CGFloat, thickness: CGFloat, ampScale: Double = 1.0) -> Path {
-                    var path = Path()
-                    for i in 0...steps {
-                        let u = Double(i) / Double(steps)
-                        let x = CGFloat(u) * width
-                        let y = waveY(xNorm: u, phaseOffset: phaseOffset, ampScale: ampScale) + yOffset - thickness * 0.5
-                        if i == 0 {
-                            path.move(to: CGPoint(x: x, y: y))
-                        } else {
-                            path.addLine(to: CGPoint(x: x, y: y))
-                        }
-                    }
-                    for i in (0...steps).reversed() {
-                        let u = Double(i) / Double(steps)
-                        let x = CGFloat(u) * width
-                        let y = waveY(xNorm: u, phaseOffset: phaseOffset + 0.35, ampScale: ampScale) + yOffset + thickness * 0.5
-                        path.addLine(to: CGPoint(x: x, y: y))
-                    }
-                    path.closeSubpath()
-                    return path
-                }
-
-                // 1. Deep upper sky-blue / cyan atmospheric bloom
-                var deepCyanCtx = context
-                deepCyanCtx.addFilter(.blur(radius: isCircularOrb ? 11 : 13))
-                let deepCyanPath = buildRibbonPath(phaseOffset: 0.0, yOffset: -9, thickness: isCircularOrb ? 22 : 18, ampScale: 1.15)
-                deepCyanCtx.fill(
-                    deepCyanPath,
-                    with: .linearGradient(
-                        Gradient(colors: [
-                            Color(red: 0.08, green: 0.55, blue: 1.0, opacity: 0.85),
-                            Color(red: 0.28, green: 0.82, blue: 1.0, opacity: 0.95),
-                            Color(red: 0.08, green: 0.55, blue: 1.0, opacity: 0.85)
-                        ]),
-                        startPoint: CGPoint(x: 0, y: midY - 12),
-                        endPoint: CGPoint(x: width, y: midY - 4)
+                if orbFrame == 19 {
+                    // Frame 19: Wave contracts horizontally toward the center into a bright white almond lens with cyan & warm-amber fringes
+                    drawFrame19AlmondLens(context: context, size: size, center: center, t: t)
+                } else if orbFrame == 20 {
+                    // Frame 20: Central almond lens rounds into a circular glowing white sun in the center of the sphere
+                    drawFrame20GlowingSun(context: context, center: center, t: t)
+                } else if orbFrame == 21 {
+                    // Frame 21: Condenses into a single crisp solid white dot (`8.5pt`) centered inside the sphere
+                    drawFrame21SingleCenterDot(context: context, center: center)
+                } else if orbFrame >= 22 {
+                    // Frames 22–23: Bursts into the 6-dot constellation of graded white dots rotating inside the sphere
+                    drawFrames22And23Constellation(context: context, center: center, t: t, orbFrame: orbFrame)
+                } else {
+                    // Frames 2–18: Undulating chromatic plasma wave + Frame 8 dark blink + `mic interactivity` states
+                    drawRibbonWaveAndMicInteractivity(
+                        context: context,
+                        size: size,
+                        t: t,
+                        effectiveOpacity: waveOpacity,
+                        micEnergy: min(1.0, max(0.0, audioLevel))
                     )
-                )
-
-                // 2. Warm lower amber-gold / orange atmospheric bloom
-                var amberCtx = context
-                amberCtx.addFilter(.blur(radius: isCircularOrb ? 9 : 11))
-                let amberPath = buildRibbonPath(phaseOffset: 0.5, yOffset: 7, thickness: isCircularOrb ? 16 : 14, ampScale: 1.05)
-                amberCtx.fill(
-                    amberPath,
-                    with: .linearGradient(
-                        Gradient(colors: [
-                            Color(red: 1.0, green: 0.52, blue: 0.12, opacity: 0.80),
-                            Color(red: 1.0, green: 0.74, blue: 0.26, opacity: 0.92),
-                            Color(red: 1.0, green: 0.52, blue: 0.12, opacity: 0.80)
-                        ]),
-                        startPoint: CGPoint(x: 0, y: midY + 4),
-                        endPoint: CGPoint(x: width, y: midY + 14)
-                    )
-                )
-
-                // 3. Mid cyan-white transition glow
-                var midGlowCtx = context
-                midGlowCtx.addFilter(.blur(radius: 5.0))
-                let midGlowPath = buildRibbonPath(phaseOffset: 0.2, yOffset: -2, thickness: 11, ampScale: 1.0)
-                midGlowCtx.fill(
-                    midGlowPath,
-                    with: .color(Color(red: 0.65, green: 0.92, blue: 1.0, opacity: 0.92))
-                )
-
-                // 4. Blazing white plasma core ribbon
-                var coreCtx = context
-                coreCtx.addFilter(.blur(radius: 1.8))
-                let corePath = buildRibbonPath(phaseOffset: 0.15, yOffset: 0, thickness: isCircularOrb ? 6.5 : 5.5, ampScale: 0.95)
-                coreCtx.fill(
-                    corePath,
-                    with: .color(Color.white.opacity(0.98))
-                )
+                }
             }
         }
     }
+
+    private func drawRibbonWaveAndMicInteractivity(
+        context: GraphicsContext,
+        size: CGSize,
+        t: TimeInterval,
+        effectiveOpacity: Double,
+        micEnergy: Double
+    ) {
+        guard effectiveOpacity > 0.005 else { return }
+
+        let width = size.width
+        let height = size.height
+        let midY = height * (isCircularOrb ? 0.50 : 0.54)
+        let steps = 64
+        let micBoost = isCircularOrb ? micEnergy : (micEnergy * 0.25)
+
+        // High-energy full-sphere S-curve arch blend (`Orbs 3 & 4` in the `mic interactivity` strip of `14.58.49.png`)
+        let highArchMix = isCircularOrb ? max(0.0, min(1.0, (micBoost - 0.50) / 0.28)) : 0.0
+        // Braided figure-8 double-helix blend (`Orbs 1, 2, 5, 6` in the `mic interactivity` strip of `14.58.49.png`)
+        let braidMix = isCircularOrb ? max(0.0, min(1.0, (micBoost - 0.06) / 0.30)) * (1.0 - highArchMix * 0.85) : 0.0
+
+        // 0. Focused white radial caustic glow immediately beneath the center of the wave (`14.58.49.png`)
+        if isCircularOrb {
+            var causticCtx = context
+            causticCtx.opacity = effectiveOpacity * (0.45 + 0.35 * micBoost)
+            causticCtx.addFilter(.blur(radius: 7.5))
+            let causticW: CGFloat = 28.0 + 16.0 * CGFloat(micBoost)
+            let causticH: CGFloat = 18.0 + 10.0 * CGFloat(micBoost)
+            let causticRect = CGRect(
+                x: width * 0.5 - causticW * 0.5,
+                y: midY - 1.0,
+                width: causticW,
+                height: causticH
+            )
+            causticCtx.fill(
+                Path(ellipseIn: causticRect),
+                with: .color(Color.white.opacity(0.90))
+            )
+        }
+
+        // If in high/peak speech (`highArchMix > 0.01`), draw the full-sphere S-curve plasma arches (Orb 3 fiery orange-gold upper-left arch & Orb 4 icy-cyan/cobalt/red-orange diagonal swirl)
+        if highArchMix > 0.01 {
+            drawHighEnergyMicSwirl(
+                context: context,
+                size: size,
+                t: t,
+                opacity: effectiveOpacity * highArchMix,
+                intensity: micBoost
+            )
+        }
+
+        // Base + Braided Figure-8 Equator Wave (`Frames 2–18` & `Orbs 1, 2, 5, 6` of `mic interactivity`)
+        let baseWaveOpacity = effectiveOpacity * (1.0 - highArchMix * 0.92)
+        guard baseWaveOpacity > 0.01 else { return }
+
+        // Keep the wave tightly focused around the equator (`amp ~ 3.2pt` idle, `~5.8pt` braided) so the upper obsidian dome stays pure jet-black like `14.58.49.png`!
+        func waveY(xNorm: Double, phaseOffset: Double, ampScale: Double, sign: Double = 1.0) -> CGFloat {
+            let edgeEnvelope = isCircularOrb
+                ? (0.25 + 0.75 * sin(xNorm * .pi))
+                : (0.45 + 0.55 * sin(xNorm * .pi))
+            let speed = 3.6 + 1.6 * micBoost
+            // Smooth 1.25-cycle S-curve across the equator (`Frames 6, 7, 9` of `14.58.49.png`)
+            let gentleSCurve = sin((xNorm - 0.18) * .pi * 1.65 - t * speed + phaseOffset)
+            // Figure-8 braided harmonic for `Orbs 1, 2, 5, 6` of `mic interactivity`
+            let figure8 = sin((xNorm - 0.5) * .pi * 2.1) * cos(t * 3.2 + phaseOffset * 0.6)
+            let blended = gentleSCurve * (1.0 - 0.58 * braidMix) + (sign * figure8 * 1.25) * (0.58 * braidMix)
+            let baseAmp = (isCircularOrb ? 3.2 : 4.2) + (isCircularOrb ? 3.4 * braidMix : 1.2 * micBoost)
+            return midY + CGFloat(blended * baseAmp * ampScale * edgeEnvelope)
+        }
+
+        func buildRibbonPath(
+            phaseOffset: Double,
+            yOffset: CGFloat,
+            thickness: CGFloat,
+            ampScale: Double = 1.0,
+            centerBulge: CGFloat = 0.0,
+            sign: Double = 1.0
+        ) -> Path {
+            var path = Path()
+            for i in 0...steps {
+                let u = Double(i) / Double(steps)
+                let x = CGFloat(u) * width
+                let bulge = centerBulge * CGFloat(pow(sin(u * .pi), 3.2))
+                let halfThick = (thickness + bulge) * 0.5
+                let y = waveY(xNorm: u, phaseOffset: phaseOffset, ampScale: ampScale, sign: sign) + yOffset - halfThick
+                if i == 0 {
+                    path.move(to: CGPoint(x: x, y: y))
+                } else {
+                    path.addLine(to: CGPoint(x: x, y: y))
+                }
+            }
+            for i in (0...steps).reversed() {
+                let u = Double(i) / Double(steps)
+                let x = CGFloat(u) * width
+                let bulge = centerBulge * CGFloat(pow(sin(u * .pi), 3.2))
+                let halfThick = (thickness + bulge) * 0.5
+                let y = waveY(xNorm: u, phaseOffset: phaseOffset + 0.25, ampScale: ampScale, sign: sign) + yOffset + halfThick
+                path.addLine(to: CGPoint(x: x, y: y))
+            }
+            path.closeSubpath()
+            return path
+        }
+
+        // 1. Upper warm amber-orange horizon glow just above the white wave core (matching `Frames 6, 7, 9` in `14.58.49.png`)
+        var upperAmberCtx = context
+        upperAmberCtx.opacity = baseWaveOpacity
+        upperAmberCtx.addFilter(.blur(radius: isCircularOrb ? 5.0 : 8.5))
+        let upperAmberPath = buildRibbonPath(
+            phaseOffset: 0.0,
+            yOffset: -3.5,
+            thickness: (isCircularOrb ? 8.5 : 12.0) + 3.0 * CGFloat(braidMix),
+            ampScale: 1.0,
+            sign: 1.0
+        )
+        upperAmberCtx.fill(
+            upperAmberPath,
+            with: .linearGradient(
+                Gradient(stops: [
+                    .init(color: Color(red: 0.95, green: 0.48, blue: 0.12, opacity: 0.72), location: 0.0),
+                    .init(color: Color(red: 1.0, green: 0.58, blue: 0.14, opacity: 0.95), location: 0.48),
+                    .init(color: Color(red: 0.95, green: 0.45, blue: 0.12, opacity: 0.72), location: 1.0)
+                ]),
+                startPoint: CGPoint(x: 0, y: midY - 6),
+                endPoint: CGPoint(x: width, y: midY - 2)
+            )
+        )
+
+        // 2. Lower & edge icy cyan-blue refraction fringe just below the white wave core (matching `Frames 6, 7, 9` in `14.58.49.png`)
+        var lowerCyanCtx = context
+        lowerCyanCtx.opacity = baseWaveOpacity
+        lowerCyanCtx.addFilter(.blur(radius: isCircularOrb ? 4.2 : 7.5))
+        let lowerCyanPath = buildRibbonPath(
+            phaseOffset: 0.25,
+            yOffset: 2.5,
+            thickness: (isCircularOrb ? 7.5 : 11.0) + 3.0 * CGFloat(braidMix),
+            ampScale: 1.05,
+            sign: 1.0
+        )
+        lowerCyanCtx.fill(
+            lowerCyanPath,
+            with: .linearGradient(
+                Gradient(stops: [
+                    .init(color: Color(red: 0.06, green: 0.74, blue: 1.0, opacity: 0.95), location: 0.0),
+                    .init(color: Color(red: 0.24, green: 0.88, blue: 1.0, opacity: 0.96), location: 0.45),
+                    .init(color: Color(red: 0.08, green: 0.62, blue: 1.0, opacity: 0.90), location: 1.0)
+                ]),
+                startPoint: CGPoint(x: 0, y: midY),
+                endPoint: CGPoint(x: width, y: midY + 6)
+            )
+        )
+
+        // 3. `mic interactivity` Braided Figure-8 Double-Helix Ribbons (`Orbs 1, 2, 5, 6` in `14.58.49.png`)
+        if braidMix > 0.02 {
+            // Strand A (sign = +1): Vivid Cyan -> Spring Emerald-Lime -> Blazing White Center -> Warm Amber-Orange
+            var strandACtx = context
+            strandACtx.opacity = baseWaveOpacity * min(1.0, braidMix * 1.35)
+            strandACtx.addFilter(.blur(radius: 1.8))
+            let strandAPath = buildRibbonPath(
+                phaseOffset: 0.05,
+                yOffset: -1.0,
+                thickness: 4.5 + 3.0 * CGFloat(braidMix),
+                ampScale: 1.35,
+                centerBulge: 7.0 * CGFloat(braidMix),
+                sign: 1.0
+            )
+            strandACtx.fill(
+                strandAPath,
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: Color(red: 0.05, green: 0.78, blue: 1.0), location: 0.0),
+                        .init(color: Color(red: 0.25, green: 0.96, blue: 0.55), location: 0.28),
+                        .init(color: Color.white, location: 0.50),
+                        .init(color: Color(red: 1.0, green: 0.80, blue: 0.18), location: 0.72),
+                        .init(color: Color(red: 1.0, green: 0.38, blue: 0.10), location: 1.0)
+                    ]),
+                    startPoint: CGPoint(x: 0, y: midY - 5),
+                    endPoint: CGPoint(x: width, y: midY + 5)
+                )
+            )
+
+            // Strand B (sign = -1): Warm Coral-Orange -> Peach-Gold -> Blazing White Center -> Icy Cyan -> Cobalt Blue
+            var strandBCtx = context
+            strandBCtx.opacity = baseWaveOpacity * min(1.0, braidMix * 1.35)
+            strandBCtx.addFilter(.blur(radius: 1.8))
+            let strandBPath = buildRibbonPath(
+                phaseOffset: 0.45,
+                yOffset: 1.0,
+                thickness: 4.5 + 3.0 * CGFloat(braidMix),
+                ampScale: 1.35,
+                centerBulge: 7.0 * CGFloat(braidMix),
+                sign: -1.0
+            )
+            strandBCtx.fill(
+                strandBPath,
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: Color(red: 1.0, green: 0.42, blue: 0.14), location: 0.0),
+                        .init(color: Color(red: 1.0, green: 0.72, blue: 0.36), location: 0.28),
+                        .init(color: Color.white, location: 0.50),
+                        .init(color: Color(red: 0.20, green: 0.94, blue: 1.0), location: 0.70),
+                        .init(color: Color(red: 0.10, green: 0.48, blue: 1.0), location: 1.0)
+                    ]),
+                    startPoint: CGPoint(x: 0, y: midY + 5),
+                    endPoint: CGPoint(x: width, y: midY - 5)
+                )
+            )
+        }
+
+        // 4. Crisp blazing white plasma core ribbon + central figure-8 lens bulge
+        var coreCtx = context
+        coreCtx.opacity = baseWaveOpacity
+        coreCtx.addFilter(.blur(radius: 1.2))
+        let corePath = buildRibbonPath(
+            phaseOffset: 0.12,
+            yOffset: 0,
+            thickness: (isCircularOrb ? 3.8 : 4.6) + 2.0 * CGFloat(braidMix),
+            ampScale: 0.90,
+            centerBulge: isCircularOrb ? (3.5 + 11.5 * CGFloat(braidMix)) : 2.5,
+            sign: 1.0
+        )
+        coreCtx.fill(
+            corePath,
+            with: .color(Color.white.opacity(0.99))
+        )
+    }
+
+    /// Renders the high-amplitude S-curve plasma arches of Orbs 3 & 4 in the `mic interactivity` strip (`14.58.49.png`):
+    /// - Mode A (`polarity >= 0`, matching Orb 3): Deep black upper-right pocket + fiery golden-orange upper-left S-arch + huge S-curved white center core + electric cyan lower-right ribbon.
+    /// - Mode B (`polarity < 0`, matching Orb 4): Icy cyan-white upper-left arch + dark bronze upper-right pocket + vivid red-orange-magenta lower-left ribbon + blazing white/cyan center + deep cobalt-royal blue lower-right glow.
+    private func drawHighEnergyMicSwirl(
+        context: GraphicsContext,
+        size: CGSize,
+        t: TimeInterval,
+        opacity: Double,
+        intensity: Double
+    ) {
+        let width = size.width
+        let height = size.height
+        let steps = 64
+        let polarity = sin(t * 2.6)
+        let orb3Weight = max(0.0, min(1.0, (polarity + 1.0) * 0.5))
+        let orb4Weight = 1.0 - orb3Weight
+
+        if orb3Weight > 0.01 {
+            let w3 = opacity * orb3Weight
+            // Orb 3 S-curve centerline: starts at left (y ~ 0.44), arches high in upper-left (u=0.26, y ~ 0.25), sweeps through center (u=0.52, y ~ 0.48) to lower-right (u=0.92, y ~ 0.58)
+            func orb3Y(u: Double) -> CGFloat {
+                let arch = -0.22 * sin(u * .pi * 1.42) + 0.08 * sin(u * .pi * 2.4)
+                return height * CGFloat(0.47 + arch)
+            }
+            func buildOrb3Path(yOff: CGFloat, thick: CGFloat, bulge: CGFloat) -> Path {
+                var p = Path()
+                for i in 0...steps {
+                    let u = Double(i) / Double(steps)
+                    let x = CGFloat(u) * width
+                    let b = bulge * CGFloat(pow(sin(u * .pi), 1.8))
+                    let ht = (thick + b) * 0.5
+                    let y = orb3Y(u: u) + yOff - ht
+                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+                }
+                for i in (0...steps).reversed() {
+                    let u = Double(i) / Double(steps)
+                    let x = CGFloat(u) * width
+                    let b = bulge * CGFloat(pow(sin(u * .pi), 1.8))
+                    let ht = (thick + b) * 0.5
+                    let y = orb3Y(u: u) + yOff + ht
+                    p.addLine(to: CGPoint(x: x, y: y))
+                }
+                p.closeSubpath()
+                return p
+            }
+
+            // 1. Upper-left golden-amber inner dome rim glow (`Orb 3`)
+            var rim3Ctx = context
+            rim3Ctx.opacity = w3
+            rim3Ctx.addFilter(.blur(radius: 4.5))
+            let rim3Rect = CGRect(x: width * 0.03, y: height * 0.03, width: width * 0.68, height: height * 0.58)
+            rim3Ctx.stroke(
+                Path(ellipseIn: rim3Rect),
+                with: .linearGradient(
+                    Gradient(colors: [
+                        Color(red: 1.0, green: 0.62, blue: 0.08),
+                        Color(red: 1.0, green: 0.82, blue: 0.22),
+                        Color.clear
+                    ]),
+                    startPoint: CGPoint(x: width * 0.08, y: height * 0.08),
+                    endPoint: CGPoint(x: width * 0.68, y: height * 0.45)
+                ),
+                lineWidth: 9.0
+            )
+
+            // 2. Fiery orange-red & golden-yellow upper S-curve band (`Orb 3`)
+            var orange3Ctx = context
+            orange3Ctx.opacity = w3
+            orange3Ctx.addFilter(.blur(radius: 3.2))
+            let orange3Path = buildOrb3Path(yOff: -5.5, thick: 12.0, bulge: 18.0)
+            orange3Ctx.fill(
+                orange3Path,
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: Color(red: 1.0, green: 0.36, blue: 0.04), location: 0.0),
+                        .init(color: Color(red: 1.0, green: 0.48, blue: 0.02), location: 0.35),
+                        .init(color: Color(red: 1.0, green: 0.84, blue: 0.12), location: 0.65),
+                        .init(color: Color(red: 0.12, green: 0.78, blue: 1.0), location: 0.88),
+                        .init(color: Color(red: 0.08, green: 0.42, blue: 1.0), location: 1.0)
+                    ]),
+                    startPoint: CGPoint(x: 0, y: height * 0.22),
+                    endPoint: CGPoint(x: width, y: height * 0.58)
+                )
+            )
+
+            // 3. Lower-right electric cyan & cobalt blue edge ribbon (`Orb 3`)
+            var cyan3Ctx = context
+            cyan3Ctx.opacity = w3
+            cyan3Ctx.addFilter(.blur(radius: 3.0))
+            let cyan3Path = buildOrb3Path(yOff: 5.0, thick: 9.0, bulge: 14.0)
+            cyan3Ctx.fill(
+                cyan3Path,
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: Color.clear, location: 0.0),
+                        .init(color: Color(red: 1.0, green: 0.88, blue: 0.35, opacity: 0.6), location: 0.42),
+                        .init(color: Color(red: 0.05, green: 0.86, blue: 1.0), location: 0.74),
+                        .init(color: Color(red: 0.08, green: 0.38, blue: 1.0), location: 1.0)
+                    ]),
+                    startPoint: CGPoint(x: width * 0.25, y: height * 0.40),
+                    endPoint: CGPoint(x: width, y: height * 0.68)
+                )
+            )
+
+            // 4. Huge S-curved blazing white central plasma core (`Orb 3`)
+            var white3Ctx = context
+            white3Ctx.opacity = w3
+            white3Ctx.addFilter(.blur(radius: 1.6))
+            let white3Path = buildOrb3Path(yOff: 1.0, thick: 7.5, bulge: 26.0)
+            white3Ctx.fill(white3Path, with: .color(Color.white.opacity(0.99)))
+        }
+
+        if orb4Weight > 0.01 {
+            let w4 = opacity * orb4Weight
+            // Orb 4 S-curve centerline: lower-left (u=0.08, y ~ 0.60) -> arches up through center (u=0.48, y ~ 0.36) -> curves to mid-right (u=0.92, y ~ 0.54)
+            func orb4Y(u: Double) -> CGFloat {
+                let arch = 0.16 * cos(u * .pi * 1.65) - 0.06 * sin(u * .pi * 1.2)
+                return height * CGFloat(0.46 + arch)
+            }
+            func buildOrb4Path(yOff: CGFloat, thick: CGFloat, bulge: CGFloat) -> Path {
+                var p = Path()
+                for i in 0...steps {
+                    let u = Double(i) / Double(steps)
+                    let x = CGFloat(u) * width
+                    let b = bulge * CGFloat(pow(sin(u * .pi), 1.8))
+                    let ht = (thick + b) * 0.5
+                    let y = orb4Y(u: u) + yOff - ht
+                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+                }
+                for i in (0...steps).reversed() {
+                    let u = Double(i) / Double(steps)
+                    let x = CGFloat(u) * width
+                    let b = bulge * CGFloat(pow(sin(u * .pi), 1.8))
+                    let ht = (thick + b) * 0.5
+                    let y = orb4Y(u: u) + yOff + ht
+                    p.addLine(to: CGPoint(x: x, y: y))
+                }
+                p.closeSubpath()
+                return p
+            }
+
+            // 1. Upper-left icy electric cyan-white dome arch (`Orb 4`)
+            var cyanRim4Ctx = context
+            cyanRim4Ctx.opacity = w4
+            cyanRim4Ctx.addFilter(.blur(radius: 4.5))
+            let cyanRim4Rect = CGRect(x: width * 0.04, y: height * 0.03, width: width * 0.66, height: height * 0.56)
+            cyanRim4Ctx.stroke(
+                Path(ellipseIn: cyanRim4Rect),
+                with: .linearGradient(
+                    Gradient(colors: [
+                        Color(red: 0.28, green: 0.94, blue: 1.0),
+                        Color.white,
+                        Color.clear
+                    ]),
+                    startPoint: CGPoint(x: width * 0.10, y: height * 0.08),
+                    endPoint: CGPoint(x: width * 0.66, y: height * 0.44)
+                ),
+                lineWidth: 9.5
+            )
+
+            // 2. Upper-right golden-bronze rim accent & lower-right royal cobalt blue glow (`Orb 4`)
+            var cobalt4Ctx = context
+            cobalt4Ctx.opacity = w4
+            cobalt4Ctx.addFilter(.blur(radius: 6.5))
+            let cobalt4Rect = CGRect(x: width * 0.34, y: height * 0.44, width: width * 0.56, height: height * 0.34)
+            cobalt4Ctx.fill(
+                Path(ellipseIn: cobalt4Rect),
+                with: .color(Color(red: 0.08, green: 0.38, blue: 1.0, opacity: 0.95))
+            )
+
+            // 3. Chromatic S-curve ribbon: Warm Red-Orange-Magenta on lower-left -> Blazing Cyan-White center -> Golden-Amber upper-right (`Orb 4`)
+            var swirl4Ctx = context
+            swirl4Ctx.opacity = w4
+            swirl4Ctx.addFilter(.blur(radius: 3.0))
+            let swirl4Path = buildOrb4Path(yOff: 0, thick: 12.0, bulge: 18.0)
+            swirl4Ctx.fill(
+                swirl4Path,
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: Color(red: 1.0, green: 0.24, blue: 0.12), location: 0.0),
+                        .init(color: Color(red: 1.0, green: 0.28, blue: 0.58), location: 0.24),
+                        .init(color: Color(red: 0.12, green: 0.90, blue: 1.0), location: 0.52),
+                        .init(color: Color(red: 1.0, green: 0.76, blue: 0.22), location: 0.82),
+                        .init(color: Color(red: 0.16, green: 0.68, blue: 1.0), location: 1.0)
+                    ]),
+                    startPoint: CGPoint(x: 0, y: height * 0.60),
+                    endPoint: CGPoint(x: width, y: height * 0.34)
+                )
+            )
+
+            // 4. Blazing white S-curved central plasma core (`Orb 4`)
+            var white4Ctx = context
+            white4Ctx.opacity = w4
+            white4Ctx.addFilter(.blur(radius: 1.6))
+            let white4Path = buildOrb4Path(yOff: -1.5, thick: 7.0, bulge: 24.0)
+            white4Ctx.fill(white4Path, with: .color(Color.white.opacity(0.99)))
+        }
+    }
+
+    private func drawFrame19AlmondLens(
+        context: GraphicsContext,
+        size: CGSize,
+        center: CGPoint,
+        t: TimeInterval
+    ) {
+        // Cyan upper atmospheric halo around the contracting almond lens
+        var cyanCtx = context
+        cyanCtx.addFilter(.blur(radius: 9.0))
+        let cyanRect = CGRect(x: center.x - 28, y: center.y - 14, width: 56, height: 22)
+        cyanCtx.fill(
+            Path(ellipseIn: cyanRect),
+            with: .color(Color(red: 0.18, green: 0.72, blue: 1.0, opacity: 0.90))
+        )
+
+        // Warm amber-orange lower halo at left/right tips
+        var amberCtx = context
+        amberCtx.addFilter(.blur(radius: 8.0))
+        let amberRect = CGRect(x: center.x - 30, y: center.y - 4, width: 60, height: 20)
+        amberCtx.fill(
+            Path(ellipseIn: amberRect),
+            with: .color(Color(red: 1.0, green: 0.58, blue: 0.16, opacity: 0.86))
+        )
+
+        // Bright white central almond / eye lens (`14.58.49.png` Frame 19)
+        var almondPath = Path()
+        let halfW: CGFloat = 25.0
+        let halfH: CGFloat = 11.5
+        almondPath.move(to: CGPoint(x: center.x - halfW, y: center.y + 2))
+        almondPath.addQuadCurve(
+            to: CGPoint(x: center.x + halfW, y: center.y - 1),
+            control: CGPoint(x: center.x, y: center.y - halfH * 1.45)
+        )
+        almondPath.addQuadCurve(
+            to: CGPoint(x: center.x - halfW, y: center.y + 2),
+            control: CGPoint(x: center.x, y: center.y + halfH * 1.45)
+        )
+        almondPath.closeSubpath()
+
+        var coreCtx = context
+        coreCtx.addFilter(.blur(radius: 2.2))
+        coreCtx.fill(almondPath, with: .color(Color.white.opacity(0.98)))
+    }
+
+    private func drawFrame20GlowingSun(
+        context: GraphicsContext,
+        center: CGPoint,
+        t: TimeInterval
+    ) {
+        // Soft outer white/silver radial bloom (`14.58.49.png` Frame 20)
+        var outerBloomCtx = context
+        outerBloomCtx.addFilter(.blur(radius: 8.5))
+        let outerRect = CGRect(x: center.x - 21, y: center.y - 21, width: 42, height: 42)
+        outerBloomCtx.fill(
+            Path(ellipseIn: outerRect),
+            with: .color(Color.white.opacity(0.65))
+        )
+
+        // Bright circular glowing white sun core
+        var innerCoreCtx = context
+        innerCoreCtx.addFilter(.blur(radius: 2.0))
+        let innerRect = CGRect(x: center.x - 14.5, y: center.y - 14.5, width: 29, height: 29)
+        innerCoreCtx.fill(
+            Path(ellipseIn: innerRect),
+            with: .color(Color.white.opacity(0.98))
+        )
+    }
+
+    private func drawFrame21SingleCenterDot(
+        context: GraphicsContext,
+        center: CGPoint
+    ) {
+        // Subtle halo around the single center dot
+        var haloCtx = context
+        haloCtx.addFilter(.blur(radius: 3.0))
+        let haloRect = CGRect(x: center.x - 6.0, y: center.y - 6.0, width: 12.0, height: 12.0)
+        haloCtx.fill(
+            Path(ellipseIn: haloRect),
+            with: .color(Color.white.opacity(0.42))
+        )
+
+        // Crisp solid white center dot (`14.58.49.png` Frame 21)
+        let dotRect = CGRect(x: center.x - 4.4, y: center.y - 4.4, width: 8.8, height: 8.8)
+        context.fill(
+            Path(ellipseIn: dotRect),
+            with: .color(Color.white.opacity(0.98))
+        )
+    }
+
+    private func drawFrames22And23Constellation(
+        context: GraphicsContext,
+        center: CGPoint,
+        t: TimeInterval,
+        orbFrame: Int
+    ) {
+        // 6 graded white dots arranged around the sphere matching Frames 22 & 23 of `14.58.49.png`:
+        // - 2 larger slightly oval dots at bottom-left and bottom-right (~8.5x6.8pt)
+        // - 2 medium dots at right and top-right (~5.6pt)
+        // - 2 smaller dots at top-left and left (~3.8pt)
+        let baseRotation = (orbFrame >= 23) ? (t * 0.85) : 0.0
+        let specs: [(angleDeg: Double, radius: CGFloat, w: CGFloat, h: CGFloat, tiltDeg: Double)] = [
+            (72,  21.5, 8.8, 6.8, -14), // bottom-right large oval dot
+            (116, 20.5, 8.2, 6.4,  18), // bottom-left large oval dot
+            (16,  23.0, 5.8, 5.4,   0), // mid-right medium dot
+            (-36, 21.0, 5.2, 5.0,   0), // top-right medium dot
+            (-132, 20.5, 3.8, 3.8,  0), // top-left small dot
+            (172, 22.0, 3.6, 3.6,   0)  // mid-left small dot
+        ]
+
+        for spec in specs {
+            let rad = (spec.angleDeg * .pi / 180.0) + baseRotation * 0.35
+            let px = center.x + cos(rad) * spec.radius
+            let py = center.y + sin(rad) * spec.radius
+
+            var dotCtx = context
+            dotCtx.translateBy(x: px, y: py)
+            if spec.tiltDeg != 0 {
+                dotCtx.rotate(by: .degrees(spec.tiltDeg))
+            }
+            let rect = CGRect(x: -spec.w * 0.5, y: -spec.h * 0.5, width: spec.w, height: spec.h)
+            dotCtx.fill(
+                Path(ellipseIn: rect),
+                with: .color(Color.white.opacity(0.96))
+            )
+        }
+    }
 }
+
 

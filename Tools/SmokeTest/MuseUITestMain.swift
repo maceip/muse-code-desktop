@@ -308,19 +308,131 @@ struct MuseUITestMain {
             composerTexts.contains("Ask Anything") || composerTexts.contains("Muse is not running…") || composerTexts.contains("Steer Muse, or queue a follow-up…"),
             "Liquid Glass input pill must mount PlaceholderTextView with 'Ask Anything' placeholder (got: \(composerTexts))"
         )
-        let orbHost = NSHostingView(
-            rootView: LiquidGlassVoiceOrbView(
-                isRecording: true,
-                isTranscribing: false,
-                duration: 2.5,
-                onTap: {}
+        // Verify all 23 frames (`1...23`) of the Voice Orb transition (`14.58.49.png` & `orb1.gif`)
+        let f1 = VoiceOrbFrameDescriptor.descriptor(forFrame: 1)
+        let f2 = VoiceOrbFrameDescriptor.descriptor(forFrame: 2)
+        let f3 = VoiceOrbFrameDescriptor.descriptor(forFrame: 3)
+        let f4 = VoiceOrbFrameDescriptor.descriptor(forFrame: 4)
+        let f5 = VoiceOrbFrameDescriptor.descriptor(forFrame: 5)
+        let f6 = VoiceOrbFrameDescriptor.descriptor(forFrame: 6)
+        let f7 = VoiceOrbFrameDescriptor.descriptor(forFrame: 7)
+        let f8 = VoiceOrbFrameDescriptor.descriptor(forFrame: 8)
+        let f12 = VoiceOrbFrameDescriptor.descriptor(forFrame: 12)
+        let f19 = VoiceOrbFrameDescriptor.descriptor(forFrame: 19)
+        let f20 = VoiceOrbFrameDescriptor.descriptor(forFrame: 20)
+        let f21 = VoiceOrbFrameDescriptor.descriptor(forFrame: 21)
+        let f22 = VoiceOrbFrameDescriptor.descriptor(forFrame: 22)
+        let f23 = VoiceOrbFrameDescriptor.descriptor(forFrame: 23)
+        check(f1.pillFixedWidth == nil && f1.waveOpacity == 0.0 && f1.subcontainerOpacity == 1.0, "Frame 1 must be full-width idle composer with no wave")
+        check(f2.pillFixedWidth == nil && f2.waveOpacity > 0.90 && f2.subcontainerOpacity == 1.0, "Frame 2 must ignite full-width plasma wave inside full-width top pill while subcontainer remains visible")
+        check(f3.pillFixedWidth == 380 && f3.subcontainerBlur == 6.5 && f3.subcontainerOpacity == 0.82, "Frame 3 must contract top pill to 380pt and soften subcontainer with blur 6.5")
+        check(f4.pillFixedWidth == 240 && f4.subcontainerBlur == 14.0 && f4.subcontainerOpacity == 0.44, "Frame 4 must contract top pill to 240pt and blur subcontainer to 14.0")
+        check(f5.pillFixedWidth == 118 && f5.subcontainerOpacity == 0.0, "Frame 5 must contract top pill to 118pt squircle and dissolve subcontainer")
+        check(f6.pillFixedWidth == 98 && f6.pillHeight == 88, "Frame 6 must be 98x88 oblate 3D Liquid Glass sphere")
+        check(f7.pillFixedWidth == 90 && f7.pillHeight == 90 && f7.waveOpacity == 1.0, "Frame 7 must be 90x90 circular 3D Liquid Glass sphere")
+        check(f8.orbPhase == .darkBlink && f8.waveOpacity < 0.10, "Frame 8 must be single-frame dark obsidian blink before active listening")
+        check(f12.orbPhase == .ribbonWave && f12.waveOpacity == 1.0, "Frames 9-18 must render undulating chromatic ribbon wave")
+        check(f19.orbPhase == .centralAlmondLens, "Frame 19 must contract wave into central white almond lens")
+        check(f20.orbPhase == .centralGlowingSun, "Frame 20 must round into central circular glowing white sun")
+        check(f21.orbPhase == .singleCenterDot, "Frame 21 must condense into single crisp white center dot")
+        check(f22.orbPhase == .constellationDots && f23.orbPhase == .constellationDots, "Frames 22-23 must burst into the 6-dot constellation")
+
+        for testFrame in [6, 8, 12, 19, 20, 21, 23] {
+            let desc = VoiceOrbFrameDescriptor.descriptor(forFrame: testFrame)
+            let orbHost = NSHostingView(
+                rootView: LiquidGlassVoiceOrbView(
+                    orbFrame: testFrame,
+                    descriptor: desc,
+                    isRecording: testFrame < 19,
+                    isTranscribing: testFrame >= 19,
+                    audioLevel: testFrame == 12 ? 0.78 : 0.0,
+                    duration: 2.5,
+                    onTap: {}
+                )
+                .frame(width: 114, height: 114)
             )
-            .frame(width: 96, height: 96)
-        )
-        window.contentView = orbHost
-        orbHost.frame = NSRect(x: 0, y: 0, width: 96, height: 96)
-        orbHost.layoutSubtreeIfNeeded()
-        check(orbHost.fittingSize.width >= 92 && orbHost.fittingSize.height >= 92, "LiquidGlassVoiceOrbView must render the 3D 96x96 Liquid Glass Voice Orb")
+            window.contentView = orbHost
+            orbHost.frame = NSRect(x: 0, y: 0, width: 114, height: 114)
+            orbHost.layoutSubtreeIfNeeded()
+            check(orbHost.fittingSize.width >= 90 && orbHost.fittingSize.height >= 90, "LiquidGlassVoiceOrbView must render Frame \(testFrame) of the 3D Liquid Glass Voice Orb")
+        }
+
+        if ProcessInfo.processInfo.environment["MUSE_RENDER_ORB_SHEET"] == "1" {
+            let micStates: [(label: String, level: Double, time: TimeInterval)] = [
+                ("Mic 1 (Braid)", 0.28, 0.25),
+                ("Mic 2 (Double Helix)", 0.42, 0.70),
+                ("Mic 3 (Orange Arch)", 0.88, 0.60),   // sin(0.60 * 2.6) ≈ +1.0 -> Orb 3
+                ("Mic 4 (Cyan/Cobalt)", 0.92, 1.81),   // sin(1.81 * 2.6) ≈ -1.0 -> Orb 4
+                ("Mic 5 (Settling A)", 0.35, 1.15),
+                ("Mic 6 (Settling B)", 0.24, 1.65)
+            ]
+            let sheetView = VStack(alignment: .leading, spacing: 20) {
+                // Row 1: Bitmap shadow & lower-hemisphere translucency test (matching 14.58.49.png)
+                HStack(spacing: 18) {
+                    ForEach([6, 7, 8, 9, 19, 20, 21, 22], id: \.self) { frameNum in
+                        let desc = VoiceOrbFrameDescriptor.descriptor(forFrame: frameNum)
+                        ZStack {
+                            Color.white
+                            VStack(spacing: 28) {
+                                Text("remove purple border")
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(Color(red: 0.94, green: 0.12, blue: 0.90))
+                                Text("in app rail mode, search on")
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(Color(red: 0.94, green: 0.12, blue: 0.90))
+                            }
+                            .offset(y: -6)
+
+                            LiquidGlassVoiceOrbView(
+                                orbFrame: frameNum,
+                                descriptor: desc,
+                                isRecording: frameNum < 19,
+                                isTranscribing: frameNum >= 19,
+                                audioLevel: 0.0,
+                                duration: 1.2,
+                                fixedTimeOverride: 0.45,
+                                onTap: {}
+                            )
+                        }
+                        .frame(width: 132, height: 136)
+                        .clipped()
+                    }
+                }
+
+                // Row 2: The 6 `mic interactivity` states over white background with downward drop shadows
+                HStack(spacing: 24) {
+                    ForEach(Array(micStates.enumerated()), id: \.offset) { _, spec in
+                        let desc = VoiceOrbFrameDescriptor.descriptor(forFrame: 12)
+                        ZStack {
+                            Color.white
+                            LiquidGlassVoiceOrbView(
+                                orbFrame: 12,
+                                descriptor: desc,
+                                isRecording: true,
+                                isTranscribing: false,
+                                audioLevel: spec.level,
+                                duration: 2.0,
+                                fixedTimeOverride: spec.time,
+                                onTap: {}
+                            )
+                        }
+                        .frame(width: 132, height: 136)
+                    }
+                }
+            }
+            .padding(20)
+            .background(Color.white)
+
+            let renderer = ImageRenderer(content: sheetView)
+            renderer.scale = 2.0
+            if let cgImage = renderer.cgImage {
+                let rep = NSBitmapImageRep(cgImage: cgImage)
+                if let pngData = rep.representation(using: .png, properties: [:]) {
+                    try? pngData.write(to: URL(fileURLWithPath: "/tmp/muse_orb_verification.png"))
+                    print("Saved /tmp/muse_orb_verification.png")
+                }
+            }
+        }
 
         print("PASS: All Muse UI, Liquid Glass composer, 3D Voice Orb, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, and backend state transitions verified.")
         exit(0)
