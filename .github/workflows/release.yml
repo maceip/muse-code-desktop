@@ -42,6 +42,7 @@ jobs:
         id: cap
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           # Rolling window: capacity = releases PUBLISHED in the last 60 minutes
           # (skipped attempts never consume capacity, so the window always frees
