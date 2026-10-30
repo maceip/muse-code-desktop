@@ -24,15 +24,23 @@ struct SidebarHeader: View {
         .padding(.bottom, 6)
     }
 
-    /// Muse title in the sidebar header.
+    /// Muse title in the sidebar header — clicking starts a new empty chat session.
     private var harnessMenu: some View {
-        Text(state.activeHarness.displayName)
-            .font(.system(size: 17, weight: .semibold))
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: 160, alignment: .leading)
-            .help("Muse Code")
+        Button {
+            state.isSettingsPresented = false
+            Task { await state.newChatInCurrentProject() }
+        } label: {
+            Text(state.activeHarness.displayName)
+                .font(.system(size: 17, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 160, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help("Muse Code — New empty chat session (⌘N)")
     }
 
     private func headerButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {

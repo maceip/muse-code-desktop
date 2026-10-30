@@ -264,6 +264,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muse Code uses your microphone for voice transcription in the composer.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Muse Code uses macOS system speech recognition as a fast on-device backup when Muse voice transcription is unavailable.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -295,6 +296,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muse Code uses your microphone for voice transcription in the composer.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Muse Code uses macOS system speech recognition as a fast on-device backup when Muse voice transcription is unavailable.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

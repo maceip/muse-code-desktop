@@ -264,6 +264,7 @@ struct GeneralSettings: View {
 
 struct ComposerSettings: View {
     @Bindable var state: AppState
+    private var stt: MuseVoiceSTTService { MuseVoiceSTTService.shared }
 
     var body: some View {
         SettingsPage {
@@ -277,6 +278,40 @@ struct ComposerSettings: View {
                         values: PreferencesStore.SendKey.allCases,
                         label: { $0.label }
                     )
+                }
+            }
+
+            SettingsSection("Voice & Speech-to-Text") {
+                SettingsRow(
+                    "Speech-to-text router",
+                    detail: "Auto mode uses Muse STT (`muse voice transcribe`) and automatically fails over to macOS on-device speech recognition when Muse is down or unreachable."
+                ) {
+                    Dropdown(
+                        selection: Binding(
+                            get: { stt.routerMode },
+                            set: { stt.setRouterMode($0) }
+                        ),
+                        values: MuseVoiceSTTRouterMode.allCases,
+                        label: { $0.label }
+                    )
+                }
+                SettingsRow(
+                    "Active STT route",
+                    detail: stt.routerStatusDescription
+                ) {
+                    HStack(spacing: 8) {
+                        if stt.activePrimaryBackend() == .museCLI {
+                            Button("Use System Backup") {
+                                stt.switchToSystemBackupNow()
+                            }
+                            .buttonStyle(.settingsPill)
+                        } else {
+                            Button("Retry Muse STT") {
+                                stt.retryMuseSTTNow()
+                            }
+                            .buttonStyle(.settingsPill)
+                        }
+                    }
                 }
             }
 

@@ -9,7 +9,7 @@ mkdir -p "$DERIVED"
 SOURCES=($(find MuseCode -name '*.swift' ! -name 'MuseCodeApp.swift'))
 
 xcrun swiftc \
-  -O \
+  -Onone \
   -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
   -target arm64-apple-macos14.0 \
   -parse-as-library \

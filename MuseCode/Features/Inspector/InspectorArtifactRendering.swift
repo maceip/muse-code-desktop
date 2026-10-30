@@ -95,7 +95,6 @@ struct InspectorTerminalView: View {
                 .frame(minWidth: geometry.size.width, alignment: .topLeading)
             }
         }
-        .background(AppTheme.background)
     }
 }
 
@@ -116,7 +115,6 @@ struct InspectorGenericToolView: View {
                 .frame(minWidth: geometry.size.width, alignment: .leading)
             }
         }
-        .background(AppTheme.background)
     }
 }
 

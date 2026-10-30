@@ -12,6 +12,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import Speech
 
 // MARK: - Credit & Allowance Battery Tracker (`muse usage --json`)
 
@@ -200,12 +201,63 @@ final class MuseUsageService {
     }
 }
 
-// MARK: - Built-in Speech-to-Text (`muse voice transcribe`)
+// MARK: - Quick-Switching Speech-to-Text Router (`muse voice transcribe` + macOS System `SFSpeechRecognizer` Backup)
+
+enum MuseVoiceSTTRouterMode: String, CaseIterable, Identifiable, Sendable {
+    /// Uses `muse voice transcribe` when healthy, and automatically fails over to macOS System Speech Recognition (`SFSpeechRecognizer`) if Muse is down, unreachable, or times out.
+    case autoMuseWithSystemBackup = "auto"
+    /// Uses `muse voice transcribe` exclusively.
+    case museOnly = "muse"
+    /// Uses macOS System Speech Recognition (`SFSpeechRecognizer`) exclusively.
+    case systemOnly = "system"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .autoMuseWithSystemBackup:
+            return "Auto (Muse → System Backup)"
+        case .museOnly:
+            return "Muse STT Only (muse voice transcribe)"
+        case .systemOnly:
+            return "macOS System STT (On-Device)"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .autoMuseWithSystemBackup:
+            return "Auto Backup"
+        case .museOnly:
+            return "Muse STT"
+        case .systemOnly:
+            return "System STT"
+        }
+    }
+}
+
+enum MuseVoiceSTTBackend: String, CaseIterable, Identifiable, Sendable {
+    case museCLI = "muse"
+    case macOSSystem = "system"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .museCLI:
+            return "Muse STT"
+        case .macOSSystem:
+            return "System STT"
+        }
+    }
+}
 
 @Observable
 @MainActor
 final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
     static let shared = MuseVoiceSTTService()
+    static let routerModeDefaultsKey = "voiceSTTRouterMode"
+    static let museOutageCooldownSeconds: TimeInterval = 60.0
 
     private(set) var isRecording = false
     private(set) var isTranscribing = false
@@ -217,12 +269,132 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
     var lastTranscript: String?
     private(set) var lastError: String?
 
+    /// Persisted speech-to-text routing mode (`auto` = Muse with automatic macOS System backup, `muse`, or `system`).
+    var routerMode: MuseVoiceSTTRouterMode {
+        didSet {
+            UserDefaults.standard.set(routerMode.rawValue, forKey: Self.routerModeDefaultsKey)
+        }
+    }
+    /// Which STT backend produced the most recent transcript (`.museCLI` or `.macOSSystem`).
+    private(set) var lastUsedBackend: MuseVoiceSTTBackend?
+    /// `true` when the router was in `.autoMuseWithSystemBackup` mode and automatically failed over to macOS System STT because Muse was down/unreachable.
+    private(set) var didFallbackToSystem = false
+    /// Diagnostic reason from the last Muse STT failure when failover to macOS System STT triggered.
+    private(set) var lastMuseFailureReason: String?
+    /// Circuit-breaker timestamp while Muse STT is down so consecutive voice utterances route directly to macOS System STT without waiting on a dead Muse endpoint.
+    private(set) var museCircuitOpenUntil: Date?
+
     private var recorder: AVAudioRecorder?
     private var recordingURL: URL?
     private var timerTask: Task<Void, Never>?
     private var activeTranscriptionID = UUID()
     private var pendingInstallation: PiInstallation?
     private var pendingOnTranscribed: (@MainActor (String) -> Void)?
+
+    override init() {
+        let raw = UserDefaults.standard.string(forKey: Self.routerModeDefaultsKey) ?? ""
+        self.routerMode = MuseVoiceSTTRouterMode(rawValue: raw) ?? .autoMuseWithSystemBackup
+        super.init()
+    }
+
+    /// Returns `true` if Muse STT recently failed and the temporary failover circuit breaker is open.
+    func isMuseCircuitOpen(at date: Date = Date()) -> Bool {
+        guard let until = museCircuitOpenUntil else { return false }
+        return date < until
+    }
+
+    /// Returns the backend that will handle the next transcription request at `date`.
+    func activePrimaryBackend(at date: Date = Date()) -> MuseVoiceSTTBackend {
+        switch routerMode {
+        case .systemOnly:
+            return .macOSSystem
+        case .museOnly:
+            return .museCLI
+        case .autoMuseWithSystemBackup:
+            return isMuseCircuitOpen(at: date) ? .macOSSystem : .museCLI
+        }
+    }
+
+    /// Human-readable status badge for the composer / settings UI.
+    var routerBadgeText: String {
+        switch routerMode {
+        case .systemOnly:
+            return "System STT"
+        case .museOnly:
+            return "Muse STT"
+        case .autoMuseWithSystemBackup:
+            if isMuseCircuitOpen() || didFallbackToSystem {
+                return "System Backup"
+            }
+            if let last = lastUsedBackend {
+                return last == .macOSSystem ? "System Backup" : "Muse STT"
+            }
+            return "Auto Backup"
+        }
+    }
+
+    /// Detailed router status description for tooltips and Settings.
+    var routerStatusDescription: String {
+        switch routerMode {
+        case .systemOnly:
+            return "Using macOS System Speech Recognition (On-Device)"
+        case .museOnly:
+            return "Using Muse CLI (`muse voice transcribe`) only"
+        case .autoMuseWithSystemBackup:
+            if isMuseCircuitOpen() {
+                let reason = lastMuseFailureReason ?? "Muse STT unreachable"
+                return "Muse STT down (\(reason)) — routed to macOS System STT backup"
+            }
+            if didFallbackToSystem {
+                return "Last utterance failed over to macOS System STT backup"
+            }
+            return "Auto-routing: Muse STT primary with instant macOS System STT backup"
+        }
+    }
+
+    /// Sets the router mode and resets any stale outage circuit breaker when switching back to Muse.
+    func setRouterMode(_ mode: MuseVoiceSTTRouterMode) {
+        routerMode = mode
+        if mode == .museOnly {
+            museCircuitOpenUntil = nil
+            didFallbackToSystem = false
+            lastMuseFailureReason = nil
+        } else if mode == .systemOnly {
+            didFallbackToSystem = false
+        }
+    }
+
+    /// Immediately switches active transcription to macOS System STT (either by tripping the backup circuit in Auto mode or switching from Muse Only to Auto Backup).
+    func switchToSystemBackupNow(reason: String = "Manual quick-switch to System STT") {
+        if routerMode == .museOnly {
+            routerMode = .autoMuseWithSystemBackup
+        }
+        lastMuseFailureReason = reason
+        didFallbackToSystem = true
+        museCircuitOpenUntil = Date().addingTimeInterval(Self.museOutageCooldownSeconds)
+    }
+
+    /// Clears the Muse outage circuit breaker so the next recording probes `muse voice transcribe` immediately.
+    func retryMuseSTTNow() {
+        if routerMode == .systemOnly {
+            routerMode = .autoMuseWithSystemBackup
+        }
+        museCircuitOpenUntil = nil
+        didFallbackToSystem = false
+        lastMuseFailureReason = nil
+    }
+
+    /// Cycles through the STT router modes for one-click quick switching.
+    func cycleRouterMode() {
+        switch routerMode {
+        case .autoMuseWithSystemBackup:
+            setRouterMode(.systemOnly)
+        case .systemOnly:
+            setRouterMode(.museOnly)
+        case .museOnly:
+            setRouterMode(.autoMuseWithSystemBackup)
+        }
+    }
 
     func toggleRecording(installation: PiInstallation?, onTranscribed: @escaping @MainActor (String) -> Void) async {
         if isRecording {
@@ -232,6 +404,12 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
         } else {
             await startRecording(installation: installation, onTranscribed: onTranscribed)
         }
+    }
+
+    func stopAndTranscribeUsingPending(installation: PiInstallation?) async {
+        guard isRecording else { return }
+        let callback = pendingOnTranscribed ?? { _ in }
+        await stopAndTranscribe(installation: installation ?? pendingInstallation, onTranscribed: callback)
     }
 
     func cancel() {
@@ -387,16 +565,6 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
     }
 
     func transcribeFile(at fileURL: URL, installation: PiInstallation?, runID: UUID? = nil) async -> String? {
-        guard let resolved = await MuseUsageService.resolveInstallation(installation) else {
-            lastError = "Muse CLI executable not found."
-            return nil
-        }
-        let executable = resolved.executableURL
-        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            lastError = "Muse CLI executable not found."
-            return nil
-        }
-
         let effectiveID = runID ?? UUID()
         if runID == nil {
             activeTranscriptionID = effectiveID
@@ -409,6 +577,107 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
             }
         }
 
+        switch routerMode {
+        case .systemOnly:
+            let sys = await Self.transcribeWithSystemSpeech(at: fileURL)
+            guard activeTranscriptionID == effectiveID else { return nil }
+            if let text = sys.transcript?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                lastUsedBackend = .macOSSystem
+                didFallbackToSystem = false
+                lastTranscript = Self.normalizedVoiceDisplayQuote(from: text)
+                return text
+            }
+            lastError = sys.error ?? "macOS System STT returned no speech text."
+            return nil
+
+        case .museOnly:
+            let muse = await Self.transcribeWithMuseCLI(at: fileURL, installation: installation, timeout: 15.0)
+            guard activeTranscriptionID == effectiveID else { return nil }
+            if let text = muse.transcript?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                lastUsedBackend = .museCLI
+                didFallbackToSystem = false
+                museCircuitOpenUntil = nil
+                lastMuseFailureReason = nil
+                lastTranscript = Self.normalizedVoiceDisplayQuote(from: text)
+                return text
+            }
+            lastError = muse.error ?? "Muse STT returned no speech text."
+            return nil
+
+        case .autoMuseWithSystemBackup:
+            // 1. If the Muse outage circuit breaker is currently open, route directly to macOS System STT
+            //    with zero timeout penalty so consecutive voice clips transcribe immediately.
+            if isMuseCircuitOpen() {
+                let sys = await Self.transcribeWithSystemSpeech(at: fileURL)
+                guard activeTranscriptionID == effectiveID else { return nil }
+                if let text = sys.transcript?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                    lastUsedBackend = .macOSSystem
+                    didFallbackToSystem = true
+                    lastTranscript = Self.normalizedVoiceDisplayQuote(from: text)
+                    return text
+                }
+                // If System STT unexpectedly failed while circuit was open, probe Muse CLI as a recovery attempt.
+                let museRecovery = await Self.transcribeWithMuseCLI(at: fileURL, installation: installation, timeout: 6.0)
+                guard activeTranscriptionID == effectiveID else { return nil }
+                if let text = museRecovery.transcript?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                    lastUsedBackend = .museCLI
+                    didFallbackToSystem = false
+                    museCircuitOpenUntil = nil
+                    lastMuseFailureReason = nil
+                    lastTranscript = Self.normalizedVoiceDisplayQuote(from: text)
+                    return text
+                }
+                lastError = sys.error ?? museRecovery.error ?? "Both macOS System STT and Muse STT failed."
+                return nil
+            }
+
+            // 2. Primary route: attempt Muse STT with a fast failover timeout (5.5s).
+            let muse = await Self.transcribeWithMuseCLI(at: fileURL, installation: installation, timeout: 5.5)
+            guard activeTranscriptionID == effectiveID else { return nil }
+            if let text = muse.transcript?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                lastUsedBackend = .museCLI
+                didFallbackToSystem = false
+                museCircuitOpenUntil = nil
+                lastMuseFailureReason = nil
+                lastTranscript = Self.normalizedVoiceDisplayQuote(from: text)
+                return text
+            }
+
+            // 3. Muse is down, unreachable, timed out, or returned an error — trip the circuit breaker
+            //    and immediately transcribe the exact same audio clip using macOS System Speech Recognition!
+            let failureReason = muse.error ?? "Muse STT returned no speech text"
+            lastMuseFailureReason = failureReason
+            museCircuitOpenUntil = Date().addingTimeInterval(Self.museOutageCooldownSeconds)
+
+            let sys = await Self.transcribeWithSystemSpeech(at: fileURL)
+            guard activeTranscriptionID == effectiveID else { return nil }
+            if let text = sys.transcript?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                lastUsedBackend = .macOSSystem
+                didFallbackToSystem = true
+                lastError = nil
+                lastTranscript = Self.normalizedVoiceDisplayQuote(from: text)
+                return text
+            }
+
+            let sysReason = sys.error ?? "macOS System STT returned no speech text"
+            lastError = "Muse STT failed (\(failureReason)); System STT backup also failed (\(sysReason))."
+            return nil
+        }
+    }
+
+    static func transcribeWithMuseCLI(
+        at fileURL: URL,
+        installation: PiInstallation?,
+        timeout: TimeInterval = 15.0
+    ) async -> (transcript: String?, error: String?) {
+        guard let resolved = await MuseUsageService.resolveInstallation(installation) else {
+            return (nil, "Muse CLI executable not found.")
+        }
+        let executable = resolved.executableURL
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            return (nil, "Muse CLI executable not found at \(executable.path).")
+        }
+
         let env = PiDiscoveryService.launchEnvironment(
             executable: executable,
             shellPath: resolved.shellPath
@@ -418,17 +687,168 @@ final class MuseVoiceSTTService: NSObject, AVAudioRecorderDelegate {
             arguments: ["voice", "transcribe", fileURL.path],
             directory: URL(fileURLWithPath: NSHomeDirectory()),
             environment: env,
-            timeout: 15.0
+            timeout: timeout
         )
-        guard activeTranscriptionID == effectiveID else { return nil }
         let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if result.exitCode == 0, !stdout.isEmpty {
-            lastTranscript = Self.normalizedVoiceDisplayQuote(from: stdout)
-            return stdout
+            return (stdout, nil)
         }
         let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        lastError = stderr.isEmpty ? "Muse STT returned no speech text." : stderr
-        return nil
+        let reason = stderr.isEmpty ? "Muse STT exited with status \(result.exitCode)" : stderr
+        return (nil, reason)
+    }
+
+    static func requestSystemSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+        let current = SFSpeechRecognizer.authorizationStatus()
+        if current != .notDetermined {
+            return current
+        }
+        return await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    static func transcribeWithSystemSpeech(
+        at fileURL: URL,
+        timeout: TimeInterval = 10.0
+    ) async -> (transcript: String?, error: String?) {
+        let authStatus = await requestSystemSpeechAuthorization()
+        switch authStatus {
+        case .authorized:
+            break
+        case .denied:
+            return (nil, "macOS Speech Recognition permission denied in System Settings ▸ Privacy & Security ▸ Speech Recognition.")
+        case .restricted:
+            return (nil, "macOS Speech Recognition is restricted on this Mac.")
+        case .notDetermined:
+            return (nil, "macOS Speech Recognition authorization was not granted.")
+        @unknown default:
+            return (nil, "Unknown macOS Speech Recognition authorization state.")
+        }
+
+        let recognizer: SFSpeechRecognizer? = {
+            if let current = SFSpeechRecognizer(locale: Locale.current), current.isAvailable {
+                return current
+            }
+            if let enUS = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), enUS.isAvailable {
+                return enUS
+            }
+            return SFSpeechRecognizer(locale: Locale.current)
+                ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+                ?? SFSpeechRecognizer()
+        }()
+
+        guard let recognizer else {
+            return (nil, "macOS SFSpeechRecognizer is unavailable for the current locale.")
+        }
+
+        if recognizer.supportsOnDeviceRecognition {
+            let onDevice = await runSingleSystemRecognitionRequest(
+                recognizer: recognizer,
+                fileURL: fileURL,
+                requiresOnDevice: true,
+                timeout: timeout
+            )
+            if let text = onDevice.transcript, !text.isEmpty {
+                return (text, nil)
+            }
+        }
+
+        return await runSingleSystemRecognitionRequest(
+            recognizer: recognizer,
+            fileURL: fileURL,
+            requiresOnDevice: false,
+            timeout: timeout
+        )
+    }
+
+    private static func runSingleSystemRecognitionRequest(
+        recognizer: SFSpeechRecognizer,
+        fileURL: URL,
+        requiresOnDevice: Bool,
+        timeout: TimeInterval
+    ) async -> (transcript: String?, error: String?) {
+        await withCheckedContinuation { continuation in
+            let lock = NSLock()
+            var didResume = false
+            var latestPartial = ""
+            var taskRef: SFSpeechRecognitionTask?
+
+            func finish(transcript: String?, error: String?) {
+                lock.lock()
+                if didResume {
+                    lock.unlock()
+                    return
+                }
+                didResume = true
+                let taskToCancel = taskRef
+                taskRef = nil
+                lock.unlock()
+                taskToCancel?.cancel()
+                continuation.resume(returning: (transcript, error))
+            }
+
+            let request = SFSpeechURLRecognitionRequest(url: fileURL)
+            request.shouldReportPartialResults = true
+            if requiresOnDevice && recognizer.supportsOnDeviceRecognition {
+                request.requiresOnDeviceRecognition = true
+            }
+
+            let watchdog = DispatchWorkItem {
+                lock.lock()
+                let partial = latestPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+                lock.unlock()
+                if !partial.isEmpty {
+                    finish(transcript: partial, error: nil)
+                } else {
+                    finish(transcript: nil, error: "macOS System STT timed out.")
+                }
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout, execute: watchdog)
+
+            let startedTask = recognizer.recognitionTask(with: request) { result, error in
+                if let result {
+                    let formatted = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+                    lock.lock()
+                    if !formatted.isEmpty {
+                        latestPartial = formatted
+                    }
+                    lock.unlock()
+                    if result.isFinal {
+                        watchdog.cancel()
+                        let finalText = formatted.isEmpty ? latestPartial : formatted
+                        if !finalText.isEmpty {
+                            finish(transcript: finalText, error: nil)
+                        } else {
+                            finish(transcript: nil, error: "macOS System STT returned empty text.")
+                        }
+                        return
+                    }
+                }
+                if let error {
+                    watchdog.cancel()
+                    lock.lock()
+                    let fallbackPartial = latestPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+                    lock.unlock()
+                    if !fallbackPartial.isEmpty {
+                        finish(transcript: fallbackPartial, error: nil)
+                    } else {
+                        finish(transcript: nil, error: error.localizedDescription)
+                    }
+                }
+            }
+
+            lock.lock()
+            if didResume {
+                lock.unlock()
+                startedTask.cancel()
+            } else {
+                taskRef = startedTask
+                lock.unlock()
+            }
+        }
     }
 
     /// Normalizes a raw STT transcript (e.g. `"Talk about food."`) into the lowercase

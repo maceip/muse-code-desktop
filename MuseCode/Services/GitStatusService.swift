@@ -83,6 +83,93 @@ struct GitStatusService {
         return result.exitCode == 0 ? nil : result.stderr.oneLinePreview(limit: 200)
     }
 
+    // MARK: - Clone & Init
+
+    /// Normalizes a repository URL or `owner/repo` shorthand into a cloneable URL or path.
+    static func normalizedCloneURL(_ rawInput: String) -> String {
+        let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if trimmed.contains("://") || trimmed.hasPrefix("git@") || trimmed.hasPrefix("/") || trimmed.hasPrefix("~/") {
+            if trimmed.hasPrefix("~/") {
+                return (trimmed as NSString).expandingTildeInPath
+            }
+            return trimmed
+        }
+        // Support GitHub shorthand `owner/repo`
+        let parts = trimmed.split(separator: "/")
+        if parts.count == 2,
+           !parts[0].isEmpty,
+           !parts[1].isEmpty,
+           !parts[0].contains(" "),
+           !parts[1].contains(" ") {
+            let repo = parts[1].hasSuffix(".git") ? String(parts[1]) : "\(parts[1]).git"
+            return "https://github.com/\(parts[0])/\(repo)"
+        }
+        return trimmed
+    }
+
+    /// Derives the default destination directory name from a repository URL or shorthand.
+    static func suggestedFolderName(from rawInput: String) -> String {
+        let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let cleaned = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+        let lastPart: String
+        if let colonIdx = cleaned.lastIndex(of: ":"), cleaned.hasPrefix("git@"), !cleaned.contains("://") {
+            let afterColon = String(cleaned[cleaned.index(after: colonIdx)...])
+            lastPart = (afterColon as NSString).lastPathComponent
+        } else {
+            lastPart = (cleaned as NSString).lastPathComponent
+        }
+        if lastPart.lowercased().hasSuffix(".git") {
+            return String(lastPart.dropLast(4))
+        }
+        return lastPart
+    }
+
+    /// Clones a Git repository into `destinationPath` and returns the canonical path or an error message.
+    func cloneRepository(url rawURL: String, destinationPath: String, branch: String? = nil) async -> Result<String, ProjectActionError> {
+        let normalized = Self.normalizedCloneURL(rawURL)
+        guard !normalized.isEmpty else {
+            return .failure(ProjectActionError("Enter a Git repository URL or owner/repo shorthand."))
+        }
+        guard let gitURL = executable ?? PiDiscoveryService.resolveExecutable(named: "git") else {
+            return .failure(ProjectActionError("git executable not found on PATH."))
+        }
+
+        let parentDir = (destinationPath as NSString).deletingLastPathComponent
+        do {
+            try FileManager.default.createDirectory(atPath: parentDir, withIntermediateDirectories: true)
+        } catch {
+            return .failure(ProjectActionError("Could not create parent folder: \(error.localizedDescription)"))
+        }
+
+        var args = ["clone"]
+        if let branch = branch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty {
+            args.append(contentsOf: ["--branch", branch])
+        }
+        args.append(contentsOf: ["--", normalized, destinationPath])
+
+        let result = await PiDiscoveryService().run(
+            executable: gitURL,
+            arguments: args,
+            directory: URL(fileURLWithPath: parentDir),
+            environment: ["GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"],
+            timeout: 120.0
+        )
+
+        if result.exitCode != 0 {
+            let errText = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .failure(ProjectActionError(errText.isEmpty ? "git clone exited with code \(result.exitCode)." : errText))
+        }
+        return .success(CanonicalPath.of(destinationPath))
+    }
+
+    /// Initializes a new Git repository at `directory` (`git init`).
+    func initRepository(at directory: String) async -> String? {
+        let result = await git(["-C", directory, "init"])
+        return result.exitCode == 0 ? nil : result.stderr.oneLinePreview(limit: 200)
+    }
+
     // MARK: - Diffs
 
     func diff(directory: String, path: String, staged: Bool) async -> String {
@@ -211,4 +298,10 @@ struct GitStatusService {
             timeout: 8.0
         )
     }
+}
+
+struct ProjectActionError: Error, LocalizedError, Equatable {
+    var message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
 }

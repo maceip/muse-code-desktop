@@ -25,9 +25,10 @@ struct HugeIcon: View {
     }
 }
 
-/// The Hugeicons or SessionIcons glyph as an `Image`.
+/// The Hugeicons or SessionIcons glyph as a template `Image` that always obeys SwiftUI `.foregroundStyle(...)`.
 func hugeIconImage(_ name: String) -> Image {
     Image(nsImage: .huge(name))
+        .renderingMode(.template)
 }
 
 extension Label where Title == Text, Icon == Image {

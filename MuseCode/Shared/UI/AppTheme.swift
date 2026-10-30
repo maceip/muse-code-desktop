@@ -18,6 +18,7 @@
 //
 
 import AppKit
+import CoreImage
 import SwiftUI
 
 enum AppTheme {
@@ -31,6 +32,68 @@ enum AppTheme {
         cache.countLimit = 8
         return cache
     }()
+
+    private static let blurredChatBackgroundCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 16
+        return cache
+    }()
+
+    private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    /// Pre-computes and caches the blurred, color-graded optical refraction texture for a given
+    /// `ChatBackground` so `LiquidGlassRefractedBackdrop` never runs redundant live full-window
+    /// Gaussian blur passes on every layout or keystroke.
+    static func blurredChatBackgroundImage(
+        for style: PreferencesStore.ChatBackground,
+        isLight: Bool,
+        isDarkTopPill: Bool
+    ) -> NSImage? {
+        guard let assetName = style.assetName else { return nil }
+        let cacheKey = "\(assetName)-\(isLight ? "light" : "dark")-\(isDarkTopPill ? "top" : "sub")" as NSString
+        if let cached = blurredChatBackgroundCache.object(forKey: cacheKey) {
+            return cached
+        }
+        guard let sourceImage = chatBackgroundImage(for: style),
+              let cgSource = sourceImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
+        }
+
+        let baseCI = CIImage(cgImage: cgSource)
+        let targetWidth: CGFloat = 960
+        let scale = min(1.0, targetWidth / max(1.0, baseCI.extent.width))
+        let scaledCI = scale < 0.999
+            ? baseCI.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            : baseCI
+        let extent = scaledCI.extent
+
+        var working = scaledCI
+        if let colorFilter = CIFilter(name: "CIColorControls") {
+            colorFilter.setValue(working, forKey: kCIInputImageKey)
+            colorFilter.setValue(isLight ? 1.22 : 1.18, forKey: kCIInputSaturationKey)
+            colorFilter.setValue(isLight ? 1.06 : 1.14, forKey: kCIInputContrastKey)
+            colorFilter.setValue(isLight ? (isDarkTopPill ? 0.05 : 0.03) : (isDarkTopPill ? 0.02 : 0.04), forKey: kCIInputBrightnessKey)
+            if let out = colorFilter.outputImage {
+                working = out
+            }
+        }
+
+        let clamped = working.clampedToExtent()
+        if let blurFilter = CIFilter(name: "CIGaussianBlur") {
+            blurFilter.setValue(clamped, forKey: kCIInputImageKey)
+            blurFilter.setValue((isLight ? 18.0 : 22.0) * scale, forKey: kCIInputRadiusKey)
+            if let out = blurFilter.outputImage {
+                working = out.cropped(to: extent)
+            }
+        }
+
+        guard let outCG = ciContext.createCGImage(working, from: extent) else {
+            return sourceImage
+        }
+        let result = NSImage(cgImage: outCG, size: sourceImage.size)
+        blurredChatBackgroundCache.setObject(result, forKey: cacheKey)
+        return result
+    }
 
     /// Loads the high-resolution chat area background artwork (`chat-bg-forest` or `chat-bg-midnight`)
     /// from the app bundle's asset catalog or disk fallback (`Assets.xcassets/ChatBackgrounds`).
@@ -97,6 +160,52 @@ enum AppTheme {
     /// Sparing Meta/Muse accent blue (#0077FF) for user prompt bubbles,
     /// "See more" expansion pills, and the active send/stop action button.
     static let accentBlue = Color(nsColor: NSColor(rgb: 0x0077FF))
+
+    /// True when the chat area is displaying the Light Mode botanical-glass backdrop
+    /// (either because the app is in Light Mode with `.forestGlass`, or because the user
+    /// explicitly chose `.daylightForest`).
+    static func isLightGlass(
+        colorScheme: ColorScheme,
+        chatBackground: PreferencesStore.ChatBackground
+    ) -> Bool {
+        chatBackground.resolved(for: colorScheme) == .daylightForest
+    }
+
+    static func glassPrimaryText(isLight: Bool) -> Color {
+        isLight
+            ? Color(red: 0.06, green: 0.15, blue: 0.09, opacity: 0.96)
+            : Color.white.opacity(0.95)
+    }
+
+    static func glassSecondaryText(isLight: Bool) -> Color {
+        isLight
+            ? Color(red: 0.09, green: 0.22, blue: 0.13, opacity: 0.82)
+            : Color.white.opacity(0.84)
+    }
+
+    static func glassMutedText(isLight: Bool) -> Color {
+        isLight
+            ? Color(red: 0.13, green: 0.26, blue: 0.17, opacity: 0.66)
+            : Color.white.opacity(0.70)
+    }
+
+    static func glassDivider(isLight: Bool) -> Color {
+        isLight
+            ? Color(red: 0.10, green: 0.26, blue: 0.16, opacity: 0.14)
+            : Color.white.opacity(0.14)
+    }
+
+    static func glassChipFill(isLight: Bool) -> Color {
+        isLight
+            ? Color.white.opacity(0.56)
+            : Color.white.opacity(0.10)
+    }
+
+    static func glassChipStroke(isLight: Bool) -> Color {
+        isLight
+            ? Color.white.opacity(0.84)
+            : Color.white.opacity(0.18)
+    }
 
     /// The cards on a settings page: a step above the page in the dark
     /// appearance, white with a hairline in the light one.
@@ -261,23 +370,31 @@ extension EnvironmentValues {
 }
 
 /// Renders the active Muse chat area background (`Forest Glass` from `UntiSDDtlehd 8.png`,
+/// `Daylight Forest` from `Meta-Ai-Forest-Bg.html` & `Untitled 10.jpg`,
 /// `Midnight Glow` from `UntiSlehd 8.png`, or `Obsidian Black`).
 struct MuseChatBackgroundView: View {
+    @Environment(\.colorScheme) private var colorScheme
     var style: PreferencesStore.ChatBackground
+
+    private var effectiveStyle: PreferencesStore.ChatBackground {
+        style.resolved(for: colorScheme)
+    }
 
     var body: some View {
         GeometryReader { proxy in
             let w = max(1, proxy.size.width)
             let h = max(1, proxy.size.height)
             ZStack {
-                switch style {
+                switch effectiveStyle {
+                case .daylightForest:
+                    Color(red: 0.88, green: 0.94, blue: 0.89)
                 case .forestGlass:
                     Color(red: 0.031, green: 0.035, blue: 0.031)
                 case .midnightGlow, .solidBlack:
                     Color(red: 0.004, green: 0.008, blue: 0.012)
                 }
 
-                if let nsImage = AppTheme.chatBackgroundImage(for: style) {
+                if let nsImage = AppTheme.chatBackgroundImage(for: effectiveStyle) {
                     Image(nsImage: nsImage)
                         .resizable()
                         .aspectRatio(contentMode: .fill)

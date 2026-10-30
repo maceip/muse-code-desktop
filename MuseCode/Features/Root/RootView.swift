@@ -29,6 +29,7 @@ enum WindowChromeMetrics {
 struct RootView: View {
     @Bindable var state: AppState
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isSidebarVisible = true
     @State private var sidebarWidth: CGFloat = 268
     @State private var sidebarWidthAtDragStart: CGFloat?
@@ -72,9 +73,7 @@ struct RootView: View {
                 AppTheme.chrome
             }
         }
-        .overlay(alignment: .topLeading) { titlebarLeadingControls }
-        .overlay(alignment: .top) { titlebarCenterSearch }
-        .overlay(alignment: .topTrailing) { titlebarTrailingControls }
+        .overlay(alignment: .top) { titlebarControlsBar }
         .ignoresSafeArea()
         .toolbarBackground(.hidden, for: .windowToolbar)
         .task {
@@ -129,6 +128,10 @@ struct RootView: View {
                 ProjectSettingsSheet(state: state, project: project) { self.sheet = nil }
             case .newProject(let path):
                 NewProjectSheet(state: state, path: path) { self.sheet = nil }
+            case .cloneRepository:
+                CloneRepositorySheet(state: state) { self.sheet = nil }
+            case .createProjectFolder:
+                CreateProjectFolderSheet(state: state) { self.sheet = nil }
             }
         }
         .onChange(of: state.pendingProjectSettings) { _, project in
@@ -145,14 +148,51 @@ struct RootView: View {
             guard let path else { return }
             sheet = .newProject(path)
         }
+        .onChange(of: state.pendingCloneRepository) { _, requested in
+            guard requested else { return }
+            state.pendingCloneRepository = false
+            sheet = .cloneRepository
+        }
+        .onChange(of: state.pendingCreateProjectFolder) { _, requested in
+            guard requested else { return }
+            state.pendingCreateProjectFolder = false
+            sheet = .createProjectFolder
+        }
         .overlay(alignment: .bottom) { toast }
         .overlay(alignment: .top) { errorBanner.padding(.top, WindowChromeMetrics.titlebarHeight) }
+        .overlay(alignment: .top) {
+            ZStack(alignment: .top) {
+                if state.isPalettePresented && !state.isSettingsPresented {
+                    Color.black.opacity(0.001)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            state.closePalette()
+                        }
+
+                    TitlebarSearchDropdownView(state: state, onRunCommand: perform)
+                        .padding(.top, WindowChromeMetrics.titlebarHeight + 2)
+                        .transition(
+                            .asymmetric(
+                                insertion: .opacity
+                                    .combined(with: .scale(scale: 0.97, anchor: .top))
+                                    .combined(with: .offset(y: -4)),
+                                removal: .opacity
+                                    .combined(with: .scale(scale: 0.96, anchor: .top))
+                                    .combined(with: .offset(y: -6))
+                            )
+                        )
+                }
+            }
+            .animation(.spring(response: 0.20, dampingFraction: 0.90), value: state.isPalettePresented)
+            .zIndex(90)
+        }
         .overlay { ExtensionDialogHost(state: state) }
     }
 
     private func openPalette() {
-        state.openPalette()
-        sheet = .palette
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
+            state.openPalette()
+        }
     }
 
     // MARK: - Card
@@ -210,65 +250,107 @@ struct RootView: View {
         onChanged: @escaping (CGFloat) -> Void,
         onEnded: @escaping () -> Void
     ) -> some View {
-        Rectangle()
-            .fill(AppTheme.cardStroke)
-            .frame(width: 1)
-            .contentShape(Rectangle().inset(by: -3))
-            .onHover { inside in
-                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-            }
-            .gesture(
-                DragGesture()
-                    .onChanged { onChanged($0.translation.width) }
-                    .onEnded { _ in onEnded() }
-            )
+        SplitPaneResizeHandle(
+            width: 1,
+            hitInset: -3,
+            fill: AppTheme.cardStroke,
+            onChanged: onChanged,
+            onEnded: onEnded
+        )
     }
 
     // MARK: - Titlebar
 
-    /// Sidebar toggle, Back / Forward navigation, and the active project/session
-    /// title, placed at the leading edge of the main detail pane (past the
-    /// expanded sidebar boundary when open, or past the traffic lights when hidden).
+    /// Coordinated titlebar bar that positions the leading navigation controls,
+    /// centered search pill, and trailing panel toggles within a single geometry
+    /// pass so narrow windows or wide sidebars never cause the session title and
+    /// search pill to collide.
     @ViewBuilder
-    private var titlebarLeadingControls: some View {
+    private var titlebarControlsBar: some View {
         if !state.isSettingsPresented {
             let buttonTop = WindowChromeMetrics.titlebarRowCenter - TitlebarIconButton.size / 2
-            HStack(spacing: 6) {
-                TitlebarIconButton(
-                    systemImage: "layout-align-left",
-                    help: isSidebarVisible ? "Hide sidebar (⌃⌘S)" : "Show sidebar (⌃⌘S)",
-                    isActive: isSidebarVisible
-                ) {
-                    toggleSidebar()
-                }
+            GeometryReader { geo in
+                let totalW = max(320, geo.size.width)
+                let leadingX = controlsLeading
+                let trailingReserve: CGFloat = 82
+                // Compute responsive search pill width based on available center clearance
+                let idealSearchW: CGFloat = min(240, max(136, (totalW - leadingX - trailingReserve) * 0.34))
+                let centerLeftEdge = (totalW - idealSearchW) * 0.5
+                // Max space available for the leading controls + title before reaching the search pill
+                let maxLeadingWidth = max(96, centerLeftEdge - leadingX - 12)
 
-                if isSidebarVisible {
-                    Color.clear
-                        .frame(width: 5, height: 18)
-                }
-
-                HStack(spacing: 2) {
-                    TitlebarIconButton(systemImage: "arrow-left-01", help: "Back", isEnabled: state.canGoBack) {
-                        Task { await state.goBack() }
-                    }
-                    if state.canGoForward {
-                        TitlebarIconButton(systemImage: "arrow-right-01", help: "Forward", isEnabled: state.canGoForward) {
-                            Task { await state.goForward() }
+                ZStack(alignment: .topLeading) {
+                    HStack(spacing: 6) {
+                        TitlebarIconButton(
+                            systemImage: "layout-align-left",
+                            help: isSidebarVisible ? "Hide sidebar (⌃⌘S)" : "Show sidebar (⌃⌘S)",
+                            isActive: isSidebarVisible
+                        ) {
+                            toggleSidebar()
                         }
+
+                        if isSidebarVisible {
+                            Color.clear
+                                .frame(width: 5, height: 18)
+                        }
+
+                        HStack(spacing: 2) {
+                            TitlebarIconButton(systemImage: "arrow-left-01", help: "Back", isEnabled: state.canGoBack) {
+                                Task { await state.goBack() }
+                            }
+                            if state.canGoForward {
+                                TitlebarIconButton(systemImage: "arrow-right-01", help: "Forward", isEnabled: state.canGoForward) {
+                                    Task { await state.goForward() }
+                                }
+                            }
+                        }
+
+                        if state.phase == .ready, let controller = state.activeController {
+                            titlebarTitle(controller)
+                                .layoutPriority(-1)
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: maxLeadingWidth, alignment: .leading)
+                    .clipped()
+                    .padding(.leading, leadingX)
+                    .padding(.top, buttonTop)
+                    .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
+
+                    if state.phase == .ready {
+                        TitlebarSearchPill(
+                            state: state,
+                            width: state.isPalettePresented ? min(490, max(280, totalW - 180)) : idealSearchW,
+                            onOpenPalette: openPalette,
+                            onRunCommand: perform
+                        )
+                        .padding(.top, buttonTop)
+                        .frame(width: totalW, alignment: .top)
+                        .zIndex(100)
+                    }
+
+                    if state.phase == .ready, state.activeController != nil {
+                        HStack(spacing: 8) {
+                            TitlebarNotificationsButton(state: state)
+
+                            TitlebarIconButton(
+                                systemImage: "layout-align-right",
+                                help: state.isInspectorVisible ? "Hide floating panel (⌥⌘I)" : "Show floating panel (⌥⌘I)",
+                                isActive: state.isInspectorVisible && !state.isNotificationsVisible
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    state.toggleInspector()
+                                }
+                            }
+                        }
+                        .padding(.trailing, WindowChromeMetrics.cardInset + 8)
+                        .padding(.top, buttonTop)
+                        .frame(width: totalW, alignment: .topTrailing)
                     }
                 }
-
-                if state.phase == .ready, let controller = state.activeController {
-                    titlebarTitle(controller)
-                }
-
-                Spacer(minLength: 8)
             }
-            .padding(.leading, controlsLeading)
-            .padding(.trailing, titleTrailingReserve)
-            .padding(.top, buttonTop)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
+            .frame(height: WindowChromeMetrics.titlebarHeight)
         }
     }
 
@@ -281,9 +363,6 @@ struct RootView: View {
         }
         return WindowChromeMetrics.sidebarToggleLeading
     }
-
-    /// Room kept free for the trailing search pill and action controls.
-    private var titleTrailingReserve: CGFloat { 310 }
 
     /// The conversation's own title when it has one — its name, else the opening
     /// message the sidebar shows — and the project's name only before either exists.
@@ -311,64 +390,6 @@ struct RootView: View {
         .allowsHitTesting(false)
     }
 
-    /// Centered search pill in the titlebar.
-    @ViewBuilder
-    private var titlebarCenterSearch: some View {
-        if state.phase == .ready, !state.isSettingsPresented {
-            TitlebarSearchPill(onOpenPalette: openPalette)
-                .padding(.top, WindowChromeMetrics.titlebarRowCenter - TitlebarIconButton.size / 2)
-        }
-    }
-
-    /// Notifications bell and the floating right panel toggle on the titlebar's
-    /// trailing edge.
-    @ViewBuilder
-    private var titlebarTrailingControls: some View {
-        if state.phase == .ready, state.activeController != nil, !state.isSettingsPresented {
-            HStack(spacing: 8) {
-                TitlebarIconButton(
-                    systemImage: "image-01",
-                    help: "Chat background: \(state.preferences.chatBackground.label) (click to switch)",
-                    isActive: state.preferences.chatBackground != .solidBlack
-                ) {
-                    let all = PreferencesStore.ChatBackground.allCases
-                    if let idx = all.firstIndex(of: state.preferences.chatBackground) {
-                        state.preferences.chatBackground = all[(idx + 1) % all.count]
-                        state.preferences.persist()
-                    }
-                }
-                .contextMenu {
-                    ForEach(PreferencesStore.ChatBackground.allCases) { bg in
-                        Button {
-                            state.preferences.chatBackground = bg
-                            state.preferences.persist()
-                        } label: {
-                            if state.preferences.chatBackground == bg {
-                                Label(bg.label, systemImage: "checkmark")
-                            } else {
-                                Text(bg.label)
-                            }
-                        }
-                    }
-                }
-
-                TitlebarNotificationsButton(state: state)
-
-                TitlebarIconButton(
-                    systemImage: "layout-align-right",
-                    help: state.isInspectorVisible ? "Hide floating panel (⌥⌘I)" : "Show floating panel (⌥⌘I)",
-                    isActive: state.isInspectorVisible && !state.isNotificationsVisible
-                ) {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        state.toggleInspector()
-                    }
-                }
-            }
-            .padding(.trailing, WindowChromeMetrics.cardInset + 8)
-            .padding(.top, WindowChromeMetrics.titlebarRowCenter - TitlebarIconButton.size / 2)
-        }
-    }
-
     // MARK: - Detail pane
 
     /// The conversation and the right inspector panel (`Overview` + `Muse Agent Messages`)
@@ -381,36 +402,45 @@ struct RootView: View {
 
             if state.isInspectorVisible {
                 HStack(alignment: .top, spacing: 0) {
-                    Color.clear
-                        .frame(width: 6)
-                        .frame(maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                        .onHover { inside in
-                            if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    SplitPaneResizeHandle(
+                        width: 6,
+                        hitInset: 0,
+                        fill: Color.clear,
+                        onChanged: { translation in
+                            if inspectorWidthAtDragStart == nil {
+                                inspectorWidthAtDragStart = inspectorWidth
+                            }
+                            let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
+                            inspectorWidth = min(480, max(280, startingWidth - translation))
+                        },
+                        onEnded: {
+                            inspectorWidthAtDragStart = nil
                         }
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    if inspectorWidthAtDragStart == nil {
-                                        inspectorWidthAtDragStart = inspectorWidth
-                                    }
-                                    let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
-                                    inspectorWidth = min(480, max(280, startingWidth - value.translation.width))
-                                }
-                                .onEnded { _ in
-                                    inspectorWidthAtDragStart = nil
-                                }
-                        )
+                    )
 
                     VStack(spacing: 0) {
+                        let isLightInspector = AppTheme.isLightGlass(
+                            colorScheme: colorScheme,
+                            chatBackground: state.preferences.chatBackground
+                        )
                         InspectorView(state: state)
                             .frame(width: inspectorWidth)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(AppTheme.cardStroke, lineWidth: 1)
+                                    .stroke(
+                                        isLightInspector ? Color.white.opacity(0.84) : Color.white.opacity(0.22),
+                                        lineWidth: 1
+                                    )
                             )
-                            .shadow(color: .black.opacity(0.28), radius: 14, x: 0, y: 6)
+                            .shadow(
+                                color: isLightInspector
+                                    ? Color(red: 0.08, green: 0.24, blue: 0.14).opacity(0.14)
+                                    : .black.opacity(0.26),
+                                radius: 14,
+                                x: 0,
+                                y: 6
+                            )
                             .fixedSize(horizontal: false, vertical: state.inspectorArtifact == nil && !state.isNotificationsVisible)
 
                         if state.inspectorArtifact == nil && !state.isNotificationsVisible {
@@ -444,22 +474,12 @@ struct RootView: View {
         .environment(\.sessionPaneSize, detailPaneSize)
         .environment(\.chatBackground, state.preferences.chatBackground)
         .environment(\.hasRootChatBackground, true)
-        .contextMenu {
-            Section("Chat Area Background") {
-                ForEach(PreferencesStore.ChatBackground.allCases) { bg in
-                    Button {
-                        state.preferences.chatBackground = bg
-                        state.preferences.persist()
-                    } label: {
-                        if state.preferences.chatBackground == bg {
-                            Label(bg.label, systemImage: "checkmark")
-                        } else {
-                            Text(bg.label)
-                        }
-                    }
-                }
-            }
-        }
+        .environment(
+            \.colorScheme,
+            AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: state.preferences.chatBackground)
+                ? .light
+                : .dark
+        )
         .animation(.easeInOut(duration: 0.22), value: state.isInspectorVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -538,6 +558,12 @@ struct RootView: View {
 
         case .addProject:
             Task { await state.addProject() }
+
+        case .cloneRepository:
+            state.presentCloneRepository()
+
+        case .newProjectFolder:
+            state.presentCreateProjectFolder()
 
         case .refreshSessions:
             Task { await state.refreshIndex() }
@@ -663,6 +689,8 @@ enum RootSheet: Identifiable {
     case delete(SessionRef)
     case projectSettings(ProjectGroup)
     case newProject(String)
+    case cloneRepository
+    case createProjectFolder
 
     var id: String {
         switch self {
@@ -674,6 +702,69 @@ enum RootSheet: Identifiable {
         case .delete(let session): return "delete-\(session.id)"
         case .projectSettings(let project): return "project-settings-\(project.id)"
         case .newProject(let path): return "new-project-\(path)"
+        case .cloneRepository: return "clone-repository"
+        case .createProjectFolder: return "create-project-folder"
+        }
+    }
+}
+
+/// Stateful split-pane resize divider that tracks both hover and active drag state
+/// so the `resizeLeftRight` cursor never gets stuck on the global `NSCursor` stack
+/// when a pane collapses or when the pointer slips off the divider mid-drag.
+struct SplitPaneResizeHandle: View {
+    var width: CGFloat
+    var hitInset: CGFloat
+    var fill: Color
+    var onChanged: (CGFloat) -> Void
+    var onEnded: () -> Void
+
+    @State private var isHovering = false
+    @State private var isDragging = false
+    @State private var hasPushedCursor = false
+
+    var body: some View {
+        Rectangle()
+            .fill(fill)
+            .frame(width: width)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle().inset(by: hitInset))
+            .onHover { inside in
+                isHovering = inside
+                syncCursor()
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !isDragging {
+                            isDragging = true
+                            syncCursor()
+                        }
+                        onChanged(value.translation.width)
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                        onEnded()
+                        syncCursor()
+                    }
+            )
+            .onDisappear {
+                isHovering = false
+                isDragging = false
+                if hasPushedCursor {
+                    hasPushedCursor = false
+                    NSCursor.pop()
+                }
+            }
+    }
+
+    private func syncCursor() {
+        let shouldShowResize = isHovering || isDragging
+        if shouldShowResize && !hasPushedCursor {
+            hasPushedCursor = true
+            NSCursor.resizeLeftRight.push()
+        } else if !shouldShowResize && hasPushedCursor {
+            hasPushedCursor = false
+            NSCursor.pop()
         }
     }
 }
@@ -752,42 +843,181 @@ struct TitlebarNotificationsButton: View {
     }
 }
 
-/// Centered search bar pill in the titlebar with a crisp border.
-/// Clicking opens the session/project/command search palette.
+/// Centered Smart Search Bar Pill in the titlebar (`AOL Search History.jpg`).
+/// - When idle (`!state.isPalettePresented`): compact search pill with `Search…` and `⇧⌘P`.
+/// - When active (`state.isPalettePresented`): expands into an inline autocomplete search bar
+///   with the Muse `M` glyph, inline highlighted completion suffix + top hit headline, and
+///   keyboard navigation (`↑`, `↓`, `Tab`, `Return`, `Escape`) driving `TitlebarSearchDropdownView`.
 struct TitlebarSearchPill: View {
+    var state: AppState? = nil
+    var width: CGFloat = 240
     var onOpenPalette: () -> Void
+    var onRunCommand: ((PaletteCommand) -> Void)? = nil
 
     @State private var isHovering = false
+    @FocusState private var isSearchFieldFocused: Bool
+
+    private var isActive: Bool {
+        state?.isPalettePresented == true
+    }
+
+    private var inlineAutocomplete: MuseInlineAutocomplete? {
+        guard let state, isActive else { return nil }
+        let q = state.paletteQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return nil }
+        let lower = q.lowercased()
+        let directSessions: [(project: ProjectGroup, session: SessionRef)]
+        if !state.paletteResults.isEmpty {
+            directSessions = state.paletteResults
+        } else {
+            var found: [(project: ProjectGroup, session: SessionRef)] = []
+            for p in state.projects {
+                for s in p.sessions where s.displayName.lowercased().contains(lower) || (s.firstUserMessage?.lowercased().contains(lower) ?? false) {
+                    found.append((p, s))
+                }
+            }
+            directSessions = found
+        }
+        return MuseSearchSuggestionService.shared.inlineAutocomplete(
+            for: state.paletteQuery,
+            projects: state.projects,
+            matchingSessions: directSessions
+        )
+    }
 
     var body: some View {
-        Button(action: onOpenPalette) {
-            HStack(spacing: 6) {
-                HugeIcon(name: "search-01", size: 13)
-                    .foregroundStyle(.secondary)
-                Text("Search…")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 16)
-                Text("⇧⌘P")
-                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(.tertiary)
+        if let state, isActive {
+            @Bindable var bindableState = state
+            HStack(spacing: 8) {
+                MuseSearchBrandGlyph(isActive: true)
+
+                ZStack(alignment: .leading) {
+                    // Inline highlighted autocomplete suffix + top hit preview (`AOL Search History.jpg`)
+                    if let auto = inlineAutocomplete, !auto.displayHighlightText.isEmpty {
+                        HStack(spacing: 0) {
+                            Text(bindableState.paletteQuery)
+                                .font(.system(size: 13, weight: .regular))
+                                .opacity(0)
+                            Text(auto.displayHighlightText)
+                                .font(.system(size: 12.5, weight: .regular))
+                                .foregroundStyle(Color(red: 0.14, green: 0.10, blue: 0.18, opacity: 0.88))
+                                .lineLimit(1)
+                                .padding(.horizontal, 3)
+                                .padding(.vertical, 1)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(Color(red: 0.72, green: 0.56, blue: 0.72, opacity: 0.42))
+                                )
+                            Spacer(minLength: 0)
+                        }
+                        .allowsHitTesting(false)
+                    }
+
+                    TextField("Search sessions, projects, or commands…", text: $bindableState.paletteQuery)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Color(red: 0.10, green: 0.10, blue: 0.12))
+                        .focused($isSearchFieldFocused)
+                        .onChange(of: bindableState.paletteQuery) { _, _ in
+                            if !state.isPalettePresented {
+                                withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                                    state.isPalettePresented = true
+                                }
+                            }
+                            state.updatePaletteQuery()
+                        }
+                        .onSubmit {
+                            let dropdown = TitlebarSearchDropdownView(
+                                state: state,
+                                onRunCommand: { cmd in onRunCommand?(cmd) }
+                            )
+                            dropdown.activateCurrentlySelected()
+                        }
+                        .onMoveCommand { direction in
+                            let dropdown = TitlebarSearchDropdownView(
+                                state: state,
+                                onRunCommand: { cmd in onRunCommand?(cmd) }
+                            )
+                            let count = dropdown.selectableRowIDs.count
+                            guard count > 0 else { return }
+                            switch direction {
+                            case .down:
+                                state.paletteSelectedIndex = (state.paletteSelectedIndex + 1) % count
+                            case .up:
+                                state.paletteSelectedIndex = (state.paletteSelectedIndex - 1 + count) % count
+                            case .right:
+                                if let auto = inlineAutocomplete, !auto.fullCompletionText.isEmpty {
+                                    state.paletteQuery = auto.fullCompletionText
+                                    state.updatePaletteQuery()
+                                }
+                            default:
+                                break
+                            }
+                        }
+                        .onExitCommand {
+                            state.closePalette()
+                        }
+                }
+
+                if !bindableState.paletteQuery.isEmpty {
+                    Button {
+                        state.paletteQuery = ""
+                        state.updatePaletteQuery()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.black.opacity(0.42))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(.horizontal, 12)
-            .frame(width: 240, height: TitlebarIconButton.size - 1)
+            .frame(width: width, height: TitlebarIconButton.size + 1)
             .background(
                 Capsule(style: .continuous)
-                    .fill(isHovering ? AppTheme.railSelection.opacity(0.65) : AppTheme.railSelection.opacity(0.32))
+                    .fill(Color(red: 0.86, green: 0.85, blue: 0.89, opacity: 0.95))
             )
             .overlay(
                 Capsule(style: .continuous)
-                    .strokeBorder(Color.primary.opacity(isHovering ? 0.34 : 0.22), lineWidth: 1)
+                    .strokeBorder(Color(red: 0.72, green: 0.56, blue: 0.84, opacity: 0.85), lineWidth: 1.5)
             )
-            .contentShape(Capsule())
+            .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 2)
+            .onAppear {
+                isSearchFieldFocused = true
+            }
+        } else {
+            Button(action: onOpenPalette) {
+                HStack(spacing: 6) {
+                    HugeIcon(name: "search-01", size: 13)
+                        .foregroundStyle(.secondary)
+                    Text("Search…")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if width >= 170 {
+                        Text("⇧⌘P")
+                            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(width: width, height: TitlebarIconButton.size - 1)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(isHovering ? AppTheme.railSelection.opacity(0.65) : AppTheme.railSelection.opacity(0.32))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color.primary.opacity(isHovering ? 0.34 : 0.22), lineWidth: 1)
+                )
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .onHover { isHovering = $0 }
+            .help("Search sessions, projects, and commands (⇧⌘P)")
+            .accessibilityLabel("Search")
         }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .onHover { isHovering = $0 }
-        .help("Search sessions, projects, and commands (⇧⌘P)")
-        .accessibilityLabel("Search")
     }
 }

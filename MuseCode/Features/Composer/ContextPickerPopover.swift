@@ -34,12 +34,16 @@ struct ContextPickerPopover: View {
 
     @State private var query = ""
     @State private var hovered: String?
+    @State private var selectedIndex: Int = 0
     @FocusState private var searchFocused: Bool
 
     private var filtered: [ContextPickerItem] {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return items }
-        return items.filter { $0.title.localizedCaseInsensitiveContains(q) }
+        return items.filter {
+            $0.title.localizedCaseInsensitiveContains(q)
+                || ($0.subtitle?.localizedCaseInsensitiveContains(q) ?? false)
+        }
     }
 
     var body: some View {
@@ -49,8 +53,16 @@ struct ContextPickerPopover: View {
                 TextField(searchPrompt, text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
+                    .onChange(of: query) { _, _ in
+                        selectedIndex = 0
+                    }
                     .onSubmit {
-                        if let first = filtered.first { choose(first) }
+                        let list = filtered
+                        if list.indices.contains(selectedIndex) {
+                            choose(list[selectedIndex])
+                        } else if let first = list.first {
+                            choose(first)
+                        }
                     }
             }
             .font(.system(size: 13.5))
@@ -68,19 +80,30 @@ struct ContextPickerPopover: View {
                     .padding(.bottom, 2)
             }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(filtered) { row($0) }
-                    if filtered.isEmpty {
-                        Text("No matches")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                            .padding(12)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(Array(filtered.enumerated()), id: \.element.id) { index, item in
+                            row(item, index: index)
+                                .id(item.id)
+                        }
+                        if filtered.isEmpty {
+                            Text("No matches")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                                .padding(12)
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 260)
+                .onChange(of: selectedIndex) { _, newIdx in
+                    let list = filtered
+                    if list.indices.contains(newIdx) {
+                        proxy.scrollTo(list[newIdx].id, anchor: .center)
                     }
                 }
-                .padding(6)
             }
-            .frame(maxHeight: 260)
 
             if !actions.isEmpty {
                 Divider().padding(.horizontal, 8)
@@ -100,15 +123,35 @@ struct ContextPickerPopover: View {
             }
         }
         .frame(width: 300)
-        .onAppear { searchFocused = true }
+        .onAppear {
+            if let currentIdx = items.firstIndex(where: \.isSelected) {
+                selectedIndex = currentIdx
+            }
+            searchFocused = true
+        }
+        .onMoveCommand { direction in
+            let count = filtered.count
+            guard count > 0 else { return }
+            switch direction {
+            case .down:
+                selectedIndex = (selectedIndex + 1) % count
+            case .up:
+                selectedIndex = (selectedIndex - 1 + count) % count
+            default:
+                break
+            }
+        }
     }
 
-    private func row(_ item: ContextPickerItem) -> some View {
+    private func row(_ item: ContextPickerItem, index: Int) -> some View {
         Button { choose(item) } label: {
             rowLabel(image: item.systemImage, title: item.title, subtitle: item.subtitle, selected: item.isSelected)
         }
-        .buttonStyle(ContextPickerRowStyle(isHovered: hovered == item.id))
-        .onHover { hovered = $0 ? item.id : nil }
+        .buttonStyle(ContextPickerRowStyle(isHovered: hovered == item.id || selectedIndex == index))
+        .onHover { inside in
+            hovered = inside ? item.id : nil
+            if inside { selectedIndex = index }
+        }
     }
 
     private func rowLabel(image: String, title: String, subtitle: String?, selected: Bool) -> some View {

@@ -89,6 +89,7 @@ struct ComposerView: View {
     var tray: AnyView? = nil
 
     @State private var text = ""
+    @State private var caretUTF16Offset: Int?
     @State private var attachments: [Attachment] = []
     @State private var suggestionIndex = 0
     @State private var fileMatches: [FileNode] = []
@@ -107,7 +108,13 @@ struct ComposerView: View {
     @State private var animationTask: Task<Void, Never>?
     @State private var internalFocusTick: Int = 0
     @Namespace private var morphNamespace
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
     @Bindable private var stt = MuseVoiceSTTService.shared
+
+    private var isLightGlass: Bool {
+        AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+    }
 
     private var isVoiceActive: Bool {
         stt.isRecording || stt.isTranscribing
@@ -293,13 +300,29 @@ struct ComposerView: View {
         .onChange(of: ObjectIdentifier(controller)) { _, _ in
             loadDraft()
             if !isVoiceActive {
+                animationTask?.cancel()
                 orbAnimationTask?.cancel()
                 isTransitioningOutOfOrb = false
                 orbEnterStartDate = nil
                 orbExitStartDate = nil
                 orbFrame = 1
-                playComposerEnterAnimation(withLeadingExit: false)
+                enterExitPhase = .settled
             }
+        }
+        .onChange(of: state.newSessionResetTick) { _, _ in
+            animationTask?.cancel()
+            orbAnimationTask?.cancel()
+            isTransitioningOutOfOrb = false
+            orbEnterStartDate = nil
+            orbExitStartDate = nil
+            orbFrame = 1
+            text = ""
+            attachments = []
+            attachmentError = nil
+            fileMatches = []
+            suggestionIndex = 0
+            enterExitPhase = .settled
+            internalFocusTick += 1
         }
         .onChange(of: state.composerEnterAnimationTick) { _, _ in
             if !isVoiceActive {
@@ -326,6 +349,9 @@ struct ComposerView: View {
             controller.drafts.setText(newValue, for: controller.draftKey, attachments: attachments)
             suggestionIndex = 0
             refreshFileMatchesIfNeeded()
+        }
+        .onChange(of: attachments) { _, newAttachments in
+            controller.drafts.setAttachments(newAttachments, for: controller.draftKey)
         }
     }
 
@@ -376,6 +402,7 @@ struct ComposerView: View {
                     sendKey: state.preferences.sendKey,
                     suggestionsActive: !suggestions.isEmpty,
                     isEnabled: controller.connection.isConnected,
+                    isLightGlass: isLightGlass,
                     onSend: { send() },
                     onFollowUp: { send(delivery: .followUp) },
                     onEscape: handleEscape,
@@ -387,6 +414,12 @@ struct ComposerView: View {
                         if isVoiceOrbOverlayActive || controller.isShowingFirstPromptCenterOrb {
                             stt.cancel()
                             forceCollapseVoiceOrbImmediately()
+                        }
+                    },
+                    onSelectionChange: { offset in
+                        if caretUTF16Offset != offset {
+                            caretUTF16Offset = offset
+                            refreshFileMatchesIfNeeded()
                         }
                     }
                 )
@@ -417,9 +450,13 @@ struct ComposerView: View {
                         chooseAttachments()
                     } label: {
                         HugeIcon(name: "add-01", size: 15)
-                            .foregroundStyle(Color.white.opacity(0.82))
+                            .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                             .frame(width: 24, height: 24)
-                            .background(Color.white.opacity(0.08), in: Circle())
+                            .background(AppTheme.glassChipFill(isLight: isLightGlass), in: Circle())
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(AppTheme.glassChipStroke(isLight: isLightGlass), lineWidth: 0.7)
+                            )
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -510,11 +547,94 @@ struct ComposerView: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .accessibilityLabel("Voice input via Muse built-in STT")
-        .help("Voice input via Muse built-in STT (`muse voice transcribe`)")
+        .accessibilityLabel("Voice input (\(stt.routerBadgeText))")
+        .help(stt.routerStatusDescription)
         .contextMenu {
+            Section("Speech-to-Text Router (\(stt.routerBadgeText))") {
+                ForEach(MuseVoiceSTTRouterMode.allCases) { mode in
+                    Button {
+                        stt.setRouterMode(mode)
+                    } label: {
+                        if stt.routerMode == mode {
+                            Label(mode.label, systemImage: "checkmark")
+                        } else {
+                            Text(mode.label)
+                        }
+                    }
+                }
+            }
+            Divider()
+            if stt.activePrimaryBackend() == .museCLI {
+                Button("Switch to macOS System STT Backup Now") {
+                    stt.switchToSystemBackupNow()
+                }
+            } else {
+                Button("Retry Muse STT Now") {
+                    stt.retryMuseSTTNow()
+                }
+            }
+            Divider()
             Button("Transcribe Audio Clip (.wav / .m4a)…") {
                 pickAndTranscribeAudioFile()
+            }
+        }
+    }
+
+    private var voiceSTTRouterQuickSwitchPill: some View {
+        Button {
+            if stt.activePrimaryBackend() == .museCLI {
+                stt.switchToSystemBackupNow()
+            } else {
+                stt.retryMuseSTTNow()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(stt.didFallbackToSystem || stt.activePrimaryBackend() == .macOSSystem ? Color.cyan : Color.green)
+                    .frame(width: 5.5, height: 5.5)
+                Text(stt.routerBadgeText)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(AppTheme.glassChipFill(isLight: isLightGlass))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(AppTheme.glassChipStroke(isLight: isLightGlass), lineWidth: 0.7)
+                    )
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("\(stt.routerStatusDescription) (Click to quick-switch, right-click for router modes)")
+        .contextMenu {
+            Section("Speech-to-Text Router") {
+                ForEach(MuseVoiceSTTRouterMode.allCases) { mode in
+                    Button {
+                        stt.setRouterMode(mode)
+                    } label: {
+                        if stt.routerMode == mode {
+                            Label(mode.label, systemImage: "checkmark")
+                        } else {
+                            Text(mode.label)
+                        }
+                    }
+                }
+            }
+            Divider()
+            if stt.activePrimaryBackend() == .museCLI {
+                Button("Use macOS System Backup Now") {
+                    stt.switchToSystemBackupNow()
+                }
+            } else {
+                Button("Retry Muse STT Now") {
+                    stt.retryMuseSTTNow()
+                }
             }
         }
     }
@@ -539,10 +659,10 @@ struct ComposerView: View {
                         }
                     } label: {
                         HStack(spacing: 10) {
-                            VoiceOrbBadgeIcon(size: 19)
+                            VoiceOrbBadgeIcon(size: 19, isLightGlass: isLightGlass)
                             Text("\"\(voiceQuote)\"")
                                 .font(.system(size: 13.5, weight: .medium))
-                                .foregroundStyle(Color.white.opacity(0.95))
+                                .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
                                 .lineLimit(1)
                         }
                         .contentShape(Rectangle())
@@ -553,6 +673,8 @@ struct ComposerView: View {
                     .help("Voice transcription: \"\(voiceQuote)\"")
 
                     Spacer(minLength: 8)
+
+                    voiceSTTRouterQuickSwitchPill
                 }
                 .padding(.bottom, 1)
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -570,7 +692,7 @@ struct ComposerView: View {
             }
 
             Rectangle()
-                .fill(Color.white.opacity(0.12))
+                .fill(AppTheme.glassDivider(isLight: isLightGlass))
                 .frame(height: 1)
 
             if !attachments.isEmpty {
@@ -584,10 +706,10 @@ struct ComposerView: View {
                 } label: {
                     HStack(spacing: 8) {
                         HugeIcon(name: "add-01", size: 15)
-                            .foregroundStyle(Color.white.opacity(0.84))
+                            .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                         Text("Attach files or images")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.88))
+                            .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
                     }
                     .contentShape(Rectangle())
                 }
@@ -621,6 +743,10 @@ struct ComposerView: View {
 
     func playComposerEnterAnimation(withLeadingExit: Bool) {
         animationTask?.cancel()
+        if state.preferences.reducedMotionOverride == true {
+            enterExitPhase = .settled
+            return
+        }
         animationTask = Task { @MainActor in
             if withLeadingExit && enterExitPhase != .hidden {
                 // Reverse exit stages (Frames 05 -> 03 -> 02 -> 01)
@@ -702,32 +828,32 @@ struct ComposerView: View {
                     HStack(spacing: 6) {
                         HugeIcon(name: attachment.systemImage)
                             .imageScale(.small)
-                            .foregroundStyle(Color.white.opacity(0.82))
+                            .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                         VStack(alignment: .leading, spacing: 0) {
                             Text(attachment.fileName)
                                 .font(.caption)
-                                .foregroundStyle(Color.white.opacity(0.95))
+                                .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
                                 .lineLimit(1)
                             Text(attachment.displaySize)
                                 .font(.caption2)
-                                .foregroundStyle(Color.white.opacity(0.65))
+                                .foregroundStyle(AppTheme.glassMutedText(isLight: isLightGlass))
                         }
                         Button {
                             attachments.removeAll { $0.id == attachment.id }
                         } label: {
                             HugeIcon(name: "cancel-circle")
                                 .imageScale(.small)
-                                .foregroundStyle(Color.white.opacity(0.72))
+                                .foregroundStyle(AppTheme.glassMutedText(isLight: isLightGlass))
                         }
                         .buttonStyle(.borderless)
                         .accessibilityLabel("Remove \(attachment.fileName)")
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
-                    .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(AppTheme.glassChipFill(isLight: isLightGlass), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                            .strokeBorder(AppTheme.glassChipStroke(isLight: isLightGlass), lineWidth: 1)
                     )
                 }
             }
@@ -993,11 +1119,18 @@ struct ComposerView: View {
             } label: {
                 HugeIcon(name: "arrow-up-02", size: 15)
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(canSend ? Color.white : Color.white.opacity(0.45))
+                    .foregroundStyle(canSend ? Color.white : AppTheme.glassMutedText(isLight: isLightGlass))
                     .frame(width: 28, height: 28)
                     .background(
                         Circle()
-                            .fill(canSend ? AppTheme.accentBlue : Color.white.opacity(0.14))
+                            .fill(canSend ? AppTheme.accentBlue : AppTheme.glassChipFill(isLight: isLightGlass))
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(
+                                        canSend ? Color.clear : AppTheme.glassChipStroke(isLight: isLightGlass),
+                                        lineWidth: 0.8
+                                    )
+                            )
                     )
                     .contentShape(Circle())
             }
@@ -1016,18 +1149,18 @@ struct ComposerView: View {
         } label: {
             HStack(spacing: 8) {
                 HugeIcon(name: "sparkles", size: 15)
-                    .foregroundStyle(Color.white.opacity(0.82))
+                    .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                 Text(controller.model?.displayName ?? "Model")
                     .font(.system(size: 13.5, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.95))
+                    .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
                     .lineLimit(1)
                 if let effort {
                     Text(effort.capitalized)
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.72))
+                        .foregroundStyle(AppTheme.glassMutedText(isLight: isLightGlass))
                 }
                 HugeIcon(name: "arrow-down-01", size: 11)
-                    .foregroundStyle(Color.white.opacity(0.70))
+                    .foregroundStyle(AppTheme.glassMutedText(isLight: isLightGlass))
                     .padding(.leading, 2)
             }
             .contentShape(Rectangle())
@@ -1109,6 +1242,7 @@ struct ComposerView: View {
 
     private func loadDraft() {
         text = controller.drafts.text(for: controller.draftKey)
+        attachments = controller.drafts.attachments(for: controller.draftKey)
     }
 
     // MARK: - Attachments
@@ -1168,14 +1302,42 @@ struct ComposerView: View {
         return body
     }
 
-    /// The `@path` token being typed at the end of the composer.
+    /// Finds the active `@path` token range around the current cursor position (`caretUTF16Offset`),
+    /// falling back to the end of `text` if the cursor position has not been reported yet.
+    private var activeFileTokenInfo: (atIndex: String.Index, tokenEnd: String.Index, query: String)? {
+        guard !text.isEmpty else { return nil }
+        let caretIndex: String.Index
+        if let offset = caretUTF16Offset {
+            let clamped = max(0, min(offset, text.utf16.count))
+            caretIndex = String.Index(utf16Offset: clamped, in: text)
+        } else {
+            caretIndex = text.endIndex
+        }
+
+        let prefixBeforeCaret = text[text.startIndex..<caretIndex]
+        guard let atIndex = prefixBeforeCaret.lastIndex(of: "@") else { return nil }
+        let beforeAt = text[text.startIndex..<atIndex]
+        if let prevChar = beforeAt.last, !prevChar.isWhitespace, !prevChar.isNewline {
+            return nil
+        }
+        let afterAt = text.index(after: atIndex)
+        let querySlice = text[afterAt..<caretIndex]
+        guard !querySlice.contains(where: { $0.isWhitespace || $0.isNewline }) else {
+            return nil
+        }
+
+        var tokenEnd = caretIndex
+        while tokenEnd < text.endIndex,
+              !text[tokenEnd].isWhitespace,
+              !text[tokenEnd].isNewline {
+            tokenEnd = text.index(after: tokenEnd)
+        }
+        return (atIndex: atIndex, tokenEnd: tokenEnd, query: String(querySlice))
+    }
+
+    /// The `@path` token being typed at the active cursor position in the composer.
     private var fileQuery: String? {
-        guard let atIndex = text.lastIndex(of: "@") else { return nil }
-        let prefix = text[text.startIndex..<atIndex]
-        if let last = prefix.last, !last.isWhitespace, !last.isNewline { return nil }
-        let token = text[text.index(after: atIndex)...]
-        guard !token.contains(where: { $0.isWhitespace || $0.isNewline }) else { return nil }
-        return String(token)
+        activeFileTokenInfo?.query
     }
 
     private func refreshFileMatchesIfNeeded() {
@@ -1201,9 +1363,16 @@ struct ComposerView: View {
         switch suggestion.kind {
         case .command:
             text = suggestion.insertion
+            caretUTF16Offset = text.utf16.count
         case .file:
-            guard let atIndex = text.lastIndex(of: "@") else { return }
-            text = String(text[text.startIndex..<atIndex]) + suggestion.insertion
+            guard let info = activeFileTokenInfo else { return }
+            let prefix = String(text[text.startIndex..<info.atIndex])
+            let suffix = String(text[info.tokenEnd..<text.endIndex])
+            let needsLeadingSpaceDrop = suggestion.insertion.hasSuffix(" ") && suffix.first == " "
+            let cleanSuffix = needsLeadingSpaceDrop ? String(suffix.dropFirst()) : suffix
+            let newPrefixAndInsertion = prefix + suggestion.insertion
+            text = newPrefixAndInsertion + cleanSuffix
+            caretUTF16Offset = newPrefixAndInsertion.utf16.count
         }
         fileMatches = []
         suggestionIndex = 0
@@ -1223,8 +1392,10 @@ struct ComposerView: View {
 
     private func suggestionContextCleared() -> String {
         if commandQuery != nil { return "" }
-        if let atIndex = text.lastIndex(of: "@") {
-            return String(text[text.startIndex..<atIndex])
+        if let info = activeFileTokenInfo {
+            let prefix = String(text[text.startIndex..<info.atIndex])
+            let suffix = String(text[info.tokenEnd..<text.endIndex])
+            return prefix + suffix
         }
         return text
     }
@@ -1441,7 +1612,7 @@ struct MuseCreditBatteryButton: View {
         let contextWindow = controller.model?.contextWindow
         let isYoloEnabled = (controller.trustOverride ?? (controller.trustState != .untrusted))
 
-        return VStack(alignment: .leading, spacing: 7) {
+        return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text("Muse Credit Gauge")
                     .font(.system(size: 12, weight: .semibold))
@@ -1455,34 +1626,26 @@ struct MuseCreditBatteryButton: View {
                 fraction: remainingFraction
             )
             .frame(maxWidth: .infinity)
-            .frame(height: 54)
+            .frame(height: 48)
 
             if let snapshot = usageService.latestSnapshot {
                 Divider()
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     if let window = snapshot.window {
+                        let resetSuffix = window.resetsAt.map { " · \($0.formatted(date: .omitted, time: .shortened))" } ?? ""
                         KeyValueRow(
                             key: "5h window",
-                            value: "\(Int(window.remainingPercent.rounded()))% left (\(String(format: "%.0f%%", window.usedPercent)) used)",
+                            value: "\(Int(window.remainingPercent.rounded()))% left\(resetSuffix)",
                             isMonospaced: true
                         )
-                        if let resetsAt = window.resetsAt {
-                            KeyValueRow(
-                                key: "Resets",
-                                value: resetsAt.formatted(date: .omitted, time: .shortened),
-                                isMonospaced: false
-                            )
-                        }
                     }
                     if let weekly = snapshot.weekly {
+                        let tierSuffix = (snapshot.tier?.isEmpty == false) ? " (\(snapshot.tier!))" : ""
                         KeyValueRow(
                             key: "Weekly",
-                            value: "\(Int(weekly.remainingPercent.rounded()))% left",
+                            value: "\(Int(weekly.remainingPercent.rounded()))% left\(tierSuffix)",
                             isMonospaced: true
                         )
-                    }
-                    if let tier = snapshot.tier, !tier.isEmpty {
-                        KeyValueRow(key: "Tier", value: tier, isMonospaced: false)
                     }
                     if snapshot.window == nil && snapshot.weekly == nil {
                         if let allowance = snapshot.allowanceRemainingPercent {
@@ -1506,7 +1669,7 @@ struct MuseCreditBatteryButton: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 KeyValueRow(key: "In / Out tokens", value: "\(inputTokens.formatted()) / \(outputTokens.formatted())", isMonospaced: true)
                 if cachedTokens > 0 {
                     KeyValueRow(key: "Cached tokens", value: "\(cachedTokens.formatted())", isMonospaced: true)
@@ -1560,17 +1723,29 @@ struct MuseCreditBatteryButton: View {
     }
 }
 
-/// Vector microphone icon matching `mic-01.svg` whose capsule head is completely filled in bright white
+/// Vector microphone icon matching `mic-01.svg` whose capsule head is completely filled
 /// when voice recording/transcribing is active (`ff3.jpg`), and rendered as a clean outline when idle.
 struct MuseMicrophoneIcon: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
     var isActive: Bool
     var size: CGFloat = 20
 
+    private var isLightGlass: Bool {
+        AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+    }
+
     var body: some View {
+        let isLight = isLightGlass
         Canvas { context, canvasSize in
             let s = min(canvasSize.width, canvasSize.height) / 24.0
             let strokeW = max(1.3, 1.65 * s)
-            let strokeColor = Color.white.opacity(isActive ? 0.98 : 0.84)
+            let activePrimary = isLight
+                ? Color(red: 0.05, green: 0.16, blue: 0.09)
+                : Color.white
+            let strokeColor = isLight
+                ? Color(red: 0.08, green: 0.21, blue: 0.12, opacity: isActive ? 0.96 : 0.84)
+                : Color.white.opacity(isActive ? 0.98 : 0.84)
 
             // Microphone capsule head (`x: 7..16, y: 2..16, rx: 4.5` in 24x24 space)
             let capsuleRect = CGRect(
@@ -1584,12 +1759,19 @@ struct MuseMicrophoneIcon: View {
             if isActive {
                 var glowCtx = context
                 glowCtx.addFilter(.blur(radius: 2.2 * s))
-                glowCtx.fill(capsulePath, with: .color(Color.white.opacity(0.48)))
-                context.fill(capsulePath, with: .color(Color.white))
+                glowCtx.fill(
+                    capsulePath,
+                    with: .color(
+                        isLight
+                            ? Color(red: 0.24, green: 0.78, blue: 0.42, opacity: 0.46)
+                            : Color.white.opacity(0.48)
+                    )
+                )
+                context.fill(capsulePath, with: .color(activePrimary))
             }
             context.stroke(
                 capsulePath,
-                with: .color(isActive ? Color.white : strokeColor),
+                with: .color(isActive ? activePrimary : strokeColor),
                 style: StrokeStyle(lineWidth: strokeW, lineCap: .round, lineJoin: .round)
             )
 
@@ -1627,12 +1809,19 @@ struct MuseMicrophoneIcon: View {
     }
 }
 
-/// Compact white tachometer dial whose gauge stroke thins out as remaining credits decrease.
+/// Compact tachometer dial whose gauge stroke thins out as remaining credits decrease.
 struct TachometerMiniDial: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
     var fraction: Double
     var isGlassSurface: Bool = true
 
+    private var isLightGlass: Bool {
+        AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+    }
+
     var body: some View {
+        let isLight = isLightGlass
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height - 2.5)
             let radius = min(size.width / 2 - 2.0, size.height - 3.5)
@@ -1642,8 +1831,12 @@ struct TachometerMiniDial: View {
             let clamped = min(1.0, max(0.0, fraction))
             let needleDeg = startDeg + clamped * spanDeg
 
-            let fgColor = isGlassSurface ? Color.white : Color.primary
-            let trackColor = isGlassSurface ? Color.white.opacity(0.22) : Color.primary.opacity(0.18)
+            let fgColor = isGlassSurface
+                ? (isLight ? Color(red: 0.07, green: 0.18, blue: 0.11) : Color.white)
+                : Color.primary
+            let trackColor = isGlassSurface
+                ? (isLight ? Color(red: 0.08, green: 0.22, blue: 0.13, opacity: 0.22) : Color.white.opacity(0.22))
+                : Color.primary.opacity(0.18)
 
             // Subtle background track
             var bgArc = Path()
@@ -1933,23 +2126,33 @@ extension AnyTransition {
 // MARK: - Liquid Glass Translucent Surfaces & 3D Morphing Voice Orb (`orb1.gif`)
 
 struct LiquidGlassBlurBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
     var material: NSVisualEffectView.Material = .popover
     var blendingMode: NSVisualEffectView.BlendingMode = .withinWindow
 
     var body: some View {
-        Color(red: 0.04, green: 0.06, blue: 0.08, opacity: 0.30)
+        let isLight = AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+        if isLight {
+            Color(red: 0.96, green: 0.99, blue: 0.97, opacity: 0.12)
+        } else {
+            Color(red: 0.03, green: 0.05, blue: 0.07, opacity: 0.10)
+        }
     }
 }
 
-/// Coordinate-aligned optical refraction of the active chat background (`UntiSlehd 8.png` & `UntiSDDtlehd 8.png`),
-/// blurring and refracting the `"M"` background directly behind the composer's top input pill and companion subcontainer.
+/// Coordinate-aligned optical refraction of the active chat background (`UntiSlehd 8.png`, `UntiSDDtlehd 8.png`, & `chat-bg-forest-light.png`),
+/// blurring and refracting the `"M"` background directly behind the composer's top input pill, companion subcontainer, and floating cards.
 struct LiquidGlassRefractedBackdrop: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.sessionPaneSize) private var sessionPaneSize
     @Environment(\.chatBackground) private var chatBackground
 
     var isDarkTopPill: Bool
 
     var body: some View {
+        let isLight = AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+        let effectiveStyle = chatBackground.resolved(for: colorScheme)
         GeometryReader { proxy in
             let cardRect = proxy.frame(in: .named("picode-session-pane"))
             let hasValidPane = sessionPaneSize.width > 10 && sessionPaneSize.height > 10 && cardRect.width > 10
@@ -1960,14 +2163,22 @@ struct LiquidGlassRefractedBackdrop: View {
             let offsetX = (hasValidPane && abs(cardRect.minX) > 1) ? -cardRect.minX : fallbackX
             let offsetY = (hasValidPane && abs(cardRect.minY) > 1) ? -cardRect.minY : fallbackY
 
-            MuseChatBackgroundView(style: chatBackground)
-                .frame(width: paneW, height: paneH)
-                .saturation(0.0)
-                .contrast(1.24)
-                .brightness(isDarkTopPill ? 0.03 : 0.04)
-                .colorMultiply(Color(red: 0.72, green: 0.86, blue: 1.0))
-                .blur(radius: 34)
-                .offset(x: offsetX, y: offsetY)
+            if let preBlurred = AppTheme.blurredChatBackgroundImage(
+                for: effectiveStyle,
+                isLight: isLight,
+                isDarkTopPill: isDarkTopPill
+            ) {
+                Image(nsImage: preBlurred)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: paneW, height: paneH, alignment: .center)
+                    .clipped()
+                    .offset(x: offsetX, y: offsetY)
+            } else {
+                MuseChatBackgroundView(style: chatBackground)
+                    .frame(width: paneW, height: paneH)
+                    .offset(x: offsetX, y: offsetY)
+            }
         }
         .allowsHitTesting(false)
     }
@@ -2233,8 +2444,12 @@ struct VoiceOrbFrameDescriptor: Equatable {
 /// leading edge of the voice transcription row inside `liquidGlassControlCard`.
 struct VoiceOrbBadgeIcon: View {
     var size: CGFloat = 19
+    var isLightGlass: Bool = false
 
     var body: some View {
+        let strokeCol = isLightGlass
+            ? Color(red: 0.07, green: 0.19, blue: 0.11, opacity: 0.88)
+            : Color.white.opacity(0.90)
         Canvas { context, canvasSize in
             let w = canvasSize.width
             let h = canvasSize.height
@@ -2242,7 +2457,7 @@ struct VoiceOrbBadgeIcon: View {
             let circleRect = CGRect(x: inset, y: inset, width: w - inset * 2, height: h - inset * 2)
             context.stroke(
                 Path(ellipseIn: circleRect),
-                with: .color(Color.white.opacity(0.88)),
+                with: .color(strokeCol),
                 lineWidth: 1.45
             )
 
@@ -2257,7 +2472,7 @@ struct VoiceOrbBadgeIcon: View {
             )
             context.stroke(
                 wave,
-                with: .color(Color.white.opacity(0.92)),
+                with: .color(strokeCol),
                 style: StrokeStyle(lineWidth: 1.45, lineCap: .round)
             )
         }
@@ -2266,12 +2481,15 @@ struct VoiceOrbBadgeIcon: View {
 }
 
 struct LiquidGlassCardBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
     var cornerRadius: CGFloat
     var isDarkTopPill: Bool
     var isDropTargeted: Bool = false
     var sphereMix: Double = 0.0
 
     var body: some View {
+        let isLight = AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         ZStack {
             LiquidGlassBlurBackground(
@@ -2279,18 +2497,51 @@ struct LiquidGlassCardBackground: View {
                 blendingMode: .withinWindow
             )
 
-            // Partially translucent Liquid Glass refraction of the chat background (`UntiSlehd 8.png` & `UntiSDDtlehd 8.png`)
+            // Crystal-clear Liquid Glass refraction of the chat background (`UntiSlehd 8.png`, `UntiSDDtlehd 8.png`, & `chat-bg-forest-light.png`)
             LiquidGlassRefractedBackdrop(isDarkTopPill: isDarkTopPill)
-                .opacity(isDarkTopPill ? (0.66 * (1.0 - sphereMix * 0.6)) : 0.68)
+                .opacity(isLight ? 0.58 : (isDarkTopPill ? (0.58 * (1.0 - sphereMix * 0.6)) : 0.60))
 
-            if isDarkTopPill {
-                // Dark smoked Liquid Glass top pill that is deeper at the top edge and opens into
-                // translucent cool slate-blue glass toward the bottom (`UntiSlehd 8.png` & `UntiSDDtlehd 8.png`)
+            if isLight {
+                // Light Mode crystal-clear pearlescent white & botanical-sage Liquid Glass
+                if isDarkTopPill {
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color.white.opacity(0.54), location: 0.0),
+                            .init(color: Color(red: 0.96, green: 0.99, blue: 0.96, opacity: 0.40), location: 0.52),
+                            .init(color: Color(red: 0.90, green: 0.97, blue: 0.91, opacity: 0.34), location: 1.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                } else {
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color.white.opacity(0.46), location: 0.0),
+                            .init(color: Color(red: 0.95, green: 0.99, blue: 0.96, opacity: 0.35), location: 0.55),
+                            .init(color: Color(red: 0.89, green: 0.97, blue: 0.91, opacity: 0.28), location: 1.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+
+                // Luminous diagonal specular glass sheen
                 LinearGradient(
                     stops: [
-                        .init(color: Color(red: 0.015, green: 0.02, blue: 0.03, opacity: 0.78), location: 0.0),
-                        .init(color: Color(red: 0.05, green: 0.08, blue: 0.11, opacity: 0.52), location: 0.52),
-                        .init(color: Color(red: 0.13, green: 0.19, blue: 0.25, opacity: 0.34), location: 1.0)
+                        .init(color: Color.white.opacity(0.32), location: 0.0),
+                        .init(color: Color.clear, location: 0.48),
+                        .init(color: Color(red: 0.76, green: 0.96, blue: 0.68, opacity: 0.14), location: 1.0)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            } else if isDarkTopPill {
+                // Clear smoked Liquid Glass top pill that lets the luminous green M ribbon refract visibly through
+                LinearGradient(
+                    stops: [
+                        .init(color: Color(red: 0.02, green: 0.04, blue: 0.05, opacity: 0.44), location: 0.0),
+                        .init(color: Color(red: 0.05, green: 0.09, blue: 0.11, opacity: 0.32), location: 0.52),
+                        .init(color: Color(red: 0.11, green: 0.18, blue: 0.22, opacity: 0.22), location: 1.0)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -2311,12 +2562,12 @@ struct LiquidGlassCardBackground: View {
                     .opacity(sphereMix)
                 }
             } else {
-                // Partially translucent Liquid Glass companion subcontainer matching `UntiSlehd 8.png` & `UntiSDDtlehd 8.png`
+                // Translucent Liquid Glass companion subcontainer & floating third panel (`InspectorView`) with rich smoked-glass contrast so white text is 100% legible over dark backgrounds
                 LinearGradient(
                     stops: [
-                        .init(color: Color(red: 0.08, green: 0.12, blue: 0.16, opacity: 0.50), location: 0.0),
-                        .init(color: Color(red: 0.10, green: 0.15, blue: 0.20, opacity: 0.45), location: 0.55),
-                        .init(color: Color(red: 0.12, green: 0.18, blue: 0.23, opacity: 0.40), location: 1.0)
+                        .init(color: Color(red: 0.05, green: 0.09, blue: 0.12, opacity: 0.48), location: 0.0),
+                        .init(color: Color(red: 0.07, green: 0.12, blue: 0.16, opacity: 0.42), location: 0.55),
+                        .init(color: Color(red: 0.09, green: 0.15, blue: 0.19, opacity: 0.36), location: 1.0)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -2325,9 +2576,9 @@ struct LiquidGlassCardBackground: View {
                 // Subtle diagonal specular glass sheen across the companion subcontainer
                 LinearGradient(
                     stops: [
-                        .init(color: Color.white.opacity(0.05), location: 0.0),
+                        .init(color: Color.white.opacity(0.08), location: 0.0),
                         .init(color: Color.clear, location: 0.48),
-                        .init(color: Color(red: 0.68, green: 0.84, blue: 1.0, opacity: 0.05), location: 1.0)
+                        .init(color: Color(red: 0.68, green: 0.92, blue: 0.84, opacity: 0.07), location: 1.0)
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -2341,28 +2592,34 @@ struct LiquidGlassCardBackground: View {
                     ? AnyShapeStyle(Color.accentColor)
                     : AnyShapeStyle(
                         LinearGradient(
-                            colors: isDarkTopPill
+                            colors: isLight
                                 ? [
-                                    // Subtle top edge grading into a crisp cool liquid-glass bottom rim (`UntiSlehd 8.png` & `UntiSDDtlehd 8.png`)
-                                    Color.white.opacity(0.06 + 0.20 * sphereMix),
-                                    Color(red: 0.78, green: 0.88, blue: 1.0).opacity(0.14 + 0.08 * sphereMix),
-                                    Color(red: 0.82, green: 0.90, blue: 1.0).opacity(0.26 + 0.40 * sphereMix)
+                                    Color.white.opacity(0.92),
+                                    Color(red: 0.76, green: 0.94, blue: 0.80).opacity(0.62),
+                                    Color.white.opacity(0.82)
                                 ]
-                                : [
-                                    // Crisp liquid-glass specular rim around the companion subcontainer (`UntiSlehd 8.png` & `UntiSDDtlehd 8.png`)
-                                    Color(red: 0.85, green: 0.92, blue: 1.0).opacity(0.24),
-                                    Color(red: 0.78, green: 0.88, blue: 1.0).opacity(0.14),
-                                    Color(red: 0.82, green: 0.90, blue: 1.0).opacity(0.20)
-                                ],
+                                : (isDarkTopPill
+                                    ? [
+                                        Color.white.opacity(0.18 + 0.20 * sphereMix),
+                                        Color(red: 0.78, green: 0.92, blue: 0.88).opacity(0.22 + 0.08 * sphereMix),
+                                        Color(red: 0.82, green: 0.94, blue: 0.90).opacity(0.34 + 0.40 * sphereMix)
+                                    ]
+                                    : [
+                                        Color(red: 0.85, green: 0.95, blue: 0.92).opacity(0.32),
+                                        Color(red: 0.78, green: 0.90, blue: 0.88).opacity(0.20),
+                                        Color(red: 0.82, green: 0.94, blue: 0.90).opacity(0.28)
+                                    ]),
                             startPoint: .top,
                             endPoint: .bottom
                         )
                     ),
-                lineWidth: isDropTargeted ? 2.0 : (1.0 + 0.3 * sphereMix)
+                lineWidth: isDropTargeted ? 2.0 : (isLight ? 1.15 : (1.0 + 0.3 * sphereMix))
             )
         )
         .shadow(
-            color: Color.black.opacity(isDarkTopPill ? 0.32 : 0.26),
+            color: isLight
+                ? Color(red: 0.08, green: 0.24, blue: 0.14).opacity(isDarkTopPill ? 0.14 : 0.11)
+                : Color.black.opacity(isDarkTopPill ? 0.28 : 0.22),
             radius: isDarkTopPill ? 18 : 16,
             y: isDarkTopPill ? 8 : 7
         )
@@ -3743,7 +4000,7 @@ struct FirstPromptCenterVoiceOrbView: View {
             onTap: {
                 if stt.isRecording {
                     Task {
-                        await stt.toggleRecording(installation: controller.museInstallation) { _ in }
+                        await stt.stopAndTranscribeUsingPending(installation: controller.museInstallation)
                     }
                 } else {
                     stt.cancel()

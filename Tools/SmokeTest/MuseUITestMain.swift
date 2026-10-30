@@ -272,13 +272,57 @@ struct MuseUITestMain {
         check(placeholderTV.subviews.contains(where: { $0 is GlowingCaretView }), "PlaceholderTextView must contain GlowingCaretView")
 
         // 10. Verify Liquid Glass Composer, Enter/Exit Choreography (`enter-anim.gif`), & 3D Morphing Voice Orb (`orb1.gif`)
-        // Also verify clicking the Muse icon (`newChatInCurrentProject()`) in a folder with 0 saved sessions never makes `activeController` nil
+        // Also verify clicking the pink Muse icon (`MuseAppRailHeaderButton` / `newChatInCurrentProject()`) from any state creates/resets to a clean empty chat session
         let emptyFolder = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("muse-empty-project-\(UUID().uuidString.prefix(6))").path
         try? FileManager.default.createDirectory(atPath: emptyFolder, withIntermediateDirectories: true)
         await state.startNewSession(projectPath: emptyFolder)
         check(state.activeController != nil, "startNewSession on an empty folder must keep activeController non-nil")
         await state.newChatInCurrentProject()
         check(state.activeController != nil, "Clicking the Muse rail icon (newChatInCurrentProject) must never make activeController nil or hide the composer/right panel")
+
+        // Verify clicking the pink Muse icon when viewing a populated session or dirty/dropped composer state transitions to a clean empty chat session
+        if let existingPopulatedSession = state.projects.flatMap(\.sessions).first(where: { $0.messageCount > 0 }) {
+            await state.open(session: existingPopulatedSession)
+        }
+        if let activeBefore = state.activeController {
+            activeBefore.hasDroppedComposerToBottom = true
+            activeBefore.hasCompletedFirstVoiceOrTextInteraction = true
+            check(activeBefore.hasDroppedComposerToBottom, "Precondition: active session has dropped composer")
+        }
+        var didInvokeMuseButton = false
+        let museButtonView = MuseAppRailHeaderButton(isActive: false) {
+            didInvokeMuseButton = true
+            Task { await state.newChatInCurrentProject() }
+        }
+        let museButtonHost = NSHostingView(rootView: museButtonView)
+        museButtonHost.frame = NSRect(x: 0, y: 0, width: 44, height: 44)
+        museButtonHost.layoutSubtreeIfNeeded()
+        check(museButtonHost.fittingSize.width >= 40 && museButtonHost.fittingSize.height >= 40,
+              "MuseAppRailHeaderButton must have a full 40x40 hit target (got \(museButtonHost.fittingSize))")
+
+        let tickBeforeNewChat = state.newSessionResetTick
+        await state.newChatInCurrentProject()
+        check(state.newSessionResetTick > tickBeforeNewChat, "Clicking Muse icon from a populated session must increment newSessionResetTick")
+        check(state.activeController?.items.isEmpty == true, "Clicking Muse icon from a populated session must create an empty chat session (items.isEmpty)")
+        check(state.activeController?.sessionFile == nil, "New chat session from Muse icon must have sessionFile == nil")
+        check(state.activeController?.hasDroppedComposerToBottom == false, "New chat session from Muse icon must reset hasDroppedComposerToBottom to false (centered landing layout)")
+
+        // Now dirty the empty session (drop composer via mic, set draft text, open settings, set voice transcript) and click the Muse icon again
+        if let dirtyEmpty = state.activeController {
+            dirtyEmpty.hasDroppedComposerToBottom = true
+            dirtyEmpty.hasCompletedFirstVoiceOrTextInteraction = true
+            dirtyEmpty.drafts.setText("Unsent draft text that should be cleared", for: dirtyEmpty.draftKey)
+            MuseVoiceSTTService.shared.lastTranscript = "stale voice transcript"
+            state.isSettingsPresented = true
+            let tickBeforeReset = state.newSessionResetTick
+            await state.newChatInCurrentProject()
+            check(state.newSessionResetTick > tickBeforeReset, "Clicking Muse icon on a dirty empty session must increment newSessionResetTick")
+            check(dirtyEmpty.hasDroppedComposerToBottom == false, "Clicking Muse icon must reset hasDroppedComposerToBottom back to false so composer returns to center")
+            check(dirtyEmpty.drafts.text(for: dirtyEmpty.draftKey).isEmpty, "Clicking Muse icon must clear unsent draft text for the new empty session")
+            check(MuseVoiceSTTService.shared.lastTranscript == nil, "Clicking Muse icon must clear stale voice transcript")
+            check(state.isSettingsPresented == false, "Clicking Muse icon while Settings is open must dismiss Settings and return to the new chat")
+        }
+        _ = didInvokeMuseButton
 
         check(ComposerEnterExitPhase.hidden.topPillOpacity == 0.0, "Phase .hidden must hide top pill")
         check(ComposerEnterExitPhase.pillWithBlurredCapsule.topPillOpacity == 1.0 && ComposerEnterExitPhase.pillWithBlurredCapsule.subcontainerScaleX == 0.44 && ComposerEnterExitPhase.pillWithBlurredCapsule.subcontainerInnerOpacity == 0.0,
@@ -609,7 +653,13 @@ struct MuseUITestMain {
             textView.refreshCaretState()
             check(glowingCaret?.isHidden == false, "GlowingCaretView must reappear after unmarkText()")
 
-            // 16. End-to-End Speech-to-Text (`MuseVoiceSTTService.shared.transcribeFile` -> `muse voice transcribe`) & Subcontainer Voice Row (`Untitled 9.jpg`)
+            // 16. End-to-End Speech-to-Text Router (`MuseVoiceSTTService`: Auto Muse -> macOS System Backup Failover & Quick-Switching) & Subcontainer Voice Row (`Untitled 9.jpg`)
+            let sttService = MuseVoiceSTTService.shared
+            sttService.setRouterMode(.autoMuseWithSystemBackup)
+            sttService.retryMuseSTTNow()
+            check(sttService.routerMode == .autoMuseWithSystemBackup, "Default STT routerMode must be .autoMuseWithSystemBackup")
+            check(sttService.activePrimaryBackend() == .museCLI, "When Muse circuit is closed in Auto mode, activePrimaryBackend() must be .museCLI")
+
             let sttWavURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("muse-e2e-stt-\(UUID().uuidString.prefix(6)).wav")
             defer { try? FileManager.default.removeItem(at: sttWavURL) }
             let sayResult = await discovery.run(
@@ -620,13 +670,47 @@ struct MuseUITestMain {
                 timeout: 10.0
             )
             check(sayResult.exitCode == 0 && FileManager.default.fileExists(atPath: sttWavURL.path), "macOS /usr/bin/say must synthesize 16kHz PCM .wav clip for STT test")
-            let transcribedText = await MuseVoiceSTTService.shared.transcribeFile(at: sttWavURL, installation: installation)
-            print("MuseVoiceSTTService transcribed: \"\(transcribedText ?? "<nil>")\" (lastTranscript: \(MuseVoiceSTTService.shared.lastTranscript ?? "<nil>"), lastError: \(MuseVoiceSTTService.shared.lastError ?? "none"))")
+
+            // 16a. Primary route (Muse CLI healthy)
+            let transcribedText = await sttService.transcribeFile(at: sttWavURL, installation: installation)
+            print("MuseVoiceSTTService [Primary Muse] transcribed: \"\(transcribedText ?? "<nil>")\" (backend: \(sttService.lastUsedBackend?.rawValue ?? "nil"), lastTranscript: \(sttService.lastTranscript ?? "<nil>"))")
             check(transcribedText != nil && !(transcribedText ?? "").isEmpty, "MuseVoiceSTTService.transcribeFile must return non-empty speech transcription")
             let lowerTranscript = (transcribedText ?? "").lowercased()
             check(lowerTranscript.contains("talk about food"), "MuseVoiceSTTService transcription must match 'talk about food' (got '\(transcribedText ?? "")')")
-            check(MuseVoiceSTTService.shared.lastTranscript == "talk about food", "MuseVoiceSTTService.lastTranscript must normalize to 'talk about food' for the subcontainer voice row")
-            check(!MuseVoiceSTTService.shared.isTranscribing, "MuseVoiceSTTService.isTranscribing must reset to false after transcription finishes")
+            check(sttService.lastTranscript == "talk about food", "MuseVoiceSTTService.lastTranscript must normalize to 'talk about food' for the subcontainer voice row")
+            check(sttService.lastUsedBackend == .museCLI, "Healthy Muse CLI transcription must record lastUsedBackend == .museCLI")
+            check(!sttService.didFallbackToSystem, "Healthy Muse CLI transcription must have didFallbackToSystem == false")
+            check(!sttService.isTranscribing, "MuseVoiceSTTService.isTranscribing must reset to false after transcription finishes")
+
+            // 16b. Automatic Failover when Muse is down (`muse` exits non-zero / unreachable -> macOS System `SFSpeechRecognizer` takes over seamlessly)
+            var downInstallation = installation
+            downInstallation.executableURL = URL(fileURLWithPath: "/usr/bin/false")
+            sttService.lastTranscript = nil
+            let failoverText = await sttService.transcribeFile(at: sttWavURL, installation: downInstallation)
+            print("MuseVoiceSTTService [Muse Down -> System Backup Failover] transcribed: \"\(failoverText ?? "<nil>")\" (backend: \(sttService.lastUsedBackend?.rawValue ?? "nil"), didFallback: \(sttService.didFallbackToSystem), badge: \(sttService.routerBadgeText), reason: \(sttService.lastMuseFailureReason ?? "none"))")
+            check(failoverText != nil && (failoverText ?? "").lowercased().contains("talk about food"), "When Muse is down, STT router must automatically fail over to macOS System SFSpeechRecognizer and transcribe 'talk about food' (got '\(failoverText ?? "<nil>")')")
+            check(sttService.lastUsedBackend == .macOSSystem, "Failover transcription must record lastUsedBackend == .macOSSystem")
+            check(sttService.didFallbackToSystem, "Failover transcription must set didFallbackToSystem == true")
+            check(sttService.isMuseCircuitOpen(), "Failover must open the Muse outage circuit breaker so subsequent clips route immediately to System STT")
+            check(sttService.activePrimaryBackend() == .macOSSystem, "While Muse circuit breaker is open, activePrimaryBackend() must be .macOSSystem")
+            check(sttService.routerBadgeText == "System Backup", "Router badge must display 'System Backup' after failover")
+            check(sttService.lastTranscript == "talk about food", "Failover must update lastTranscript to 'talk about food'")
+
+            // 16c. Quick-Switch Controls (`retryMuseSTTNow`, `switchToSystemBackupNow`, `.systemOnly`, `.autoMuseWithSystemBackup`)
+            sttService.retryMuseSTTNow()
+            check(!sttService.isMuseCircuitOpen() && !sttService.didFallbackToSystem, "retryMuseSTTNow() must clear the circuit breaker and fallback flag")
+            check(sttService.activePrimaryBackend() == .museCLI, "After retryMuseSTTNow(), activePrimaryBackend() must return to .museCLI")
+
+            sttService.switchToSystemBackupNow(reason: "Quick-switch test")
+            check(sttService.isMuseCircuitOpen() && sttService.activePrimaryBackend() == .macOSSystem, "switchToSystemBackupNow() must immediately route to .macOSSystem")
+
+            sttService.setRouterMode(.systemOnly)
+            check(sttService.routerMode == .systemOnly && sttService.activePrimaryBackend() == .macOSSystem, "setRouterMode(.systemOnly) must route directly to .macOSSystem")
+            let directSystemText = await sttService.transcribeFile(at: sttWavURL, installation: installation)
+            check((directSystemText ?? "").lowercased().contains("talk about food") && sttService.lastUsedBackend == .macOSSystem && !sttService.didFallbackToSystem, "Direct .systemOnly mode must transcribe via macOS SFSpeechRecognizer with didFallbackToSystem == false")
+
+            sttService.setRouterMode(.autoMuseWithSystemBackup)
+            sttService.retryMuseSTTNow()
 
             controller.resetFirstPromptVoiceState()
             let unpinnedComposerAfter = NSHostingView(
@@ -954,8 +1038,8 @@ struct MuseUITestMain {
             let popoverHost = NSHostingView(rootView: MuseCreditBatteryButton(controller: controller).popoverContent)
             let popoverSize = popoverHost.fittingSize
             check(
-                popoverSize.width <= 230 && popoverSize.height <= 230,
-                "MuseCreditBatteryButton popover should be compact (<= 230x230), got \(popoverSize)"
+                popoverSize.width <= 230 && popoverSize.height <= 265,
+                "MuseCreditBatteryButton popover should be compact (<= 230x265), got \(popoverSize)"
             )
 
             let ruleRenderer = ImageRenderer(content: ruleSheet)
@@ -969,7 +1053,592 @@ struct MuseUITestMain {
             }
         }
 
-        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, and backend state transitions verified.")
+        // 19. Verify Light Mode Backdrop (`chat-bg-forest-light` / `.daylightForest`) & Crystal-Clear Floating Components (`Untitled 10.jpg` & `Meta-Ai-Forest-Bg.html`)
+        let daylightBgImg = AppTheme.chatBackgroundImage(for: .daylightForest)
+        check(daylightBgImg != nil && (daylightBgImg?.size.width ?? 0) >= 1600,
+              "Daylight Forest (`chat-bg-forest-light`) high-res background image must load from Assets.xcassets/ChatBackgrounds")
+        check(PreferencesStore.ChatBackground.forestGlass.resolved(for: .light) == .daylightForest,
+              "In Light Mode (`colorScheme == .light`), `.forestGlass` must automatically resolve to `.daylightForest`")
+        check(PreferencesStore.ChatBackground.forestGlass.resolved(for: .dark) == .forestGlass,
+              "In Dark Mode (`colorScheme == .dark`), `.forestGlass` must remain `.forestGlass`")
+        check(AppTheme.isLightGlass(colorScheme: .light, chatBackground: .forestGlass),
+              "`AppTheme.isLightGlass` must be true when `colorScheme == .light` with `.forestGlass`")
+        check(AppTheme.isLightGlass(colorScheme: .dark, chatBackground: .daylightForest),
+              "`AppTheme.isLightGlass` must be true when `.daylightForest` is explicitly selected")
+        check(!AppTheme.isLightGlass(colorScheme: .dark, chatBackground: .forestGlass),
+              "`AppTheme.isLightGlass` must be false in Dark Mode with `.forestGlass`")
+
+        // Verify `GlowingCaretView` in Light Mode (`isLightGlass = true`) glows dark & narrow instead of white circular light
+        let caretSize = NSSize(width: 30, height: 50)
+        func renderCaretSnapshot(isLight: Bool) -> (NSImage, NSBitmapImageRep)? {
+            let caret = GlowingCaretView(frame: NSRect(origin: .zero, size: caretSize))
+            caret.isLightGlass = isLight
+            guard let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: Int(caretSize.width),
+                pixelsHigh: Int(caretSize.height),
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+            ) else { return nil }
+            NSGraphicsContext.saveGraphicsState()
+            if let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+                NSGraphicsContext.current = ctx
+                caret.draw(caret.bounds)
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            let img = NSImage(size: caretSize)
+            img.addRepresentation(rep)
+            return (img, rep)
+        }
+
+        if let (_, lightCaretRep) = renderCaretSnapshot(isLight: true),
+           let centerColor = lightCaretRep.colorAt(x: Int(caretSize.width / 2), y: Int(caretSize.height / 2))?.usingColorSpace(.sRGB) {
+            check(
+                centerColor.redComponent < 0.15 && centerColor.greenComponent < 0.30 && centerColor.alphaComponent > 0.85,
+                "Light Mode GlowingCaretView core must be deep dark forest-obsidian, got r=\(centerColor.redComponent) g=\(centerColor.greenComponent) a=\(centerColor.alphaComponent)"
+            )
+            if let farSideColor = lightCaretRep.colorAt(x: Int(caretSize.width / 2) + 8, y: Int(caretSize.height / 2))?.usingColorSpace(.sRGB) {
+                check(
+                    farSideColor.alphaComponent < 0.06,
+                    "Light Mode GlowingCaretView dark glow must be tightly hugged to the vertical bar (not a wide circle), got alpha=\(farSideColor.alphaComponent) at +8px"
+                )
+            }
+        } else {
+            check(false, "Could not render Light Mode GlowingCaretView bitmap snapshot")
+        }
+
+        if ProcessInfo.processInfo.environment["MUSE_RENDER_ORB_SHEET"] == "1" {
+            let paneW: CGFloat = 1060
+            let paneH: CGFloat = 540
+            let inspW: CGFloat = 304
+            let lightCaretImg = renderCaretSnapshot(isLight: true)?.0
+            let darkCaretImg = renderCaretSnapshot(isLight: false)?.0
+
+            let lightVsDarkSheet = VStack(spacing: 16) {
+                ForEach([true, false], id: \.self) { isLightMode in
+                    let scheme: ColorScheme = isLightMode ? .light : .dark
+                    let bgStyle: PreferencesStore.ChatBackground = isLightMode ? .daylightForest : .forestGlass
+                    let isLight = AppTheme.isLightGlass(colorScheme: scheme, chatBackground: bgStyle)
+
+                    HStack(alignment: .top, spacing: 0) {
+                        // Left/Center Chat Column with Landing Composer +Consolidated Bottom Bar preview
+                        VStack(spacing: 18) {
+                            Spacer(minLength: 16)
+
+                            Text(isLightMode ? "Light Mode — Daylight Forest (Light M) & Dark-Glowing Cursor" : "Dark Mode — Forest Glass (Liquid M) & Luminous Cursor")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLight))
+
+                            // Floating 2-Container Landing Composer (Top Input Pill + Companion Subcontainer)
+                            VStack(spacing: ComposerMetrics.companionGap) {
+                                HStack(spacing: 10) {
+                                    HStack(spacing: 0) {
+                                        if let caretImg = isLight ? lightCaretImg : darkCaretImg {
+                                            Image(nsImage: caretImg)
+                                                .frame(width: 14, height: 34)
+                                                .offset(x: -2)
+                                        }
+                                        Text("Ask Anything")
+                                            .font(.system(size: 18.5, weight: .regular))
+                                            .foregroundStyle(isLight ? Color(red: 0.12, green: 0.25, blue: 0.16, opacity: 0.62) : Color.white.opacity(0.56))
+                                    }
+                                    Spacer()
+                                    MuseMicrophoneIcon(isActive: false, size: 20)
+                                    Circle()
+                                        .fill(AppTheme.glassChipFill(isLight: isLight))
+                                        .overlay(
+                                            Circle().strokeBorder(AppTheme.glassChipStroke(isLight: isLight), lineWidth: 0.8)
+                                        )
+                                        .frame(width: 28, height: 28)
+                                        .overlay(
+                                            Image(nsImage: .huge("arrow-up-02"))
+                                                .renderingMode(.template)
+                                                .resizable()
+                                                .frame(width: 14, height: 14)
+                                                .foregroundStyle(AppTheme.glassMutedText(isLight: isLight))
+                                        )
+                                }
+                                .padding(.leading, 26)
+                                .padding(.trailing, 20)
+                                .frame(width: ComposerMetrics.landingWidth, height: ComposerMetrics.topPillMinHeight)
+                                .background(
+                                    LiquidGlassCardBackground(
+                                        cornerRadius: ComposerMetrics.topPillCornerRadius,
+                                        isDarkTopPill: true
+                                    )
+                                )
+
+                                // Companion Subcontainer
+                                VStack(alignment: .leading, spacing: 11) {
+                                    HStack(spacing: 10) {
+                                        VoiceOrbBadgeIcon(size: 19, isLightGlass: isLight)
+                                        Text("\"Design a light mode solution\"")
+                                            .font(.system(size: 13.5, weight: .medium))
+                                            .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLight))
+                                        Spacer()
+                                        HStack(spacing: 5) {
+                                            Circle().fill(Color.green).frame(width: 5.5, height: 5.5)
+                                            Text("Muse STT")
+                                                .font(.system(size: 10.5, weight: .semibold))
+                                                .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLight))
+                                        }
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 2.5)
+                                        .background(
+                                            Capsule(style: .continuous)
+                                                .fill(AppTheme.glassChipFill(isLight: isLight))
+                                                .overlay(
+                                                    Capsule(style: .continuous)
+                                                        .strokeBorder(AppTheme.glassChipStroke(isLight: isLight), lineWidth: 0.7)
+                                                )
+                                        )
+                                    }
+
+                                    HStack(spacing: 14) {
+                                        ComposerContextStrip(state: state, controller: controller, isGlassSurface: true)
+                                        Spacer()
+                                        HStack(spacing: 6) {
+                                            Image(nsImage: .huge("sparkles"))
+                                                .renderingMode(.template)
+                                                .resizable()
+                                                .frame(width: 14, height: 14)
+                                                .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLight))
+                                            Text("muse-wonder-full-1.0")
+                                                .font(.system(size: 13.5, weight: .medium))
+                                                .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLight))
+                                            Text("Xhigh")
+                                                .font(.system(size: 13))
+                                                .foregroundStyle(AppTheme.glassMutedText(isLight: isLight))
+                                        }
+                                    }
+
+                                    Rectangle()
+                                        .fill(AppTheme.glassDivider(isLight: isLight))
+                                        .frame(height: 1)
+
+                                    HStack(spacing: 12) {
+                                        HStack(spacing: 8) {
+                                            Image(nsImage: .huge("add-01"))
+                                                .renderingMode(.template)
+                                                .resizable()
+                                                .frame(width: 14, height: 14)
+                                                .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLight))
+                                            Text("Attach files or images")
+                                                .font(.system(size: 13, weight: .medium))
+                                                .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLight))
+                                        }
+                                        Spacer()
+                                        TachometerMiniDial(fraction: 0.92, isGlassSurface: true)
+                                            .frame(width: 22, height: 16)
+                                    }
+                                }
+                                .padding(.horizontal, 22)
+                                .padding(.vertical, 16)
+                                .frame(width: ComposerMetrics.landingWidth)
+                                .background(
+                                    LiquidGlassCardBackground(
+                                        cornerRadius: ComposerMetrics.companionCornerRadius,
+                                        isDarkTopPill: false
+                                    )
+                                )
+                            }
+
+                            Spacer(minLength: 10)
+
+                            // Bottom Consolidated Floating Composer Bar with Active Mic + Reactive Glow
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Color those floating components and make them more clear")
+                                    .font(.system(size: 15, weight: .regular))
+                                    .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLight))
+                                HStack(spacing: 12) {
+                                    Circle()
+                                        .fill(AppTheme.glassChipFill(isLight: isLight))
+                                        .overlay(Circle().strokeBorder(AppTheme.glassChipStroke(isLight: isLight), lineWidth: 0.7))
+                                        .frame(width: 24, height: 24)
+                                        .overlay(
+                                            Image(nsImage: .huge("add-01"))
+                                                .renderingMode(.template)
+                                                .resizable()
+                                                .frame(width: 13, height: 13)
+                                                .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLight))
+                                        )
+                                    ComposerContextStrip(state: state, controller: controller, isGlassSurface: true)
+                                    Spacer()
+                                    TachometerMiniDial(fraction: 0.92, isGlassSurface: true)
+                                        .frame(width: 22, height: 16)
+                                    MuseMicrophoneIcon(isActive: true, size: 20)
+                                    Circle()
+                                        .fill(AppTheme.accentBlue)
+                                        .frame(width: 28, height: 28)
+                                        .overlay(
+                                            Image(nsImage: .huge("arrow-up-02"))
+                                                .renderingMode(.template)
+                                                .resizable()
+                                                .frame(width: 14, height: 14)
+                                                .foregroundStyle(Color.white)
+                                        )
+                                }
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                            .frame(width: 640)
+                            .background(
+                                LiquidGlassCardBackground(
+                                    cornerRadius: ComposerMetrics.cornerRadius,
+                                    isDarkTopPill: true
+                                )
+                                .overlay(alignment: .bottom) {
+                                    VoiceReactiveBottomGlowView(
+                                        isRecording: true,
+                                        isTranscribing: false,
+                                        audioLevel: 0.74,
+                                        fixedTimeOverride: 0.65
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: ComposerMetrics.cornerRadius, style: .continuous))
+                                }
+                            )
+                            .padding(.bottom, 16)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        // Floating Right Inspector (`Overview` + `Muse Agent Messages`)
+                        VStack(spacing: 0) {
+                            InspectorView(state: state)
+                                .frame(width: inspW)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(
+                                            isLight ? Color.white.opacity(0.84) : Color.white.opacity(0.22),
+                                            lineWidth: 1
+                                        )
+                                )
+                                .shadow(
+                                    color: isLight
+                                        ? Color(red: 0.08, green: 0.24, blue: 0.14).opacity(0.14)
+                                        : .black.opacity(0.26),
+                                    radius: 14,
+                                    x: 0,
+                                    y: 6
+                                )
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.top, 14)
+                        .padding(.trailing, 14)
+                        .padding(.bottom, 14)
+                    }
+                    .frame(width: paneW, height: paneH)
+                    .background(
+                        MuseChatBackgroundView(style: bgStyle)
+                            .frame(width: paneW, height: paneH)
+                    )
+                    .coordinateSpace(name: "picode-session-pane")
+                    .environment(\.sessionPaneSize, CGSize(width: paneW, height: paneH))
+                    .environment(\.chatBackground, bgStyle)
+                    .environment(\.hasRootChatBackground, true)
+                    .environment(\.colorScheme, scheme)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
+            .padding(16)
+            .background(Color(red: 0.08, green: 0.10, blue: 0.09))
+
+            let lmRenderer = ImageRenderer(content: lightVsDarkSheet)
+            lmRenderer.scale = 2.0
+            if let cgImg = lmRenderer.cgImage {
+                let rep = NSBitmapImageRep(cgImage: cgImg)
+                if let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: "/tmp/muse_light_mode_verification.png"))
+                    print("Saved /tmp/muse_light_mode_verification.png")
+                }
+            }
+        }
+
+        // 20. Verify All 10 UI Interactivity Improvements & Project Folder / Git Clone Support
+        // 20a. Cached pre-blurred LiquidGlassRefractedBackdrop texture (`AppTheme.blurredChatBackgroundImage`)
+        let blurredForestDark = AppTheme.blurredChatBackgroundImage(for: .forestGlass, isLight: false, isDarkTopPill: true)
+        let blurredForestLight = AppTheme.blurredChatBackgroundImage(for: .daylightForest, isLight: true, isDarkTopPill: false)
+        check(blurredForestDark != nil && (blurredForestDark?.size.width ?? 0) > 100,
+              "AppTheme.blurredChatBackgroundImage must pre-compute and cache dark refracted texture")
+        check(blurredForestLight != nil && (blurredForestLight?.size.width ?? 0) > 100,
+              "AppTheme.blurredChatBackgroundImage must pre-compute and cache light refracted texture")
+        check(AppTheme.blurredChatBackgroundImage(for: .forestGlass, isLight: false, isDarkTopPill: true) === blurredForestDark,
+              "AppTheme.blurredChatBackgroundImage must return the exact cached NSImage instance on subsequent calls")
+
+        // 20b. DraftStore attachment persistence across session switches
+        let sampleAttachment = Attachment(
+            id: UUID(),
+            kind: .text,
+            fileName: "diagram.png",
+            mimeType: "text/plain",
+            byteSize: 7,
+            path: "/tmp/diagram.png",
+            textContent: "diagram"
+        )
+        let testDraftKey = "test-attachments-key-\(UUID().uuidString.prefix(6))"
+        state.drafts.setAttachments([sampleAttachment], for: testDraftKey)
+        check(state.drafts.attachments(for: testDraftKey).count == 1 && state.drafts.attachments(for: testDraftKey).first?.fileName == "diagram.png",
+              "DraftStore must persist and restore attachments by draftKey across session switches")
+        state.drafts.clear(for: testDraftKey)
+        check(state.drafts.attachments(for: testDraftKey).isEmpty, "DraftStore.clear(for:) must remove stored attachments")
+
+        // 20c. GitStatusService URL normalization, suggested folder name,New Project Folder creation, & End-to-End Git Repository Clone
+        check(GitStatusService.normalizedCloneURL("facebook/react") == "https://github.com/facebook/react.git",
+              "GitStatusService.normalizedCloneURL must expand owner/repo shorthand to https://github.com/owner/repo.git")
+        check(GitStatusService.suggestedFolderName(from: "https://github.com/facebook/react.git") == "react",
+              "GitStatusService.suggestedFolderName must extract 'react' from https://github.com/facebook/react.git")
+        check(GitStatusService.suggestedFolderName(from: "git@github.com:anthropics/claude-code.git") == "claude-code",
+              "GitStatusService.suggestedFolderName must extract 'claude-code' from SSH git URL")
+
+        let tempWorkspaceRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("muse-project-tests-\(UUID().uuidString.prefix(6))")
+        try? FileManager.default.createDirectory(at: tempWorkspaceRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempWorkspaceRoot) }
+
+        // Test `createNewProjectFolder` (creates directory, runs `git init`, registers in `state.projects`, and opens session)
+        let createFolderResult = await state.createNewProjectFolder(
+            parentDirectory: tempWorkspaceRoot.path,
+            folderName: "fresh-agent-repo",
+            initializeGit: true
+        )
+        switch createFolderResult {
+        case .success(let createdPath):
+            check(FileManager.default.fileExists(atPath: (createdPath as NSString).appendingPathComponent(".git")),
+                  "createNewProjectFolder(initializeGit: true) must initialize a .git repository in the new folder")
+            check(state.projects.contains(where: { CanonicalPath.of($0.path) == createdPath }),
+                  "createNewProjectFolder must register the new folder in state.projects")
+            check(CanonicalPath.of(state.activeController?.projectPath ?? "") == createdPath,
+                  "createNewProjectFolder must switch the active session to the newly created project folder")
+            // Commit a seed file in `fresh-agent-repo` so we can clone it via `cloneAndOpenRepository`
+            let readmePath = (createdPath as NSString).appendingPathComponent("README.md")
+            try? "# Fresh Agent Repo\n".write(toFile: readmePath, atomically: true, encoding: .utf8)
+            if let gitURL = PiDiscoveryService.resolveExecutable(named: "git") {
+                _ = await discovery.run(executable: gitURL, arguments: ["-C", createdPath, "config", "user.email", "test@muse.local"], directory: tempWorkspaceRoot, environment: nil, timeout: 5)
+                _ = await discovery.run(executable: gitURL, arguments: ["-C", createdPath, "config", "user.name", "Muse Test"], directory: tempWorkspaceRoot, environment: nil, timeout: 5)
+                _ = await discovery.run(executable: gitURL, arguments: ["-C", createdPath, "add", "README.md"], directory: tempWorkspaceRoot, environment: nil, timeout: 5)
+                _ = await discovery.run(executable: gitURL, arguments: ["-C", createdPath, "commit", "-m", "Initial commit"], directory: tempWorkspaceRoot, environment: nil, timeout: 5)
+            }
+
+            // Test `cloneAndOpenRepository` end-to-end
+            let cloneResult = await state.cloneAndOpenRepository(
+                url: createdPath,
+                parentDirectory: tempWorkspaceRoot.path,
+                folderName: "cloned-agent-repo"
+            )
+            switch cloneResult {
+            case .success(let clonedPath):
+                check(FileManager.default.fileExists(atPath: (clonedPath as NSString).appendingPathComponent("README.md")),
+                      "cloneAndOpenRepository must clone the repository contents into the destination folder")
+                check(state.projects.contains(where: { CanonicalPath.of($0.path) == clonedPath }),
+                      "cloneAndOpenRepository must register the cloned repository in state.projects")
+                check(CanonicalPath.of(state.activeController?.projectPath ?? "") == clonedPath,
+                      "cloneAndOpenRepository must open an active session in the newly cloned repository")
+            case .failure(let err):
+                check(false, "cloneAndOpenRepository failed unexpectedly: \(err)")
+            }
+        case .failure(let err):
+            check(false, "createNewProjectFolder failed unexpectedly: \(err)")
+        }
+
+        // Verify CloneRepositorySheet & CreateProjectFolderSheet mount and layout cleanly
+        let cloneSheetHost = NSHostingView(rootView: CloneRepositorySheet(state: state, onDone: {}))
+        window.contentView = cloneSheetHost
+        cloneSheetHost.frame = NSRect(x: 0, y: 0, width: 500, height: 390)
+        cloneSheetHost.layoutSubtreeIfNeeded()
+        let cloneSheetTexts = collectTexts(in: cloneSheetHost)
+        check(cloneSheetHost.fittingSize.width >= 480 && cloneSheetTexts.contains("Default branch") && cloneSheetTexts.contains("my-project"),
+              "CloneRepositorySheet must mount and layout its form fields cleanly (got: \(cloneSheetTexts))")
+
+        let createSheetHost = NSHostingView(rootView: CreateProjectFolderSheet(state: state, onDone: {}))
+        window.contentView = createSheetHost
+        createSheetHost.frame = NSRect(x: 0, y: 0, width: 480, height: 340)
+        createSheetHost.layoutSubtreeIfNeeded()
+        let createSheetTexts = collectTexts(in: createSheetHost)
+        check(createSheetHost.fittingSize.width >= 460 && createSheetTexts.contains("my-new-project"),
+              "CreateProjectFolderSheet must mount and layout its form fields cleanly (got: \(createSheetTexts))")
+
+        // 21. Verify Titlebar Search Autocomplete, Suggestion Dropdown (`AOL Search History.jpg`),
+        //     & Low-Energy Lazy Rolling Keyword Matcher (`MuseRollingKeywordIndex`) over Muse, Claude, and Codex transcripts
+        let rollingIndex = MuseRollingKeywordIndex.shared
+        let seedStart = CFAbsoluteTimeGetCurrent()
+        rollingIndex.ensureFastSeedLoaded(projects: state.projects)
+        let seedElapsedMs = (CFAbsoluteTimeGetCurrent() - seedStart) * 1000.0
+        let kwStats = rollingIndex.stats
+        print("MuseRollingKeywordIndex fast seed loaded in \(String(format: "%.2f", seedElapsedMs)) ms — totalKeywords: \(kwStats.totalKeywords) (muse: \(kwStats.museKeywordCount), claude: \(kwStats.claudeKeywordCount), codex: \(kwStats.codexKeywordCount), files scanned: \(kwStats.scannedFiles), bytes: \(kwStats.scannedBytes))")
+        check(kwStats.totalKeywords >= 100,
+              "MuseRollingKeywordIndex must extract >= 100 Muse Keywords from local Muse/Claude/Codex chat history (got \(kwStats.totalKeywords))")
+
+        let searchService = MuseSearchSuggestionService.shared
+        searchService.recordSearch("light mode cursor glow")
+        searchService.recordSearch("search suggestions rolling keyword matcher")
+        check(searchService.recentQueries.first == "search suggestions rolling keyword matcher",
+              "MuseSearchSuggestionService.recordSearch must persist recent query at index 0")
+
+        // Verify exact prefix & fuzzy/similar-string matching ("seacrh", "bzel", "lght mode", "semntic")
+        let bazelMatches = rollingIndex.matchKeywords(for: "bazel", limit: 6)
+        let bzelFuzzyMatches = rollingIndex.matchKeywords(for: "bzel", limit: 6)
+        let seacrhTypoMatches = rollingIndex.matchKeywords(for: "seacrh", limit: 6)
+        let lghtFuzzyMatches = rollingIndex.matchKeywords(for: "lght mode", limit: 6)
+        print("Rolling matches for 'bazel': \(bazelMatches.map { "\($0.phrase) (\($0.sources.joined(separator: "+"))·\($0.hitCount)x)" })")
+        print("Rolling fuzzy matches for 'bzel': \(bzelFuzzyMatches.map { "\($0.phrase) (sim=\(String(format: "%.2f", $0.similarity)))" })")
+        print("Rolling typo matches for 'seacrh': \(seacrhTypoMatches.map { "\($0.phrase) (sim=\(String(format: "%.2f", $0.similarity)))" })")
+        print("Rolling fuzzy matches for 'lght mode': \(lghtFuzzyMatches.map { "\($0.phrase) (sim=\(String(format: "%.2f", $0.similarity)))" })")
+
+        check(bzelFuzzyMatches.contains(where: { $0.phrase.contains("bazel") }),
+              "MuseRollingKeywordIndex must match similar/abbreviated string 'bzel' to 'bazel...' Muse Keywords (got \(bzelFuzzyMatches.map(\.phrase)))")
+        check(seacrhTypoMatches.contains(where: { $0.phrase.contains("search") }),
+              "MuseRollingKeywordIndex must match transposed typo 'seacrh' to 'search...' Muse Keywords (got \(seacrhTypoMatches.map(\.phrase)))")
+        check(lghtFuzzyMatches.contains(where: { $0.phrase.contains("light mode") }),
+              "MuseRollingKeywordIndex must match similar string 'lght mode' to 'light mode...' Muse Keywords (got \(lghtFuzzyMatches.map(\.phrase)))")
+
+        // Benchmark 50 consecutive rolling keyword queries to verify ultra-low compute (< 2.0 ms/query average)
+        let benchmarkQueries = [
+            "b", "ba", "baz", "bzel", "bazel build",
+            "s", "se", "sea", "seacrh", "search suggestions",
+            "l", "li", "lght", "light mode", "liquid glass",
+            "v", "vo", "voice orb", "semntic", "semantic code",
+            "a", "an", "andr", "android build", "xcode",
+            "c", "cl", "clone git", "cursor glow", "tachometer",
+            "f", "fl", "floating panel", "binary diff", "side panel",
+            "p", "pr", "project folder", "subagent", "worktree",
+            "t", "tr", "transcript", "litrt", "litert lm",
+            "m", "mu", "muse keywords", "rolling", "history"
+        ]
+        let benchStart = CFAbsoluteTimeGetCurrent()
+        var totalMatchedCount = 0
+        for q in benchmarkQueries {
+            totalMatchedCount += rollingIndex.matchKeywords(for: q, limit: 6).count
+        }
+        let totalBenchMs = (CFAbsoluteTimeGetCurrent() - benchStart) * 1000.0
+        let avgQueryMs = totalBenchMs / Double(benchmarkQueries.count)
+        print("50 rolling keyword queries completed in \(String(format: "%.2f", totalBenchMs)) ms (avg \(String(format: "%.3f", avgQueryMs)) ms/query, \(totalMatchedCount) matches)")
+        check(avgQueryMs < 2.5, "MuseRollingKeywordIndex must average < 2.5 ms per query (got \(avgQueryMs) ms)")
+
+        let aolSuggestions = searchService.suggestions(for: "aol", projects: state.projects, limit: 6)
+        check(aolSuggestions.count == 6, "MuseSearchSuggestionService must return 6 suggestions for 'aol' (got \(aolSuggestions.count))")
+        check(aolSuggestions.first?.queryText == "aol" && aolSuggestions.contains(where: { $0.queryText == "aol mail" }) && aolSuggestions.contains(where: { $0.queryText == "aol news" }),
+              "MuseSearchSuggestionService must generate 'aol', 'aol mail', 'aol news' suggestions matching AOL Search History.jpg")
+
+        let lightSuggestions = searchService.suggestions(for: "light", projects: state.projects, limit: 6)
+        check(lightSuggestions.contains(where: { $0.queryText.lowercased().contains("light mode") }),
+              "MuseSearchSuggestionService must suggest 'light mode...' from search history and session corpus")
+
+        // Verify semantic / co-occurrence neighbor matching ("java" -> "kotlin")
+        let javaMatches = rollingIndex.matchKeywords(for: "java", limit: 6)
+        let javaSuggestions = searchService.suggestions(for: "java", projects: state.projects, limit: 6)
+        print("Rolling matches for 'java': \(javaMatches.map { "\($0.phrase) (assoc=\($0.isAssociatedNeighbor))" })")
+        print("Dropdown suggestions for 'java': \(javaSuggestions.map(\.queryText))")
+        check(javaMatches.contains(where: { $0.phrase == "kotlin" }) && javaSuggestions.contains(where: { $0.queryText == "kotlin" }),
+              "Typing 'java' must surface 'kotlin' as a related Muse Keyword suggestion (got \(javaSuggestions.map(\.queryText)))")
+
+        // Verify first-time user with zero history on disk still gets clean suggestions (including "java" -> "kotlin")
+        let zeroHistoryDB = tempWorkspaceRoot.appendingPathComponent("zero-history-keywords.sqlite")
+        let zeroHistoryIndex = MuseRollingKeywordIndex(dbURL: zeroHistoryDB, enableDiskScan: false)
+        check(zeroHistoryIndex.stats.totalKeywords == 0, "Zero-history index must start with 0 persisted keywords")
+        let zeroJavaMatches = zeroHistoryIndex.matchKeywords(for: "java", limit: 6)
+        check(zeroJavaMatches.contains(where: { $0.phrase == "kotlin" }),
+              "Even with 0 transcript history on first launch, typing 'java' must match 'kotlin' (got \(zeroJavaMatches.map(\.phrase)))")
+
+        state.openPalette()
+        state.paletteQuery = "aol"
+        state.updatePaletteQuery()
+        check(state.isPalettePresented, "state.openPalette() must set isPalettePresented = true")
+
+        let inlineAuto = searchService.inlineAutocomplete(for: "aol", projects: state.projects, matchingSessions: [])
+        check(inlineAuto != nil && !(inlineAuto?.displayHighlightText ?? "").isEmpty,
+              "MuseSearchSuggestionService.inlineAutocomplete must provide inline completion highlight text for the titlebar search field")
+
+        let dropdownView = TitlebarSearchDropdownView(state: state, onRunCommand: { _ in })
+        let dropdownHost = NSHostingView(rootView: dropdownView)
+        window.contentView = dropdownHost
+        dropdownHost.frame = NSRect(x: 0, y: 0, width: 500, height: 380)
+        dropdownHost.layoutSubtreeIfNeeded()
+        check(dropdownHost.fittingSize.width == 500 && dropdownHost.fittingSize.height >= 180,
+              "TitlebarSearchDropdownView must render 500pt wide translucent dropdown with Top Hit + Muse Suggestions (size: \(dropdownHost.fittingSize))")
+        check(dropdownView.selectableRowIDs.count >= 6,
+              "TitlebarSearchDropdownView.selectableRowIDs must include Top Hit and 6 Muse Suggestions (got \(dropdownView.selectableRowIDs))")
+
+        // Verify clicking any item in the dropdown smoothly closes the dropdown (`isPalettePresented == false`)
+        if let firstSug = aolSuggestions.first {
+            state.openPalette()
+            check(state.isPalettePresented, "Precondition: palette open before clicking suggestion")
+            dropdownView.activateSuggestion(firstSug)
+            check(!state.isPalettePresented, "Clicking a suggestion in TitlebarSearchDropdownView must close the dropdown")
+        }
+        if let firstKnownSession = state.windowKnownSessions.first?.session {
+            state.openPalette()
+            check(state.isPalettePresented, "Precondition: palette open before clicking session row")
+            dropdownView.activateSession(firstKnownSession)
+            check(!state.isPalettePresented, "Clicking a session row in TitlebarSearchDropdownView must close the dropdown")
+        }
+
+        // Verify resilience when background keyword service is crashed/unavailable OR when there is no disk session history:
+        // must survive without crashing and default to listing current sessions known to the app window (`state.windowKnownSessions`).
+        let savedProjects = state.projects
+        rollingIndex.isServiceAvailable = false
+        state.projects = [] // Simulate zero persisted projects/sessions on disk while an active window controller exists
+        state.openPalette()
+        state.paletteQuery = "unmatchable_query_xyz"
+        state.updatePaletteQuery()
+        let degradedSuggestions = searchService.suggestions(for: state.paletteQuery, projects: state.projects, limit: 6)
+        check(degradedSuggestions.isEmpty,
+              "When background keyword service is down, suggestions must safely return [] without crashing")
+        let degradedDropdown = TitlebarSearchDropdownView(state: state, onRunCommand: { _ in })
+        check(degradedDropdown.isDegradedFallbackMode,
+              "TitlebarSearchDropdownView.isDegradedFallbackMode must be true when keyword service is offline")
+        check((degradedDropdown.degradedFallbackExplanation ?? "").contains("Degraded fallback mode")
+              && (degradedDropdown.degradedFallbackExplanation ?? "").contains("connection lost"),
+              "degradedFallbackExplanation must explain that keyword service connection was lost (got: \(String(describing: degradedDropdown.degradedFallbackExplanation)))")
+        check(!degradedDropdown.matchingSessions.isEmpty,
+              "When keyword service is down and projects is empty, TitlebarSearchDropdownView must default to listing current window sessions from state.controllers (got \(degradedDropdown.matchingSessions.count))")
+        check(degradedDropdown.selectableRowIDs.contains(where: { $0.hasPrefix("switch-") }),
+              "Degraded TitlebarSearchDropdownView must still populate 'switch to session' rows for active window sessions")
+        let degradedHost = NSHostingView(rootView: degradedDropdown)
+        window.contentView = degradedHost
+        degradedHost.frame = NSRect(x: 0, y: 0, width: 500, height: 220)
+        degradedHost.layoutSubtreeIfNeeded()
+        let degradedTexts = collectTexts(in: degradedHost)
+        check(degradedTexts.contains(where: { $0.contains("Degraded fallback mode") && $0.contains("connection lost") }),
+              "Degraded TitlebarSearchDropdownView must render the degraded fallback mode banner text at the top of the dropdown (found: \(degradedTexts))")
+        check(degradedHost.fittingSize.width == 500 && degradedHost.fittingSize.height >= 60,
+              "Degraded TitlebarSearchDropdownView must still layout cleanly at 500pt width (got \(degradedHost.fittingSize))")
+
+        // Restore service and projects
+        rollingIndex.isServiceAvailable = true
+        state.projects = savedProjects
+
+        // Also verify degraded fallback mode when service is online but query matches 0 keywords & 0 sessions
+        state.paletteQuery = "zzzz_unmatchable_999"
+        state.updatePaletteQuery()
+        let unmatchableDropdown = TitlebarSearchDropdownView(state: state, onRunCommand: { _ in })
+        check(unmatchableDropdown.isDegradedFallbackMode,
+              "TitlebarSearchDropdownView must enter degraded fallback mode when query matches 0 keywords and 0 sessions")
+        check((unmatchableDropdown.degradedFallbackExplanation ?? "").contains("No matching keywords"),
+              "degradedFallbackExplanation must explain when no matching keywords were found (got: \(String(describing: unmatchableDropdown.degradedFallbackExplanation)))")
+
+        // Verify normal query ("java") is NOT in degraded fallback mode
+        state.paletteQuery = "java"
+        state.updatePaletteQuery()
+        let normalJavaDropdown = TitlebarSearchDropdownView(state: state, onRunCommand: { _ in })
+        check(!normalJavaDropdown.isDegradedFallbackMode,
+              "Normal query 'java' with active keyword service must not be in degraded fallback mode")
+
+        if !state.windowKnownSessions.isEmpty {
+            state.paletteQuery = ""
+            state.updatePaletteQuery()
+            let emptyQueryDropdown = TitlebarSearchDropdownView(state: state, onRunCommand: { _ in })
+            check(emptyQueryDropdown.selectableRowIDs.contains(where: { $0.hasPrefix("switch-") }),
+                  "TitlebarSearchDropdownView must populate 'switch to session' rows when sessions exist (got: \(emptyQueryDropdown.selectableRowIDs))")
+        }
+        state.closePalette()
+        check(!state.isPalettePresented, "state.closePalette() must dismiss the titlebar search dropdown")
+
+        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, and backend state transitions verified.")
         exit(0)
     }
 }

@@ -89,6 +89,7 @@ struct SessionRef: Identifiable, Equatable {
     }
 
     var controllerKey: String {
+        if isEphemeral { return id }
         if let filePath { return "session:\(filePath)" }
         return "native:\(harnessID.rawValue):\(sessionId ?? id)"
     }

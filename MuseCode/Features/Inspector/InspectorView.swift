@@ -16,6 +16,12 @@ import SwiftUI
 struct InspectorView: View {
     @Bindable var state: AppState
     @AppStorage("inspectorTextWrap") private var wrapsText = true
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
+
+    private var isLightGlass: Bool {
+        AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+    }
 
     var body: some View {
         Group {
@@ -50,6 +56,7 @@ struct InspectorView: View {
                 )
             }
         }
+        .environment(\.colorScheme, isLightGlass ? .light : .dark)
         .background(
             LiquidGlassCardBackground(cornerRadius: 14, isDarkTopPill: false)
         )
@@ -83,9 +90,15 @@ struct MuseOverviewCard: View {
     @Bindable var state: AppState
     var controller: PiSessionController
 
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
     @State private var showAllSubagents = false
     @State private var showAllArtifacts = false
     @State private var showContextSheet = false
+
+    private var isLightGlass: Bool {
+        AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+    }
 
     private var visibleSubagents: [MuseSubagentInfo] {
         showAllSubagents ? controller.subagents : Array(controller.subagents.prefix(3))
@@ -107,11 +120,22 @@ struct MuseOverviewCard: View {
             HStack(spacing: 8) {
                 Text("Overview")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
 
                 Spacer(minLength: 0)
 
-                Menu {
+                Button {
+                    showContextSheet = true
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Overview & session context options")
+                .contextMenu {
                     Button {
                         Task {
                             await controller.refreshMuseTelemetry()
@@ -133,17 +157,7 @@ struct MuseOverviewCard: View {
                             Label("Reveal Session File", huge: "folder-02")
                         }
                     }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 22)
-                        .contentShape(Rectangle())
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Overview options")
             }
             .padding(.horizontal, 12)
             .padding(.top, 11)
@@ -259,11 +273,20 @@ struct MuseOverviewCard: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(red: 0.08, green: 0.11, blue: 0.14, opacity: 0.46))
+                .fill(
+                    isLightGlass
+                        ? Color.white.opacity(0.50)
+                        : Color(red: 0.04, green: 0.07, blue: 0.10, opacity: 0.68)
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(
+                    isLightGlass
+                        ? Color.white.opacity(0.84)
+                        : Color.white.opacity(0.24),
+                    lineWidth: 1
+                )
         )
         .sheet(isPresented: $showContextSheet) {
             VStack(spacing: 0) {
@@ -292,12 +315,12 @@ struct MuseOverviewCard: View {
         Button(action: action) {
             HStack(spacing: 9) {
                 HugeIcon(name: icon, size: 15)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                     .frame(width: 18, alignment: .center)
 
                 Text(title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
@@ -305,15 +328,15 @@ struct MuseOverviewCard: View {
                 if let badge {
                     Text(badge)
                         .font(.system(size: 11, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(.quaternary.opacity(0.6), in: Capsule())
+                        .background(AppTheme.glassChipFill(isLight: isLightGlass), in: Capsule())
                 }
 
                 if showsChevron {
                     HugeIcon(name: "arrow-right-01", size: 13)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(AppTheme.glassMutedText(isLight: isLightGlass))
                 }
             }
             .padding(.horizontal, 8)
@@ -328,14 +351,14 @@ struct MuseOverviewCard: View {
         HStack(spacing: 6) {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
 
             Text("\(count)")
                 .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
-                .background(.quaternary.opacity(0.6), in: Capsule())
+                .background(AppTheme.glassChipFill(isLight: isLightGlass), in: Capsule())
 
             Spacer(minLength: 0)
         }
@@ -354,7 +377,7 @@ struct MuseOverviewCard: View {
 
                 Text(subagent.title)
                     .font(.system(size: 12.5))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
                     .lineLimit(1)
                     .truncationMode(.tail)
 
@@ -401,13 +424,13 @@ struct MuseOverviewCard: View {
                         .frame(width: 16, height: 16)
                 } else {
                     HugeIcon(name: "terminal", size: 13)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                         .frame(width: 16, height: 16)
                 }
 
                 Text(task.title)
                     .font(.system(size: 12.5, design: .monospaced))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
                     .lineLimit(1)
                     .truncationMode(.tail)
 
@@ -436,12 +459,12 @@ struct MuseOverviewCard: View {
         } label: {
             HStack(spacing: 8) {
                 HugeIcon(name: artifact.kind == .plan ? "task-add-01" : "note-01", size: 14)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                     .frame(width: 16, height: 16, alignment: .center)
 
                 Text(artifact.title)
                     .font(.system(size: 12.5))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
                     .lineLimit(1)
                     .truncationMode(.middle)
 
@@ -461,10 +484,16 @@ struct MuseAgentMessagesCard: View {
     var controller: PiSessionController
     var initiallyExpanded: Bool = false
 
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
     @State private var targetRecipient: String = ""
     @State private var messageDraft: String = ""
     @State private var isSending = false
     @State private var isManuallyExpanded = false
+
+    private var isLightGlass: Bool {
+        AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+    }
 
     private var isExpanded: Bool {
         !controller.agentMessages.isEmpty || isManuallyExpanded || initiallyExpanded
@@ -485,14 +514,14 @@ struct MuseAgentMessagesCard: View {
 
                         Text("Muse Agent Messages")
                             .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(AppTheme.glassPrimaryText(isLight: isLightGlass))
 
                         Text("\(controller.agentMessages.count)")
                             .font(.system(size: 11, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
-                            .background(.quaternary.opacity(0.6), in: Capsule())
+                            .background(AppTheme.glassChipFill(isLight: isLightGlass), in: Capsule())
 
                         Spacer(minLength: 0)
                     }
@@ -505,30 +534,34 @@ struct MuseAgentMessagesCard: View {
                     $0.sessionId != nil && $0.sessionId != controller.sessionId
                 }
                 if !peerSessions.isEmpty {
-                    Menu {
+                    Button {
+                        if let firstPeer = peerSessions.first {
+                            targetRecipient = firstPeer.sessionId ?? firstPeer.displayName
+                            isManuallyExpanded = true
+                        }
+                    } label: {
+                        HugeIcon(name: "user-multiple", size: 13)
+                            .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Pick a target Muse session")
+                    .contextMenu {
                         ForEach(peerSessions) { peer in
                             Button(peer.displayName) {
                                 targetRecipient = peer.sessionId ?? peer.displayName
                                 isManuallyExpanded = true
                             }
                         }
-                    } label: {
-                        HugeIcon(name: "user-multiple", size: 13)
-                            .foregroundStyle(.secondary)
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("Pick a target Muse session")
                 }
 
                 Button {
                     Task { await controller.refreshMuseTelemetry() }
                 } label: {
                     HugeIcon(name: "refresh", size: 13)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .help("Refresh agent messages")
 
                 Button {
@@ -537,9 +570,9 @@ struct MuseAgentMessagesCard: View {
                     }
                 } label: {
                     HugeIcon(name: isExpanded ? "arrow-up-01" : "arrow-down-01", size: 12)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(AppTheme.glassSecondaryText(isLight: isLightGlass))
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .help(isExpanded ? "Collapse Muse Agent Messages" : "Expand to send a Muse agent message")
             }
             .padding(.horizontal, 12)
@@ -608,16 +641,25 @@ struct MuseAgentMessagesCard: View {
                     .padding(.horizontal, 10)
                     .padding(.bottom, 7)
                 }
-                .background(AppTheme.background.opacity(0.5))
+                .background(isLightGlass ? Color.white.opacity(0.48) : Color.black.opacity(0.22))
             }
         }
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(red: 0.08, green: 0.11, blue: 0.14, opacity: 0.46))
+                .fill(
+                    isLightGlass
+                        ? Color.white.opacity(0.50)
+                        : Color(red: 0.04, green: 0.07, blue: 0.10, opacity: 0.68)
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(
+                    isLightGlass
+                        ? Color.white.opacity(0.84)
+                        : Color.white.opacity(0.24),
+                    lineWidth: 1
+                )
         )
     }
 
@@ -691,7 +733,7 @@ struct MuseAgentMessagesCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(AppTheme.background.opacity(0.65))
+                .fill(isLightGlass ? Color.white.opacity(0.52) : Color.black.opacity(0.38))
         )
     }
 }
@@ -714,7 +756,7 @@ struct MuseExtensionsPane: View {
                 } label: {
                     HugeIcon(name: "refresh")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .help("Reload skills from muse skills list")
             }
             .padding(.horizontal, 12)
@@ -770,6 +812,7 @@ struct MuseExtensionsPane: View {
                     }
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
             }
         }
         .task {
@@ -896,11 +939,8 @@ struct NotificationsPanel: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 14)
-        .background(AppTheme.background)
         .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(height: 1)
+            Divider()
         }
     }
 
@@ -921,7 +961,6 @@ struct NotificationsPanel: View {
                     }
                 }
             }
-            .background(AppTheme.background)
         }
     }
 
@@ -1032,11 +1071,8 @@ struct ArtifactHeader: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 14)
-        .background(AppTheme.background)
         .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(height: 1)
+            Divider()
         }
     }
 
@@ -1136,7 +1172,6 @@ struct ArtifactContentView: View {
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .background(AppTheme.background)
         }
     }
 }
@@ -1168,7 +1203,14 @@ struct FileArtifactView: View {
                 ProgressView().controlSize(.small)
             }
         }
-        .task(id: path) { preview = FilePreviewLoader.load(path: path) }
+        .task(id: path) {
+            let targetPath = path
+            let loaded = await Task.detached(priority: .userInitiated) {
+                FilePreviewLoader.load(path: targetPath)
+            }.value
+            guard self.path == targetPath else { return }
+            preview = loaded
+        }
     }
 }
 
@@ -1305,6 +1347,7 @@ struct ChangesPane: View {
                     }
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
                 .frame(minHeight: 140)
 
                 Divider()
@@ -1496,7 +1539,7 @@ struct DiffView: View {
     var body: some View {
         GeometryReader { geometry in
             ScrollView(wrapsText ? .vertical : [.vertical, .horizontal]) {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(lines) { line in
                         HStack(alignment: .firstTextBaseline, spacing: 0) {
                             Text(line.oldLine.map { String($0) } ?? "")
@@ -1530,7 +1573,6 @@ struct DiffView: View {
                 .frame(minWidth: geometry.size.width, alignment: .leading)
             }
         }
-        .background(AppTheme.background)
     }
 
     private var lines: [GitDiffLine] { InspectorArtifactRendering.parseDiff(diff) }

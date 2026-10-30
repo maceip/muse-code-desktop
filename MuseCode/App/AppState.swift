@@ -13,6 +13,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 
 @Observable
 @MainActor
@@ -61,7 +62,7 @@ final class AppState {
 
     // MARK: - Index
 
-    private(set) var projects: [ProjectGroup] = []
+    var projects: [ProjectGroup] = []
     private(set) var isIndexing = false
     private(set) var lastIndexedAt: Date?
     private var controllers: [String: PiSessionController] = [:]
@@ -126,6 +127,7 @@ final class AppState {
 
     var paletteQuery = ""
     var isPalettePresented = false
+    var paletteSelectedIndex = 0
     private(set) var paletteResults: [(project: ProjectGroup, session: SessionRef)] = []
     /// Projects whose name (or path) matches the palette query. Kept beside the
     /// session results so a project with no chats — or one whose name is what the
@@ -386,7 +388,7 @@ final class AppState {
     /// The observer token is torn down from `deinit`, which is not actor-isolated,
     /// so the storage is marked unsafe rather than isolated. The token itself is
     /// immutable once set in `init` and only removed once, from `deinit`.
-    nonisolated(unsafe) private var activationObserver: NSObjectProtocol?
+    @ObservationIgnored nonisolated(unsafe) private var activationObserver: NSObjectProtocol?
 
     /// Incremented whenever a menu command should reach the focused view.
     private(set) var commandTick = 0
@@ -426,6 +428,7 @@ final class AppState {
             phase = .ready
             installCachedIndex()
             await refreshIndex()
+            MuseRollingKeywordIndex.shared.startLazyRollingScanIfNeeded(projects: projects)
             restoreLastSession()
         } else {
             let detail = harnesses.missingDetail[.pi]
@@ -574,6 +577,10 @@ final class AppState {
 
     private var lastActiveController: PiSessionController?
     var composerEnterAnimationTick = 0
+    /// Incremented whenever the user explicitly requests a new empty chat session
+    /// (e.g. clicking the pink Muse icon in the rail or pressing ⌘N) so `SessionView`
+    /// and `ComposerView` immediately reset to the empty centered landing state.
+    var newSessionResetTick = 0
 
     var activeController: PiSessionController? {
         if let key = selectedSessionKey, let match = controllers[key] {
@@ -583,6 +590,69 @@ final class AppState {
     }
 
     var isActiveSessionBusy: Bool { activeController?.hasPendingWork ?? false }
+
+    /// All sessions known to the current window: combines persisted `SessionRef`s in
+    /// `projects` with any active in-memory `PiSessionController`s in `controllers`
+    /// (including brand-new/ephemeral sessions before any transcript file exists on disk).
+    var windowKnownSessions: [(project: ProjectGroup, session: SessionRef)] {
+        var results: [(project: ProjectGroup, session: SessionRef)] = []
+        var seenIDs: Set<String> = []
+        var seenFiles: Set<String> = []
+
+        // 1. Persisted sessions from `projects`
+        let persisted = projects.flatMap { proj in
+            proj.sessions.map { (project: proj, session: $0) }
+        }.sorted { $0.session.updatedAt > $1.session.updatedAt }
+
+        for entry in persisted {
+            seenIDs.insert(entry.session.id)
+            if let fp = entry.session.filePath { seenFiles.insert(fp) }
+            results.append(entry)
+        }
+
+        // 2. Live controllers in the window that are not yet in `projects` (e.g. unsaved/ephemeral sessions)
+        var controllerKeys = Array(controllers.keys).sorted()
+        if let activeKey = selectedSessionKey, let idx = controllerKeys.firstIndex(of: activeKey) {
+            controllerKeys.remove(at: idx)
+            controllerKeys.insert(activeKey, at: 0)
+        }
+        for key in controllerKeys {
+            guard let ctrl = controllers[key] else { continue }
+            if let fp = ctrl.sessionFile, seenFiles.contains(fp) { continue }
+            guard !seenIDs.contains(key) else { continue }
+            seenIDs.insert(key)
+
+            let canonical = CanonicalPath.of(ctrl.projectPath)
+            let proj = project(for: canonical) ?? ProjectGroup(
+                id: canonical,
+                path: canonical,
+                name: URL(fileURLWithPath: canonical).lastPathComponent.isEmpty
+                    ? "Workspace"
+                    : URL(fileURLWithPath: canonical).lastPathComponent,
+                sessions: []
+            )
+            let title = ctrl.sessionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayTitle = (title?.isEmpty == false) ? title! : "Current Session (\(proj.name))"
+            let ref = SessionRef(
+                id: key,
+                sessionId: ctrl.sessionId ?? key,
+                filePath: ctrl.sessionFile,
+                name: displayTitle,
+                cwd: canonical,
+                createdAt: Date(),
+                updatedAt: Date(),
+                messageCount: ctrl.items.count,
+                firstUserMessage: nil,
+                parentSession: nil,
+                isPinned: false,
+                isEphemeral: ctrl.sessionFile == nil,
+                harnessID: ctrl.harness.id
+            )
+            results.insert((project: proj, session: ref), at: 0)
+        }
+
+        return results
+    }
 
     // MARK: - Session lifecycle
 
@@ -594,7 +664,15 @@ final class AppState {
     static func key(forSessionPath path: String) -> String { "session:\(path)" }
 
     func open(session: SessionRef) async {
-        if session.isEphemeral, activeController?.harness.id == session.harnessID { return }
+        if session.isEphemeral {
+            if let existing = controllers[session.id] {
+                selectedSessionKey = session.id
+                lastActiveController = existing
+                selectedProjectPath = CanonicalPath.of(session.cwd)
+                return
+            }
+            if activeController?.harness.id == session.harnessID { return }
+        }
         let harness = HarnessDescriptor.descriptor(for: session.harnessID)
         guard harnesses.isInstalled(harness.id) else {
             present(error: "Install \(harness.displayName) to resume this session.")
@@ -618,7 +696,8 @@ final class AppState {
                        projectPath: session.cwd,
                        sessionFile: path,
                        systemPrompt: settings.systemPrompt,
-                       harness: harness)
+                       harness: harness,
+                       expectedRevision: openingRevision)
         if sessionOpenRevision == openingRevision, selectedSessionKey == key {
             sessionOpenCompletedRevision = openingRevision
         }
@@ -635,6 +714,20 @@ final class AppState {
         // them under the project the user clicked.
         let launchDirectory = settings.directory.isEmpty ? canonical : CanonicalPath.of(settings.directory)
 
+        // Cancel any in-flight `open(session:)` revision and reset transient UI state
+        // so the new empty chat session is immediately active on screen.
+        sessionOpenRevision += 1
+        let openingRevision = sessionOpenRevision
+        sessionOpeningKey = nil
+        sessionOpenCompletedRevision = openingRevision
+        isSettingsPresented = false
+        inspectorArtifact = nil
+        isNotificationsVisible = false
+        errorBanner = nil
+        composerInsertion = nil
+        MuseVoiceSTTService.shared.cancel()
+        MuseVoiceSTTService.shared.lastTranscript = nil
+
         // If the current active session is already an empty, unsaved chat in this exact folder,
         // reuse it in-place so clicking the Muse icon or New Chat never tears down or hides the composer.
         if let current = activeController,
@@ -647,6 +740,7 @@ final class AppState {
             preferences.lastProjectPath = canonical
             preferences.persist()
             ensureProjectPlaceholderExists(for: canonical, settings: settings)
+            newSessionResetTick += 1
             return
         }
 
@@ -656,11 +750,13 @@ final class AppState {
         preferences.lastProjectPath = canonical
         preferences.persist()
         ensureProjectPlaceholderExists(for: canonical, settings: settings)
+        newSessionResetTick += 1
         await activate(key: key,
                        projectPath: launchDirectory,
                        sessionFile: nil,
                        systemPrompt: settings.systemPrompt,
-                       harness: harness)
+                       harness: harness,
+                       expectedRevision: openingRevision)
     }
 
     private func ensureProjectPlaceholderExists(for canonical: String, settings: ProjectSettings) {
@@ -680,16 +776,16 @@ final class AppState {
     /// Start a chat in the project the user is already working in. The project
     /// *identity* comes first (the path the sidebar groups by), not the running
     /// controller's folder: a project can be pointed at a different launch folder,
-    /// and the next chat must still be the same project. Only when there is no
-    /// project at all does this fall back to the folder picker, because a picker is
-    /// a different action than the button promises.
+    /// and the next chat must still be the same project. Falls back to the user's
+    /// home directory when no project exists yet so clicking the Muse icon always
+    /// opens an empty chat session immediately.
     func newChatInCurrentProject() async {
-        if let path = selectedProjectPath ?? selectedProject?.path ?? activeController?.projectPath
-            ?? landingProjectPath {
-            await startNewSession(projectPath: path)
-        } else {
-            await addProject()
-        }
+        let path = selectedProjectPath
+            ?? selectedProject?.path
+            ?? activeController?.projectPath
+            ?? landingProjectPath
+            ?? CanonicalPath.of(NSHomeDirectory())
+        await startNewSession(projectPath: path)
     }
 
     /// Opening a project from the palette: go to its most recent chat, or start a
@@ -708,7 +804,11 @@ final class AppState {
                           projectPath: String,
                           sessionFile: String?,
                           systemPrompt: String?,
-                          harness: HarnessDescriptor) async {
+                          harness: HarnessDescriptor,
+                          expectedRevision: Int? = nil) async {
+        if let expectedRevision, sessionOpenRevision != expectedRevision {
+            return
+        }
         if let existing = controllers[key] {
             existing.onAgentCompleted = { [weak self] in self?.noteAssistantResponseCompleted() }
             lastAccess[key] = Date()
@@ -772,6 +872,20 @@ final class AppState {
     /// A project whose first chat is waiting on a harness/provider/model choice.
     /// The window owns the sheet; this is the request that opens it.
     var pendingNewProjectPath: String?
+
+    /// Request to present the Clone Git Repository sheet.
+    var pendingCloneRepository = false
+
+    /// Request to present the Create New Project Folder sheet.
+    var pendingCreateProjectFolder = false
+
+    func presentCloneRepository() {
+        pendingCloneRepository = true
+    }
+
+    func presentCreateProjectFolder() {
+        pendingCreateProjectFolder = true
+    }
 
     func projectSettings(for project: ProjectGroup) -> ProjectSettings {
         preferences.projectSettings(for: project.path)
@@ -977,17 +1091,26 @@ final class AppState {
 
     func addProject() async {
         guard let path = WorkspaceLauncher.chooseDirectory() else { return }
-        await addProject(path: path)
+        await openExistingProjectFolder(path: path)
     }
 
-    /// Register a folder supplied without the picker (for example, a Finder
-    /// drop), then ask for the harness/provider/model before the first chat.
+    /// Register a folder supplied from Finder or the folder picker and immediately
+    /// open a session in that folder.
     func addProject(path: String) async {
+        await openExistingProjectFolder(path: path)
+    }
+
+    /// Ensures `path` is registered in `projects`, selects it, and starts a new chat session in it.
+    func openExistingProjectFolder(path: String) async {
         let canonical = CanonicalPath.of(path)
         await refreshIndex()
+        ensureProjectGroupExists(for: canonical)
+        selectProject(canonical)
+        await startNewSession(projectPath: canonical)
+    }
+
+    private func ensureProjectGroupExists(for canonical: String) {
         if project(for: canonical) == nil {
-            // A folder with no sessions yet still belongs in the sidebar, so
-            // PiCode shows it immediately with an empty session list.
             let settings = preferences.projectSettings(for: canonical)
             let placeholder = ProjectGroup(
                 id: canonical,
@@ -1000,10 +1123,77 @@ final class AppState {
             )
             projects.insert(placeholder, at: 0)
         }
-        selectProject(canonical)
-        // A brand-new project asks which harness, provider, and model its chats
-        // should use before the first session starts.
-        pendingNewProjectPath = canonical
+    }
+
+    /// Clones a Git repository into `parentDirectory/folderName`, registers the resulting folder
+    /// as a project, and starts a new chat session in it.
+    func cloneAndOpenRepository(
+        url: String,
+        parentDirectory: String,
+        folderName: String,
+        branch: String? = nil
+    ) async -> Result<String, ProjectActionError> {
+        let cleanFolder = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanFolder.isEmpty else {
+            return .failure(ProjectActionError("Enter a destination folder name."))
+        }
+        let cleanParent = parentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanParent.isEmpty else {
+            return .failure(ProjectActionError("Choose a parent folder."))
+        }
+        let expandedParent = (cleanParent as NSString).expandingTildeInPath
+        let destination = (expandedParent as NSString).appendingPathComponent(cleanFolder)
+        if FileManager.default.fileExists(atPath: destination) {
+            let contents = (try? FileManager.default.contentsOfDirectory(atPath: destination)) ?? []
+            if !contents.isEmpty {
+                return .failure(ProjectActionError("Destination folder '\(cleanFolder)' already exists and is not empty."))
+            }
+        }
+
+        let cloneResult = await GitStatusService().cloneRepository(
+            url: url,
+            destinationPath: destination,
+            branch: branch
+        )
+        switch cloneResult {
+        case .failure(let err):
+            return .failure(err)
+        case .success(let clonedPath):
+            await openExistingProjectFolder(path: clonedPath)
+            showToast("Cloned \(cleanFolder)")
+            return .success(clonedPath)
+        }
+    }
+
+    /// Creates a new project directory at `parentDirectory/folderName`, optionally runs `git init`,
+    /// registers it in `projects`, and starts a new chat session in it.
+    func createNewProjectFolder(
+        parentDirectory: String,
+        folderName: String,
+        initializeGit: Bool = true
+    ) async -> Result<String, ProjectActionError> {
+        let cleanFolder = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanFolder.isEmpty, !cleanFolder.contains("/") else {
+            return .failure(ProjectActionError("Enter a valid folder name."))
+        }
+        let cleanParent = parentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanParent.isEmpty else {
+            return .failure(ProjectActionError("Choose a parent folder."))
+        }
+        let expandedParent = (cleanParent as NSString).expandingTildeInPath
+        let destination = (expandedParent as NSString).appendingPathComponent(cleanFolder)
+        do {
+            try FileManager.default.createDirectory(atPath: destination, withIntermediateDirectories: true)
+        } catch {
+            return .failure(ProjectActionError("Could not create folder: \(error.localizedDescription)"))
+        }
+        if initializeGit {
+            _ = await GitStatusService().initRepository(at: destination)
+        }
+        let canonical = CanonicalPath.of(destination)
+        await openExistingProjectFolder(path: canonical)
+        showToast("Created project \(cleanFolder)")
+        return .success(canonical)
     }
 
     /// Applies the harness/provider/model chosen for a new project and starts its
@@ -1016,6 +1206,8 @@ final class AppState {
         settings.modelID = model
         preferences.setProjectSettings(settings, for: canonical)
         pendingNewProjectPath = nil
+        ensureProjectGroupExists(for: canonical)
+        selectProject(canonical)
         await startNewSession(projectPath: canonical)
     }
 
@@ -1043,18 +1235,26 @@ final class AppState {
     // MARK: - Command palette
 
     func openPalette() {
-        isPalettePresented = true
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+            isPalettePresented = true
+        }
         paletteQuery = ""
+        paletteSelectedIndex = 0
         paletteResults = []
         paletteProjectResults = []
+        MuseRollingKeywordIndex.shared.startLazyRollingScanIfNeeded(projects: projects)
     }
 
     func closePalette() {
-        isPalettePresented = false
+        withAnimation(.spring(response: 0.20, dampingFraction: 0.90)) {
+            isPalettePresented = false
+        }
+        paletteSelectedIndex = 0
         paletteTask?.cancel()
     }
 
     func updatePaletteQuery() {
+        paletteSelectedIndex = 0
         let query = paletteQuery.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else {
             paletteTask?.cancel()
@@ -1073,10 +1273,20 @@ final class AppState {
         let snapshot = projects
         paletteTask?.cancel()
         paletteTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 90_000_000)
             guard !Task.isCancelled else { return }
             let service = SessionIndex()
-            let matches = service.search(query, in: snapshot)
+            var matches = service.search(query, in: snapshot)
+            if matches.isEmpty {
+                let rolling = MuseRollingKeywordIndex.shared.matchKeywords(for: query, limit: 2)
+                for match in rolling {
+                    let fallback = service.search(match.phrase, in: snapshot)
+                    if !fallback.isEmpty {
+                        matches = fallback
+                        break
+                    }
+                }
+            }
             var rows: [(ProjectGroup, SessionRef)] = []
             for project in matches {
                 for session in project.sessions.prefix(5) {

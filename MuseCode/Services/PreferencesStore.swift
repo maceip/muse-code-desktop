@@ -51,6 +51,7 @@ final class PreferencesStore {
 
     enum ChatBackground: String, CaseIterable, Identifiable {
         case forestGlass
+        case daylightForest
         case midnightGlow
         case solidBlack
 
@@ -59,6 +60,7 @@ final class PreferencesStore {
         var label: String {
             switch self {
             case .forestGlass: return "Forest Glass (Liquid M)"
+            case .daylightForest: return "Daylight Forest (Light M)"
             case .midnightGlow: return "Midnight Glow (Blurred M)"
             case .solidBlack: return "Obsidian Black"
             }
@@ -67,6 +69,7 @@ final class PreferencesStore {
         var shortLabel: String {
             switch self {
             case .forestGlass: return "Forest"
+            case .daylightForest: return "Daylight"
             case .midnightGlow: return "Midnight"
             case .solidBlack: return "Obsidian"
             }
@@ -75,9 +78,18 @@ final class PreferencesStore {
         var assetName: String? {
             switch self {
             case .forestGlass: return "chat-bg-forest"
+            case .daylightForest: return "chat-bg-forest-light"
             case .midnightGlow: return "chat-bg-midnight"
             case .solidBlack: return nil
             }
+        }
+
+        /// Automatically resolves `.forestGlass` to `.daylightForest` when the app is in Light Mode (`colorScheme == .light`).
+        func resolved(for colorScheme: ColorScheme) -> ChatBackground {
+            if self == .forestGlass && colorScheme == .light {
+                return .daylightForest
+            }
+            return self
         }
     }
 

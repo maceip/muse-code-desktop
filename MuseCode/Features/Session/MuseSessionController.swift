@@ -45,6 +45,7 @@ final class PiSessionController {
     private(set) var sessionFile: String?
     private(set) var sessionId: String?
     private(set) var sessionName: String?
+    private(set) var ephemeralDraftID = UUID().uuidString.prefix(8).description
 
     /// Called when Pi finishes a run that produced an answer. The dock badge is a
     /// window-level fact, so the controller reports the completion and `AppState`
@@ -73,6 +74,10 @@ final class PiSessionController {
         hasCompletedFirstVoiceOrTextInteraction = false
         isShowingFirstPromptCenterOrb = false
         firstPromptOrbFrame = 7
+        lastError = nil
+        composerPrefill = nil
+        drafts.clear(for: draftKey)
+        ephemeralDraftID = UUID().uuidString.prefix(8).description
     }
 
     /// The background title run and the one-shot latch that keeps it to the first
@@ -82,9 +87,9 @@ final class PiSessionController {
     private var titleGenerationStarted = false
 
     /// Draft key: sessions Pi has not written to disk yet fall back to a
-    /// project-scoped key so a draft survives process start.
+    /// session-scoped ephemeral key so each new chat starts with an empty draft.
     var draftKey: String {
-        let key = sessionFile ?? "new:\(projectPath)"
+        let key = sessionFile ?? "new:\(projectPath):\(ephemeralDraftID)"
         return harness.id == .pi ? key : "\(harness.id.rawValue):\(key)"
     }
 
@@ -492,6 +497,9 @@ final class PiSessionController {
         }
         let images = attachments.compactMap(\.imagePayload)
         guard !body.isEmpty || !images.isEmpty else { return false }
+        if !trimmed.isEmpty {
+            MuseRollingKeywordIndex.shared.ingestLiveUserText(trimmed, source: "muse")
+        }
 
         let busy = runtime.isBusy
         // A message that goes into the queue is *not* part of the conversation

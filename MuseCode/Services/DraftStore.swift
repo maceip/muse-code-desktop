@@ -21,6 +21,7 @@ final class DraftStore {
     }
 
     private var drafts: [String: Draft] = [:]
+    private var attachmentsByKey: [String: [Attachment]] = [:]
     private let fileURL: URL
     private var saveTask: Task<Void, Never>?
 
@@ -45,7 +46,35 @@ final class DraftStore {
         drafts[key]?.text ?? ""
     }
 
+    func attachments(for key: String) -> [Attachment] {
+        attachmentsByKey[key] ?? []
+    }
+
+    func setAttachments(_ attachments: [Attachment], for key: String) {
+        if attachments.isEmpty {
+            attachmentsByKey.removeValue(forKey: key)
+        } else {
+            attachmentsByKey[key] = attachments
+        }
+        let currentText = text(for: key)
+        if currentText.isEmpty, attachments.isEmpty {
+            drafts.removeValue(forKey: key)
+        } else {
+            drafts[key] = Draft(
+                text: currentText,
+                updatedAt: Date(),
+                attachmentNames: attachments.map(\.fileName)
+            )
+        }
+        scheduleSave()
+    }
+
     func setText(_ text: String, for key: String, attachments: [Attachment] = []) {
+        if attachments.isEmpty {
+            attachmentsByKey.removeValue(forKey: key)
+        } else {
+            attachmentsByKey[key] = attachments
+        }
         if text.isEmpty, attachments.isEmpty {
             drafts.removeValue(forKey: key)
         } else {
@@ -59,12 +88,14 @@ final class DraftStore {
     }
 
     func clear(for key: String) {
-        guard drafts.removeValue(forKey: key) != nil else { return }
+        let removedAttachments = attachmentsByKey.removeValue(forKey: key) != nil
+        guard drafts.removeValue(forKey: key) != nil || removedAttachments else { return }
         scheduleSave()
     }
 
     func removeAll() {
         drafts.removeAll()
+        attachmentsByKey.removeAll()
         scheduleSave()
     }
 

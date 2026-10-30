@@ -21,11 +21,13 @@ struct ComposerTextView: NSViewRepresentable {
     /// input capsule in `Screen Recording 2026-10-28 at 23.23.35.mov`.
     static let fontSize: CGFloat = 18.5
 
-    /// The composer input pill uses a dark smoked Liquid Glass surface in both
-    /// light and dark appearances, so text and placeholder use crisp light ink.
+    /// The composer input pill uses crisp light ink on dark smoked Liquid Glass
+    /// and deep forest-charcoal ink on crystal-clear Light Mode Liquid Glass.
     static let textColor = NSColor(srgbRed: 0.96, green: 0.96, blue: 0.98, alpha: 1.0)
+    static let lightGlassTextColor = NSColor(srgbRed: 0.06, green: 0.15, blue: 0.09, alpha: 0.96)
     static let caretColor = textColor
     static let placeholderColor = NSColor(srgbRed: 0.86, green: 0.86, blue: 0.90, alpha: 0.56)
+    static let lightGlassPlaceholderColor = NSColor(srgbRed: 0.12, green: 0.25, blue: 0.16, alpha: 0.58)
 
     private static func adaptive(dark: NSColor, light: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
@@ -55,6 +57,7 @@ struct ComposerTextView: NSViewRepresentable {
     var sendKey: PreferencesStore.SendKey
     var suggestionsActive: Bool
     var isEnabled: Bool
+    var isLightGlass: Bool = false
 
     var onSend: () -> Void
     var onFollowUp: () -> Void
@@ -62,6 +65,7 @@ struct ComposerTextView: NSViewRepresentable {
     var onMoveSuggestion: (Int) -> Void
     var onAcceptSuggestion: () -> Void
     var onUserDirectEdit: (() -> Void)? = nil
+    var onSelectionChange: ((Int) -> Void)? = nil
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         /// Command-Return does not reach a text view as a newline command at all
@@ -82,8 +86,14 @@ struct ComposerTextView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !isProgrammaticChange, let textView else { return }
+            parent.onSelectionChange?(textView.selectedRange().location)
             parent.text = textView.string
             parent.onUserDirectEdit?()
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !isProgrammaticChange, let textView else { return }
+            parent.onSelectionChange?(textView.selectedRange().location)
         }
 
         /// Which modifiers are down *now*. The selector alone cannot answer this:
@@ -188,7 +198,8 @@ struct ComposerTextView: NSViewRepresentable {
 
         let textView = PlaceholderTextView()
         textView.placeholder = placeholder
-        textView.placeholderColor = Self.placeholderColor
+        textView.placeholderColor = isLightGlass ? Self.lightGlassPlaceholderColor : Self.placeholderColor
+        textView.isLightGlass = isLightGlass
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.allowsUndo = true
@@ -198,7 +209,7 @@ struct ComposerTextView: NSViewRepresentable {
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isContinuousSpellCheckingEnabled = false
         textView.font = .systemFont(ofSize: Self.fontSize)
-        textView.textColor = Self.textColor
+        textView.textColor = isLightGlass ? Self.lightGlassTextColor : Self.textColor
         textView.insertionPointColor = .clear
         textView.textContainerInset = Self.textInset
         textView.drawsBackground = false
@@ -226,7 +237,21 @@ struct ComposerTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
-        (textView as? PlaceholderTextView)?.placeholder = placeholder
+        let desiredTextColor = isLightGlass ? Self.lightGlassTextColor : Self.textColor
+        let desiredPlaceholderColor = isLightGlass ? Self.lightGlassPlaceholderColor : Self.placeholderColor
+        if textView.textColor != desiredTextColor {
+            textView.textColor = desiredTextColor
+        }
+        if let placeholderTV = textView as? PlaceholderTextView {
+            placeholderTV.placeholder = placeholder
+            if placeholderTV.isLightGlass != isLightGlass {
+                placeholderTV.isLightGlass = isLightGlass
+            }
+            if placeholderTV.placeholderColor != desiredPlaceholderColor {
+                placeholderTV.placeholderColor = desiredPlaceholderColor
+                placeholderTV.needsDisplay = true
+            }
+        }
         textView.isEditable = isEnabled
 
         if !textView.hasMarkedText(), textView.string != text {
@@ -259,6 +284,14 @@ struct ComposerTextView: NSViewRepresentable {
 final class PlaceholderTextView: NSTextView {
     var placeholder: String = ""
     var placeholderColor: NSColor = ComposerTextView.placeholderColor
+    var isLightGlass: Bool = false {
+        didSet {
+            if glowingCaret.isLightGlass != isLightGlass {
+                glowingCaret.isLightGlass = isLightGlass
+                glowingCaret.needsDisplay = true
+            }
+        }
+    }
 
     private let glowingCaret = GlowingCaretView(frame: .zero)
     private var blinkTimer: Timer?
@@ -535,10 +568,12 @@ final class PlaceholderTextView: NSTextView {
     }
 }
 
-/// Renders the glowing rounded-capsule cursor with a cool icy-blue upper bloom,
-/// a warm amber-gold lower bloom, and a bright white core (`cursor.png`), without
-/// any rectangular background or clipped halo box.
+/// Renders the glowing rounded-capsule cursor:
+/// - In Dark Mode (`isLightGlass == false`): cool icy-blue upper bloom, warm amber-gold lower bloom, and bright white core (`cursor.png`).
+/// - In Light Mode (`isLightGlass == true`): deep forest-obsidian capsule core with a tight, narrow dark-emerald/charcoal vertical glow so it never competes with the light glass.
 final class GlowingCaretView: NSView {
+    var isLightGlass: Bool = false
+
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
 
@@ -566,7 +601,77 @@ final class GlowingCaretView: NSView {
         let midFocus = CGPoint(x: centerX, y: barRect.midY)
 
         let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let corePath = CGPath(
+            roundedRect: barRect,
+            cornerWidth: barWidth / 2,
+            cornerHeight: barWidth / 2,
+            transform: nil
+        )
 
+        if isLightGlass {
+            // Light Mode: Tight vertical dark-emerald / forest-obsidian glow (scaled horizontally to 0.36x so it hugs the bar instead of forming a circle)
+            ctx.saveGState()
+            ctx.translateBy(x: centerX, y: midFocus.y)
+            ctx.scaleBy(x: 0.36, y: 1.0)
+            ctx.translateBy(x: -centerX, y: -midFocus.y)
+
+            if let darkAura = CGGradient(
+                colorsSpace: colorSpace,
+                colors: [
+                    NSColor(srgbRed: 0.03, green: 0.16, blue: 0.09, alpha: 0.44).cgColor,
+                    NSColor(srgbRed: 0.05, green: 0.24, blue: 0.14, alpha: 0.18).cgColor,
+                    NSColor(srgbRed: 0.05, green: 0.24, blue: 0.14, alpha: 0.0).cgColor
+                ] as CFArray,
+                locations: [0.0, 0.48, 1.0]
+            ) {
+                ctx.drawRadialGradient(
+                    darkAura,
+                    startCenter: midFocus,
+                    startRadius: 0.3,
+                    endCenter: midFocus,
+                    endRadius: 9.5,
+                    options: []
+                )
+            }
+            ctx.restoreGState()
+
+            // Tight dark-forest shadow halo around the capsule bar
+            ctx.saveGState()
+            ctx.setShadow(
+                offset: .zero,
+                blur: 3.6,
+                color: NSColor(srgbRed: 0.02, green: 0.14, blue: 0.07, alpha: 0.62).cgColor
+            )
+            ctx.addPath(corePath)
+            ctx.setFillColor(NSColor(srgbRed: 0.04, green: 0.13, blue: 0.08, alpha: 0.98).cgColor)
+            ctx.fillPath()
+            ctx.restoreGState()
+
+            // Crisp deep forest-obsidian capsule core with rich emerald-ink vertical gradient
+            ctx.saveGState()
+            ctx.addPath(corePath)
+            ctx.clip()
+            if let darkCoreGradient = CGGradient(
+                colorsSpace: colorSpace,
+                colors: [
+                    NSColor(srgbRed: 0.03, green: 0.11, blue: 0.06, alpha: 1.0).cgColor,
+                    NSColor(srgbRed: 0.06, green: 0.20, blue: 0.12, alpha: 1.0).cgColor,
+                    NSColor(srgbRed: 0.03, green: 0.12, blue: 0.07, alpha: 1.0).cgColor
+                ] as CFArray,
+                locations: [0.0, 0.5, 1.0]
+            ) {
+                ctx.drawLinearGradient(
+                    darkCoreGradient,
+                    start: CGPoint(x: midFocus.x, y: barRect.minY),
+                    end: CGPoint(x: midFocus.x, y: barRect.maxY),
+                    options: []
+                )
+            }
+            ctx.restoreGState()
+            return
+        }
+
+        // Dark Mode:
         // 1. Soft upper icy-cyan / sky-blue radial bloom illuminating the dark pill (`Und 9.jpg` & `Untitled 9.jpg`, fades to 0.0 inside bleed)
         if let topGradient = CGGradient(
             colorsSpace: colorSpace,
@@ -613,12 +718,6 @@ final class GlowingCaretView: NSView {
             offset: .zero,
             blur: 4.5,
             color: NSColor(srgbRed: 1.0, green: 0.86, blue: 0.64, alpha: 0.78).cgColor
-        )
-        let corePath = CGPath(
-            roundedRect: barRect,
-            cornerWidth: barWidth / 2,
-            cornerHeight: barWidth / 2,
-            transform: nil
         )
         ctx.addPath(corePath)
         ctx.setFillColor(NSColor.white.cgColor)

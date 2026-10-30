@@ -12,6 +12,8 @@ import Foundation
 enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
     case newSession
     case addProject
+    case cloneRepository
+    case newProjectFolder
     case refreshSessions
     case renameSession
     case exportSession
@@ -44,6 +46,8 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .newSession: return "New Session"
         case .addProject: return "Open Project Folder…"
+        case .cloneRepository: return "Clone Git Repository…"
+        case .newProjectFolder: return "New Project Folder…"
         case .refreshSessions: return "Reload Sessions"
         case .renameSession: return "Rename Session…"
         case .exportSession: return "Export Session…"
@@ -72,6 +76,8 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .newSession: return "message-add-01"
         case .addProject: return "folder-add"
+        case .cloneRepository: return "git-branch"
+        case .newProjectFolder: return "add-01"
         case .refreshSessions: return "refresh"
         case .renameSession: return "edit-02"
         case .exportSession: return "arrow-up-right-01"
@@ -99,7 +105,7 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
     /// Actions that only make sense with a live session.
     var requiresSession: Bool {
         switch self {
-        case .newSession, .addProject, .refreshSessions, .toggleInspector, .toggleSidebar,
+        case .newSession, .addProject, .cloneRepository, .newProjectFolder, .refreshSessions, .toggleInspector, .toggleSidebar,
              .toggleTerminal, .openSettings, .showPiSetup,
              .checkForPiUpdates, .revealPiDirectory:
             return false
@@ -139,7 +145,7 @@ enum PaletteCommand: String, CaseIterable, Identifiable, Hashable {
 
     var group: Group {
         switch self {
-        case .newSession, .addProject, .refreshSessions, .renameSession,
+        case .newSession, .addProject, .cloneRepository, .newProjectFolder, .refreshSessions, .renameSession,
              .exportSession, .deleteSession:
             return .session
         case .focusComposer, .interrupt, .abortRun, .cycleModel, .cycleThinkingLevel:

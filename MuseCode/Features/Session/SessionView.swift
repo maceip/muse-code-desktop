@@ -43,6 +43,7 @@ struct SessionView: View {
     @State private var composerHeight: CGFloat = 0
     @State private var composerTop: CGFloat = 0
     @State private var paneSize: CGSize = CGSize(width: 1147, height: 820)
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.hasRootChatBackground) private var hasRootChatBackground
     @Environment(\.sessionPaneSize) private var rootSessionPaneSize
     /// Whether the empty-chat landing is drawn: the question with the composer
@@ -102,6 +103,12 @@ struct SessionView: View {
                 .coordinateSpace(name: Self.paneSpace)
                 .environment(\.sessionPaneSize, hasRootChatBackground ? rootSessionPaneSize : paneSize)
                 .environment(\.chatBackground, state.preferences.chatBackground)
+                .environment(
+                    \.colorScheme,
+                    AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: state.preferences.chatBackground)
+                        ? .light
+                        : .dark
+                )
                 .contextMenu {
                     Section("Chat Area Background") {
                         ForEach(PreferencesStore.ChatBackground.allCases) { bg in
@@ -129,6 +136,13 @@ struct SessionView: View {
         }
         .onChange(of: isLanding) { wasLanding, landing in
             syncLanding(sent: wasLanding && !landing)
+        }
+        .onChange(of: state.newSessionResetTick) { _, _ in
+            flyingPrompt = nil
+            landingControllerID = ObjectIdentifier(controller)
+            withAnimation(Self.landingAnimation) {
+                showsLanding = true
+            }
         }
     }
 
@@ -183,10 +197,12 @@ struct SessionView: View {
         ZStack {
             if controller.isShowingFirstPromptCenterOrb && controller.items.isEmpty {
                 VStack(spacing: 18) {
-                    BuildPromptHero(projectName: controller.projectName)
+                    if state.preferences.chatBackground == .solidBlack {
+                        BuildPromptHero(projectName: controller.projectName)
+                    }
                     FirstPromptCenterVoiceOrbView(controller: controller)
                 }
-                .offset(y: -36)
+                .offset(y: state.preferences.chatBackground == .solidBlack ? -36 : 0)
                 .transition(.opacity.combined(with: .scale(scale: 0.92)))
             }
 
@@ -210,7 +226,7 @@ struct SessionView: View {
     @ViewBuilder
     private var promptFlight: some View {
         if let flyingPrompt {
-            FlyingPromptBubble(prompt: flyingPrompt, to: 12, animation: Self.landingAnimation)
+            FlyingPromptBubble(prompt: flyingPrompt, to: 18, animation: Self.landingAnimation)
                 .allowsHitTesting(false)
                 .transition(.opacity)
         }
@@ -229,7 +245,7 @@ struct SessionView: View {
         LinearGradient(colors: [backdrop.opacity(0), backdrop],
                        startPoint: .top, endPoint: .bottom)
             .frame(height: composerHeight + 28)
-            .opacity(isShowingLanding ? 0 : 1)
+            .opacity(isShowingLanding || state.preferences.chatBackground != .solidBlack ? 0 : 1)
             .allowsHitTesting(false)
     }
 
@@ -484,17 +500,25 @@ private struct FlyingPromptBubble: View {
 
     var body: some View {
         ConversationColumn {
-            Text(prompt.text)
-                .font(TranscriptStyle.text)
-                .lineSpacing(TranscriptStyle.lineSpacing)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(TranscriptStyle.userBubbleFill(colorScheme).opacity(landed ? 1 : 0),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .frame(maxWidth: 520, alignment: .trailing)
-                .frame(maxWidth: .infinity, alignment: landed ? .trailing : .leading)
+            HStack(spacing: 0) {
+                Spacer(minLength: landed ? 60 : 0)
+                Text(prompt.text)
+                    .font(TranscriptStyle.text)
+                    .lineSpacing(TranscriptStyle.lineSpacing)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .foregroundStyle(Color.white)
+                    .background(
+                        TranscriptStyle.userBubbleFill(colorScheme).opacity(landed ? 1 : 0.85),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    )
+                    .frame(maxWidth: 520, alignment: .trailing)
+                if !landed {
+                    Spacer(minLength: 0)
+                }
+            }
         }
         .offset(y: landed ? to : prompt.from)
         .onAppear {

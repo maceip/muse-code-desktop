@@ -16,8 +16,14 @@ struct ComposerContextStrip: View {
     @State private var showsProjects = false
     @State private var showsBranches = false
     @State private var branches: [String] = []
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBackground) private var chatBackground
 
     var isGlassSurface: Bool = true
+
+    private var isLightGlass: Bool {
+        AppTheme.isLightGlass(colorScheme: colorScheme, chatBackground: chatBackground)
+    }
 
     var body: some View {
         HStack(spacing: 20) {
@@ -38,25 +44,59 @@ struct ComposerContextStrip: View {
 
     // MARK: - Projects
 
-    /// Folders that already have a chat on this chat's harness, plus the folder
-    /// the chat is in.
+    /// All registered project folders plus the current chat's folder, so newly added
+    /// or cloned folders with zero sessions are always selectable in the dropdown.
     private var projectItems: [ContextPickerItem] {
-        let harnessID = controller.harness.id
         let current = CanonicalPath.of(controller.projectPath)
-        return state.projects
-            .filter { $0.path == current || $0.sessions.contains { $0.harnessID == harnessID } }
-            .map { ContextPickerItem(id: $0.path, title: $0.name, systemImage: "folder-02",
-                                     isSelected: $0.path == current) }
+        var seen: Set<String> = []
+        var items: [ContextPickerItem] = []
+
+        for project in state.projects {
+            let path = CanonicalPath.of(project.path)
+            guard !seen.contains(path) else { continue }
+            seen.insert(path)
+            items.append(
+                ContextPickerItem(
+                    id: path,
+                    title: project.name,
+                    subtitle: path.abbreviatingHomeDirectory,
+                    systemImage: "folder-02",
+                    isSelected: path == current
+                )
+            )
+        }
+
+        if !seen.contains(current) {
+            items.insert(
+                ContextPickerItem(
+                    id: current,
+                    title: controller.projectName,
+                    subtitle: current.abbreviatingHomeDirectory,
+                    systemImage: "folder-02",
+                    isSelected: true
+                ),
+                at: 0
+            )
+        }
+        return items
     }
 
     private var projectPicker: some View {
         ContextPickerPopover(
             searchPrompt: "Search projects",
-            heading: nil,
+            heading: "Projects",
             items: projectItems,
-            actions: [ContextPickerAction(title: "New project", systemImage: "add-01") {
-                Task { await state.addProject() }
-            }],
+            actions: [
+                ContextPickerAction(title: "Open Folder…", systemImage: "folder-add") {
+                    Task { await state.addProject() }
+                },
+                ContextPickerAction(title: "Clone Git Repository…", systemImage: "git-branch") {
+                    state.presentCloneRepository()
+                },
+                ContextPickerAction(title: "New Project Folder…", systemImage: "add-01") {
+                    state.presentCreateProjectFolder()
+                }
+            ],
             onSelect: { item in
                 guard item.id != CanonicalPath.of(controller.projectPath) else { return }
                 Task { await state.startNewSession(projectPath: item.id, harnessOverride: controller.harness) }
@@ -97,10 +137,10 @@ struct ComposerContextStrip: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 HugeIcon(name: systemImage, size: 15)
-                    .foregroundStyle(isGlassSurface ? Color.white.opacity(0.82) : Color.secondary)
+                    .foregroundStyle(isGlassSurface ? AppTheme.glassSecondaryText(isLight: isLightGlass) : Color.secondary)
                 Text(title)
                     .font(.system(size: 13.5, weight: .medium))
-                    .foregroundStyle(isGlassSurface ? Color.white.opacity(0.95) : Color.primary.opacity(0.85))
+                    .foregroundStyle(isGlassSurface ? AppTheme.glassPrimaryText(isLight: isLightGlass) : Color.primary.opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }

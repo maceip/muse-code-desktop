@@ -22,6 +22,7 @@ struct FilesPane: View {
     @State private var selection: String?
     @State private var preview: FilePreview?
     @State private var showsHiddenFiles = false
+    @State private var rootChildren: [FileNode] = []
 
     var body: some View {
         VSplitView {
@@ -30,8 +31,19 @@ struct FilesPane: View {
             previewPane
                 .frame(minHeight: 160)
         }
-        .task(id: selection) { loadPreview() }
+        .task(id: "\(controller.projectPath)|\(showsHiddenFiles)") {
+            let rootPath = controller.projectPath
+            let includeHidden = showsHiddenFiles
+            let loaded = await Task.detached(priority: .userInitiated) {
+                ProjectFileTree.children(of: rootPath, includeHidden: includeHidden)
+            }.value
+            rootChildren = loaded
+        }
+        .task(id: selection) { await loadPreview() }
         .onAppear {
+            if rootChildren.isEmpty {
+                rootChildren = ProjectFileTree.children(of: controller.projectPath, includeHidden: showsHiddenFiles)
+            }
             if let path = state.selectedFilePath {
                 selection = path
             }
@@ -66,8 +78,8 @@ struct FilesPane: View {
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(ProjectFileTree.children(of: controller.projectPath, includeHidden: showsHiddenFiles)) { node in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(rootChildren) { node in
                         FileTreeRow(
                             node: node,
                             root: controller.projectPath,
@@ -158,12 +170,17 @@ struct FilesPane: View {
         .padding(.vertical, 7)
     }
 
-    private func loadPreview() {
+    private func loadPreview() async {
         guard let selection else {
             preview = nil
             return
         }
-        preview = FilePreviewLoader.load(path: selection)
+        let targetPath = selection
+        let loaded = await Task.detached(priority: .userInitiated) {
+            FilePreviewLoader.load(path: targetPath)
+        }.value
+        guard self.selection == targetPath else { return }
+        preview = loaded
     }
 }
 
@@ -246,7 +263,16 @@ struct FileTreeRow: View {
 
     private func syncExpansion() {
         guard node.isDirectory, expanded.contains(node.path), children == nil else { return }
-        children = ProjectFileTree.children(of: node.path, includeHidden: includeHidden)
+        let dirPath = node.path
+        let hidden = includeHidden
+        Task {
+            let loaded = await Task.detached(priority: .userInitiated) {
+                ProjectFileTree.children(of: dirPath, includeHidden: hidden)
+            }.value
+            if expanded.contains(dirPath) {
+                children = loaded
+            }
+        }
     }
 }
 
@@ -261,7 +287,7 @@ struct CodeViewer: View {
         ScrollViewReader { proxy in
             GeometryReader { geometry in
                 ScrollView(wrapsText ? .vertical : [.vertical, .horizontal]) {
-                    VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                             HStack(alignment: .top, spacing: 8) {
                                 Text("\(index + 1)")
@@ -287,7 +313,6 @@ struct CodeViewer: View {
             .onAppear { scroll(proxy) }
             .onChange(of: highlightLine) { _, _ in scroll(proxy) }
         }
-        .background(AppTheme.background)
     }
 
     private var lines: [String] {

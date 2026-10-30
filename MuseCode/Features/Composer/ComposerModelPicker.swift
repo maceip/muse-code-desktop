@@ -26,6 +26,7 @@ struct ComposerModelPicker: View {
     /// The provider chosen on the provider level; scopes the model list.
     @State private var providerFilter: String?
     @State private var query = ""
+    @State private var hoveredRowID: String?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -42,7 +43,6 @@ struct ComposerModelPicker: View {
                height: fittedHeight,
                alignment: .top)
         .clipped()
-        .allowsHitTesting(outgoingLevel == nil)
         .animation(.easeInOut(duration: 0.2), value: fittedHeight)
         .task { await controller.refreshModels() }
     }
@@ -184,7 +184,8 @@ struct ComposerModelPicker: View {
     // MARK: - Rows
 
     private func backRow(title: String) -> some View {
-        Button { goBack() } label: {
+        let rowID = "back-\(title)"
+        return Button { goBack() } label: {
             HStack(spacing: 9) {
                 HugeIcon(name: "arrow-left-01")
                     .font(.system(size: 11, weight: .semibold))
@@ -198,16 +199,23 @@ struct ComposerModelPicker: View {
             .contentShape(Rectangle())
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(hoveredRowID == rowID ? 0.08 : 0))
+                    .padding(.horizontal, 4)
+            )
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
+        .onHover { hoveredRowID = $0 ? rowID : (hoveredRowID == rowID ? nil : hoveredRowID) }
     }
 
     private func pickerRow(title: String,
                            value: String,
                            systemImage: String,
                            action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let rowID = "picker-\(title)"
+        return Button(action: action) {
             HStack(spacing: 9) {
                 HugeIcon(name: systemImage)
                     .font(.system(size: 12))
@@ -225,8 +233,14 @@ struct ComposerModelPicker: View {
             .contentShape(Rectangle())
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(hoveredRowID == rowID ? 0.08 : 0))
+                    .padding(.horizontal, 4)
+            )
         }
         .buttonStyle(.plain)
+        .onHover { hoveredRowID = $0 ? rowID : (hoveredRowID == rowID ? nil : hoveredRowID) }
     }
 
     private func selectionRow(title: String,
@@ -234,7 +248,8 @@ struct ComposerModelPicker: View {
                               isSelected: Bool,
                               trailing: AnyView? = nil,
                               action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let rowID = "sel-\(title)-\(subtitle ?? "")"
+        return Button(action: action) {
             HStack(spacing: 8) {
                 HugeIcon(name: "checkmark-circle-01")
                     .font(.system(size: 11, weight: .semibold))
@@ -257,8 +272,14 @@ struct ComposerModelPicker: View {
             .contentShape(Rectangle())
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(hoveredRowID == rowID ? 0.08 : 0))
+                    .padding(.horizontal, 4)
+            )
         }
         .buttonStyle(.plain)
+        .onHover { hoveredRowID = $0 ? rowID : (hoveredRowID == rowID ? nil : hoveredRowID) }
     }
 
     private func modelBadges(_ model: PiModel) -> AnyView {
@@ -296,7 +317,7 @@ struct ComposerModelPicker: View {
     // MARK: - Actions
 
     private func navigate(to destination: ComposerModelPickerLevel, goingBack: Bool = false) {
-        guard destination != level, outgoingLevel == nil else { return }
+        guard destination != level else { return }
 
         animationGeneration += 1
         let generation = animationGeneration
@@ -313,10 +334,11 @@ struct ComposerModelPicker: View {
             // Give SwiftUI one frame to commit both panels at their starting
             // offsets before driving them across the clipped viewport.
             try? await Task.sleep(for: .milliseconds(16))
-            withAnimation(.easeInOut(duration: 0.22)) {
+            guard generation == animationGeneration else { return }
+            withAnimation(.easeInOut(duration: 0.20)) {
                 slideProgress = 1
             }
-            try? await Task.sleep(for: .milliseconds(230))
+            try? await Task.sleep(for: .milliseconds(210))
             guard generation == animationGeneration else { return }
             outgoingLevel = nil
         }

@@ -29,10 +29,11 @@ struct AppRail: View {
         var result: [SessionRef] = []
         if let controller = state.activeController,
            controller.sessionFile == nil,
+           !controller.items.isEmpty,
            let key = state.selectedSessionKey,
            key.hasPrefix("new:") {
             result.append(SessionRef(
-                id: controller.draftKey,
+                id: key,
                 sessionId: controller.sessionId,
                 filePath: nil,
                 name: controller.sessionName ?? controller.projectName,
@@ -57,9 +58,14 @@ struct AppRail: View {
         return result
     }
 
+    private var isNewEmptyChatActive: Bool {
+        guard !state.isSettingsPresented, let controller = state.activeController else { return false }
+        return controller.sessionFile == nil && controller.items.isEmpty
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            MuseAppRailHeaderButton {
+            MuseAppRailHeaderButton(isActive: isNewEmptyChatActive) {
                 state.isSettingsPresented = false
                 Task { await state.newChatInCurrentProject() }
             }
@@ -106,7 +112,9 @@ struct AppRail: View {
 }
 
 /// Top brand icon in `AppRail` mode (replaces the old `+` and `Search` buttons).
+/// Clicking it creates or resets to a new empty chat session.
 struct MuseAppRailHeaderButton: View {
+    var isActive: Bool = false
     var action: () -> Void
     @State private var isHovering = false
 
@@ -134,14 +142,24 @@ struct MuseAppRailHeaderButton: View {
                 .scaledToFit()
                 .frame(width: 36, height: 36)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .scaleEffect(isHovering ? 1.04 : 1.0)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(
+                            isActive
+                                ? Color.white.opacity(0.65)
+                                : (isHovering ? Color.white.opacity(0.35) : Color.clear),
+                            lineWidth: isActive ? 1.5 : 1.0
+                        )
+                )
+                .scaleEffect(isHovering ? 1.05 : 1.0)
                 .animation(.easeOut(duration: 0.14), value: isHovering)
-                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .frame(width: AppRailMetrics.buttonSize, height: AppRailMetrics.buttonSize)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .onHover { isHovering = $0 }
-        .help("Muse — New chat (⌘N)")
+        .help("Muse — New empty chat session (⌘N)")
         .accessibilityLabel("Muse")
     }
 }
