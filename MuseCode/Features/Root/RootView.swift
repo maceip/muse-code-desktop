@@ -170,27 +170,20 @@ struct RootView: View {
                         }
 
                     TitlebarSearchDropdownView(state: state, onRunCommand: perform)
-                        .padding(.top, WindowChromeMetrics.titlebarHeight + 2)
-                        .transition(
-                            .asymmetric(
-                                insertion: .opacity
-                                    .combined(with: .scale(scale: 0.97, anchor: .top))
-                                    .combined(with: .offset(y: -4)),
-                                removal: .opacity
-                                    .combined(with: .scale(scale: 0.96, anchor: .top))
-                                    .combined(with: .offset(y: -6))
-                            )
-                        )
+                        .padding(.top, WindowChromeMetrics.titlebarRowCenter + TitlebarIconButton.size / 2 + 4)
+                        .transition(.opacity)
                 }
             }
-            .animation(.spring(response: 0.20, dampingFraction: 0.90), value: state.isPalettePresented)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .ignoresSafeArea()
+            .animation(.easeOut(duration: 0.11), value: state.isPalettePresented)
             .zIndex(90)
         }
         .overlay { ExtensionDialogHost(state: state) }
     }
 
     private func openPalette() {
-        withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
+        withAnimation(.easeOut(duration: 0.12)) {
             state.openPalette()
         }
     }
@@ -274,8 +267,10 @@ struct RootView: View {
                 let leadingX = controlsLeading
                 let trailingReserve: CGFloat = 82
                 // Compute responsive search pill width based on available center clearance
-                let idealSearchW: CGFloat = min(240, max(136, (totalW - leadingX - trailingReserve) * 0.34))
-                let centerLeftEdge = (totalW - idealSearchW) * 0.5
+                let idealSearchW: CGFloat = min(230, max(136, (totalW - leadingX - trailingReserve) * 0.32))
+                let expandedSearchW: CGFloat = min(310, max(240, (totalW - leadingX - trailingReserve) * 0.42))
+                let activeSearchW: CGFloat = state.isPalettePresented ? expandedSearchW : idealSearchW
+                let centerLeftEdge = (totalW - activeSearchW) * 0.5
                 // Max space available for the leading controls + title before reaching the search pill
                 let maxLeadingWidth = max(96, centerLeftEdge - leadingX - 12)
 
@@ -317,16 +312,18 @@ struct RootView: View {
                     .padding(.leading, leadingX)
                     .padding(.top, buttonTop)
                     .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
+                    .animation(.easeOut(duration: 0.12), value: state.isPalettePresented)
 
                     if state.phase == .ready {
                         TitlebarSearchPill(
                             state: state,
-                            width: state.isPalettePresented ? min(490, max(280, totalW - 180)) : idealSearchW,
+                            width: activeSearchW,
                             onOpenPalette: openPalette,
                             onRunCommand: perform
                         )
                         .padding(.top, buttonTop)
                         .frame(width: totalW, alignment: .top)
+                        .animation(.easeOut(duration: 0.12), value: state.isPalettePresented)
                         .zIndex(100)
                     }
 
@@ -854,6 +851,7 @@ struct TitlebarSearchPill: View {
     var onOpenPalette: () -> Void
     var onRunCommand: ((PaletteCommand) -> Void)? = nil
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isHovering = false
     @FocusState private var isSearchFieldFocused: Bool
 
@@ -865,34 +863,22 @@ struct TitlebarSearchPill: View {
         guard let state, isActive else { return nil }
         let q = state.paletteQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return nil }
-        let lower = q.lowercased()
-        let directSessions: [(project: ProjectGroup, session: SessionRef)]
-        if !state.paletteResults.isEmpty {
-            directSessions = state.paletteResults
-        } else {
-            var found: [(project: ProjectGroup, session: SessionRef)] = []
-            for p in state.projects {
-                for s in p.sessions where s.displayName.lowercased().contains(lower) || (s.firstUserMessage?.lowercased().contains(lower) ?? false) {
-                    found.append((p, s))
-                }
-            }
-            directSessions = found
-        }
         return MuseSearchSuggestionService.shared.inlineAutocomplete(
             for: state.paletteQuery,
             projects: state.projects,
-            matchingSessions: directSessions
+            matchingSessions: state.paletteResults
         )
     }
 
     var body: some View {
-        if let state, isActive {
-            @Bindable var bindableState = state
-            HStack(spacing: 8) {
-                MuseSearchBrandGlyph(isActive: true)
+        HStack(spacing: 7) {
+            HugeIcon(name: "search-01", size: 13)
+                .foregroundStyle(.secondary)
+                .frame(width: 15, height: 15)
 
+            if let state, isActive {
+                @Bindable var bindableState = state
                 ZStack(alignment: .leading) {
-                    // Inline highlighted autocomplete suffix + top hit preview (`AOL Search History.jpg`)
                     if let auto = inlineAutocomplete, !auto.displayHighlightText.isEmpty {
                         HStack(spacing: 0) {
                             Text(bindableState.paletteQuery)
@@ -900,13 +886,13 @@ struct TitlebarSearchPill: View {
                                 .opacity(0)
                             Text(auto.displayHighlightText)
                                 .font(.system(size: 12.5, weight: .regular))
-                                .foregroundStyle(Color(red: 0.14, green: 0.10, blue: 0.18, opacity: 0.88))
+                                .foregroundStyle(Color.secondary)
                                 .lineLimit(1)
-                                .padding(.horizontal, 3)
+                                .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(
                                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .fill(Color(red: 0.72, green: 0.56, blue: 0.72, opacity: 0.42))
+                                        .fill(Color.primary.opacity(0.08))
                                 )
                             Spacer(minLength: 0)
                         }
@@ -916,11 +902,11 @@ struct TitlebarSearchPill: View {
                     TextField("Search sessions, projects, or commands…", text: $bindableState.paletteQuery)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Color(red: 0.10, green: 0.10, blue: 0.12))
+                        .foregroundStyle(Color.primary)
                         .focused($isSearchFieldFocused)
                         .onChange(of: bindableState.paletteQuery) { _, _ in
                             if !state.isPalettePresented {
-                                withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                                withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
                                     state.isPalettePresented = true
                                 }
                             }
@@ -957,6 +943,9 @@ struct TitlebarSearchPill: View {
                         .onExitCommand {
                             state.closePalette()
                         }
+                        .onAppear {
+                            isSearchFieldFocused = true
+                        }
                 }
 
                 if !bindableState.paletteQuery.isEmpty {
@@ -966,58 +955,62 @@ struct TitlebarSearchPill: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 12))
-                            .foregroundStyle(Color.black.opacity(0.42))
+                            .foregroundStyle(Color.secondary.opacity(0.75))
                     }
                     .buttonStyle(.plain)
                 }
-            }
-            .padding(.horizontal, 12)
-            .frame(width: width, height: TitlebarIconButton.size + 1)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color(red: 0.86, green: 0.85, blue: 0.89, opacity: 0.95))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .strokeBorder(Color(red: 0.72, green: 0.56, blue: 0.84, opacity: 0.85), lineWidth: 1.5)
-            )
-            .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 2)
-            .onAppear {
-                isSearchFieldFocused = true
-            }
-        } else {
-            Button(action: onOpenPalette) {
-                HStack(spacing: 6) {
-                    HugeIcon(name: "search-01", size: 13)
-                        .foregroundStyle(.secondary)
-                    Text("Search…")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    if width >= 170 {
-                        Text("⇧⌘P")
-                            .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                            .foregroundStyle(.tertiary)
+            } else {
+                Button(action: onOpenPalette) {
+                    HStack(spacing: 6) {
+                        Text("Search…")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        if width >= 170 {
+                            Text("⇧⌘P")
+                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .frame(width: width, height: TitlebarIconButton.size - 1)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(isHovering ? AppTheme.railSelection.opacity(0.65) : AppTheme.railSelection.opacity(0.32))
-                )
-                .overlay(
-                    Capsule(style: .continuous)
-                        .strokeBorder(Color.primary.opacity(isHovering ? 0.34 : 0.22), lineWidth: 1)
-                )
-                .contentShape(Capsule())
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("Search sessions, projects, and commands (⇧⌘P)")
+                .accessibilityLabel("Search")
             }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .onHover { isHovering = $0 }
-            .help("Search sessions, projects, and commands (⇧⌘P)")
-            .accessibilityLabel("Search")
+        }
+        .padding(.horizontal, 12)
+        .frame(width: width, height: TitlebarIconButton.size)
+        .background(
+            Capsule(style: .continuous)
+                .fill(
+                    isActive
+                        ? (colorScheme == .dark ? Color(white: 0.17, opacity: 0.96) : Color(white: 0.98, opacity: 0.96))
+                        : (isHovering ? AppTheme.railSelection.opacity(0.65) : AppTheme.railSelection.opacity(0.32))
+                )
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(
+                    Color.primary.opacity(isActive ? 0.26 : (isHovering ? 0.34 : 0.20)),
+                    lineWidth: 1
+                )
+        )
+        .shadow(color: .black.opacity(isActive ? 0.12 : 0.0), radius: 6, x: 0, y: 2)
+        .contentShape(Capsule())
+        .onTapGesture {
+            if !isActive {
+                onOpenPalette()
+            }
+        }
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: width)
+        .animation(.easeOut(duration: 0.12), value: isActive)
+        .onChange(of: isActive) { _, active in
+            isSearchFieldFocused = active
         }
     }
 }

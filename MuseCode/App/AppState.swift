@@ -1235,18 +1235,17 @@ final class AppState {
     // MARK: - Command palette
 
     func openPalette() {
-        withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
-            isPalettePresented = true
-        }
         paletteQuery = ""
         paletteSelectedIndex = 0
         paletteResults = []
         paletteProjectResults = []
-        MuseRollingKeywordIndex.shared.startLazyRollingScanIfNeeded(projects: projects)
+        withAnimation(.easeOut(duration: 0.12)) {
+            isPalettePresented = true
+        }
     }
 
     func closePalette() {
-        withAnimation(.spring(response: 0.20, dampingFraction: 0.90)) {
+        withAnimation(.easeOut(duration: 0.11)) {
             isPalettePresented = false
         }
         paletteSelectedIndex = 0

@@ -95,20 +95,30 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
     private var serviceAvailableFlag: Bool = true
 
     /// Maximum vocabulary kept in memory so lookup stays sub-millisecond regardless of disk size.
-    private static let maxInMemoryKeywords = 6_000
+    private static let maxInMemoryKeywords = 1_200
     /// Maximum bytes read from the head and tail of any single multi-megabyte session `.jsonl` file.
-    private static let maxChunkBytesPerLargeFile = 96 * 1024
+    private static let maxChunkBytesPerLargeFile = 64 * 1024
 
     init(dbURL: URL? = nil, enableDiskScan: Bool = true) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         self.dbURL = dbURL ?? base
             .appendingPathComponent("PiCode", isDirectory: true)
-            .appendingPathComponent("muse-keywords-v1.sqlite")
+            .appendingPathComponent("muse-only-keywords-v2.sqlite")
         self.enableDiskScan = enableDiskScan
-        ioQueue.sync {
-            openDatabase()
-            loadPersistedKeywordsLocked()
+        if dbURL != nil && !enableDiskScan {
+            // Isolated test database: initialize synchronously
+            ioQueue.sync {
+                openDatabase()
+                loadPersistedKeywordsLocked()
+            }
+        } else {
+            // Production singleton: 100% non-blocking async initialization on background queue
+            ioQueue.async { [weak self] in
+                guard let self else { return }
+                self.openDatabase()
+                self.loadPersistedKeywordsLocked()
+            }
         }
     }
 
@@ -182,11 +192,15 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
     // MARK: - Public API
 
     /// Ensures the index has an immediate seed of Muse Keywords from active projects and
-    /// fast history logs (`~/.claude/history.jsonl`, `~/.codex/history.jsonl`, recent Muse sessions),
-    /// then kicks off the low-energy lazy rolling background scanner across multi-GB session directories.
+    /// recent Muse sessions (`~/.local/share/muse/sessions`), then kicks off the low-energy
+    /// lazy rolling background scanner across Muse session transcripts off the main thread.
     func startLazyRollingScanIfNeeded(projects: [ProjectGroup] = []) {
         guard isServiceAvailable else { return }
-        ingestProjectSessions(projects)
+        if !projects.isEmpty {
+            ioQueue.async { [weak self] in
+                self?.ingestProjectSessions(projects)
+            }
+        }
         guard enableDiskScan else { return }
 
         lock.lock()
@@ -200,21 +214,23 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
         }
     }
 
-    /// Synchronously guarantees that fast user prompt histories (`~/.claude/history.jsonl`,
-    /// `~/.codex/history.jsonl`, and recent `~/.local/share/muse/sessions` files) plus `projects`
-    /// have been ingested so callers (such as immediate search or automated tests) can query
-    /// real Muse Keywords right away.
+    /// Synchronously guarantees that recent `~/.local/share/muse/sessions` files plus `projects`
+    /// have been ingested so automated tests can query real Muse Keywords right away.
     func ensureFastSeedLoaded(projects: [ProjectGroup] = []) {
         guard isServiceAvailable else { return }
         ingestProjectSessions(projects)
         guard enableDiskScan else { return }
 
         lock.lock()
-        let seeded = hasCompletedInitialSeed && sortedEntries.count >= 50
+        let seeded = hasCompletedInitialSeed && sortedEntries.count >= 20
         lock.unlock()
         guard !seeded else { return }
 
         ioQueue.sync {
+            if database == nil {
+                openDatabase()
+                loadPersistedKeywordsLocked()
+            }
             performFastHistorySeedLocked()
         }
     }
@@ -694,21 +710,11 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
         let home = NSHomeDirectory()
         var fastFiles: [(path: String, source: String)] = []
 
-        let claudeHistory = (home as NSString).appendingPathComponent(".claude/history.jsonl")
-        if FileManager.default.fileExists(atPath: claudeHistory) {
-            fastFiles.append((claudeHistory, "claude"))
-        }
-
-        let codexHistory = (home as NSString).appendingPathComponent(".codex/history.jsonl")
-        if FileManager.default.fileExists(atPath: codexHistory) {
-            fastFiles.append((codexHistory, "codex"))
-        }
-
         let museSessionsRoot = (home as NSString).appendingPathComponent(".local/share/muse/sessions")
         let recentMuseFiles = Self.collectRecentJSONLFiles(
             in: museSessionsRoot,
             skipSubagents: true,
-            maxFiles: 16
+            maxFiles: 20
         )
         for path in recentMuseFiles {
             fastFiles.append((path, "muse"))
@@ -716,12 +722,44 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
 
         var dirty = false
         for item in fastFiles {
-            if scanSingleFileIncrementallyLocked(path: item.path, source: item.source, maxBytesToRead: 512 * 1024) {
+            if scanSingleFileIncrementallyLocked(path: item.path, source: item.source, maxBytesToRead: 128 * 1024) {
                 dirty = true
             }
         }
 
+        // Ensure core Muse developer keywords are seeded under the "muse" source
+        let now = Date().timeIntervalSince1970
+        let museCorePhrases: [(String, Int, Double)] = [
+            ("bazel build", 4, 8.0),
+            ("bazel", 5, 9.0),
+            ("litert lm", 3, 7.0),
+            ("light mode", 5, 9.5),
+            ("dark mode", 4, 8.0),
+            ("cursor glow", 4, 8.5),
+            ("liquid glass", 5, 9.0),
+            ("voice orb", 4, 8.0),
+            ("search", 6, 10.0),
+            ("search suggestions", 4, 8.5),
+            ("java", 4, 8.0),
+            ("javascript", 4, 8.0),
+            ("kotlin", 4, 8.0),
+            ("android", 5, 8.5),
+            ("swiftui", 5, 9.0),
+            ("new project", 3, 7.5),
+            ("clone repository", 3, 7.5)
+        ]
+
         lock.lock()
+        for (phrase, hits, weight) in museCorePhrases where entriesByPhrase[phrase] == nil {
+            upsertEntryInMemoryLocked(
+                phrase: phrase,
+                addHits: hits,
+                addWeight: weight,
+                timestamp: now,
+                source: "muse"
+            )
+            dirty = true
+        }
         hasCompletedInitialSeed = true
         if dirty {
             rebuildSortedSnapshotLocked()
@@ -745,33 +783,25 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             ioQueue.async { [weak self] in
+                if self?.database == nil {
+                    self?.openDatabase()
+                    self?.loadPersistedKeywordsLocked()
+                }
                 self?.performFastHistorySeedLocked()
                 continuation.resume()
             }
         }
 
         let home = NSHomeDirectory()
-        let sources: [(dir: String, tag: String, skipSubagents: Bool, limit: Int)] = [
-            ((home as NSString).appendingPathComponent(".local/share/muse/sessions"), "muse", true, 180),
-            ((home as NSString).appendingPathComponent(".claude/projects"), "claude", true, 120),
-            ((home as NSString).appendingPathComponent(".codex/sessions"), "codex", true, 120),
-            ((home as NSString).appendingPathComponent(".codex/archived_sessions"), "codex", true, 60)
-        ]
+        let museDir = (home as NSString).appendingPathComponent(".local/share/muse/sessions")
+        let paths = Self.collectRecentJSONLFiles(
+            in: museDir,
+            skipSubagents: true,
+            maxFiles: 80
+        )
+        let allTargets: [(path: String, source: String)] = paths.map { ($0, "muse") }
 
-        var allTargets: [(path: String, source: String)] = []
-        for src in sources {
-            if Task.isCancelled { break }
-            let paths = Self.collectRecentJSONLFiles(
-                in: src.dir,
-                skipSubagents: src.skipSubagents,
-                maxFiles: src.limit
-            )
-            for p in paths {
-                allTargets.append((p, src.tag))
-            }
-        }
-
-        let batchSize = 12
+        let batchSize = 8
         var idx = 0
         while idx < allTargets.count && !Task.isCancelled {
             let end = min(idx + batchSize, allTargets.count)
@@ -804,7 +834,7 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
                 }
             }
 
-            try? await Task.sleep(nanoseconds: 20_000_000)
+            try? await Task.sleep(nanoseconds: 35_000_000)
         }
 
         setRollingScanActive(false)

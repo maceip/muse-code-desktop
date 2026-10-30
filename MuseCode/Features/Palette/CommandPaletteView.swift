@@ -175,9 +175,6 @@ final class MuseSearchSuggestionService {
             return []
         }
 
-        rollingIndex.ensureFastSeedLoaded(projects: projects)
-        rollingIndex.startLazyRollingScanIfNeeded(projects: projects)
-
         if trimmed.isEmpty {
             // Default suggestions when search field is first focused with empty text:
             // surface recent searches + top recurring Muse Keywords from local transcript history,
@@ -275,7 +272,7 @@ final class MuseSearchSuggestionService {
             }
         }
 
-        // 4. Rolling Muse Keywords calculated across local Muse, Claude, and Codex chat history
+        // 4. Rolling Muse Keywords calculated across local Muse chat history
         //    plus semantic/co-occurring neighbors (e.g. typing "java" surfaces "kotlin")
         for match in rollingMatches {
             let mLower = match.phrase.lowercased()
@@ -290,18 +287,7 @@ final class MuseSearchSuggestionService {
             }
         }
 
-        // 5. Extract N-gram phrase completions from active session titles & opening prompts
-        let allSessions = projects.flatMap(\.sessions)
-        for session in allSessions {
-            for source in [session.name, session.firstUserMessage].compactMap({ $0 }) {
-                let extracted = Self.extractCompletions(matchingPrefix: lower, from: source)
-                for ext in extracted {
-                    prefixCandidates.append(RawCandidate(phrase: ext, subtitle: nil))
-                }
-            }
-        }
-
-        // 6. Project names & commands
+        // 5. Project names & commands
         for project in projects {
             let pName = project.name.lowercased()
             if pName.hasPrefix(lower) && pName != lower {
@@ -538,20 +524,14 @@ final class MuseSearchSuggestionService {
 
 // MARK: - Titlebar Inline Search Field & Translucent Dropdown (`AOL Search History.jpg`)
 
-/// Stylized Muse `M` emblem rendered inside the leading edge of the Titlebar Search Pill.
+/// Search icon glyph rendered inside the leading edge of the Titlebar Search Pill.
 struct MuseSearchBrandGlyph: View {
     var isActive: Bool
 
     var body: some View {
-        Text("M")
-            .font(.system(size: 13.5, weight: .heavy, design: .serif))
-            .italic()
-            .foregroundStyle(
-                isActive
-                    ? Color(red: 0.16, green: 0.62, blue: 0.24)
-                    : Color(red: 0.88, green: 0.34, blue: 0.72)
-            )
-            .frame(width: 16, height: 16)
+        HugeIcon(name: "search-01", size: 13)
+            .foregroundStyle(.secondary)
+            .frame(width: 15, height: 15)
     }
 }
 
@@ -650,6 +630,8 @@ struct TitlebarSearchDropdownView: View {
         }
     }
 
+    static let dropdownWidth: CGFloat = 400
+
     private var topHit: MuseSearchTopHit? {
         suggestionService.topHit(
             for: state.paletteQuery,
@@ -658,95 +640,81 @@ struct TitlebarSearchDropdownView: View {
         )
     }
 
-    private var suggestions: [MuseSearchSuggestion] {
+    var suggestions: [MuseSearchSuggestion] {
         suggestionService.suggestions(
             for: state.paletteQuery,
             projects: state.projects,
             matchingSessions: matchingSessions,
-            limit: 6
+            limit: 2
         )
     }
 
-    /// Flat list of selectable row IDs for keyboard Up/Down arrow navigation.
+    /// Flat list of selectable row IDs for keyboard Up/Down arrow navigation:
+    /// 1. Top Hit
+    /// 2. Previous Sessions (`switch to session`) at the top
+    /// 3. Keyword Suggestions (`Muse Suggestions`, max 2 rows) at the bottom
     var selectableRowIDs: [String] {
         var ids: [String] = []
-        if let topHit {
-            ids.append(topHit.id)
+        let sessions = matchingSessions
+        if let hit = suggestionService.topHit(for: state.paletteQuery, projects: state.projects, matchingSessions: sessions) {
+            ids.append(hit.id)
         }
-        ids.append(contentsOf: suggestions.map(\.id))
-        ids.append(contentsOf: matchingSessions.map { "switch-\($0.session.id)" })
+        ids.append(contentsOf: sessions.map { "switch-\($0.session.id)" })
+        let sugs = suggestionService.suggestions(for: state.paletteQuery, projects: state.projects, matchingSessions: sessions, limit: 2)
+        ids.append(contentsOf: sugs.map(\.id))
         return ids
     }
 
     var body: some View {
-        let rowIDs = selectableRowIDs
+        let sessions = matchingSessions
+        let hit = suggestionService.topHit(
+            for: state.paletteQuery,
+            projects: state.projects,
+            matchingSessions: sessions
+        )
+        let sugs = suggestionService.suggestions(
+            for: state.paletteQuery,
+            projects: state.projects,
+            matchingSessions: sessions,
+            limit: 2
+        )
+        let fallbackExplanation = degradedFallbackExplanation
+        var rowIDs: [String] = []
+        if let hit { rowIDs.append(hit.id) }
+        rowIDs.append(contentsOf: sessions.map { "switch-\($0.session.id)" })
+        rowIDs.append(contentsOf: sugs.map(\.id))
+
         let clampedSelected = rowIDs.isEmpty ? -1 : min(max(0, state.paletteSelectedIndex), rowIDs.count - 1)
         let activeRowID: String? = (clampedSelected >= 0 && clampedSelected < rowIDs.count) ? rowIDs[clampedSelected] : nil
 
-        VStack(alignment: .leading, spacing: 0) {
+        return VStack(alignment: .leading, spacing: 0) {
             // 0. Degraded Service Fallback Mode Banner (tiny connection-lost icon + explanation)
-            if let fallbackExplanation = degradedFallbackExplanation {
+            if let fallbackExplanation {
                 degradedFallbackBanner(explanation: fallbackExplanation)
                 Divider()
                     .overlay(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.25))
             }
 
-            // 1. Top Hit Row (highlighted in a frosted top band matching `AOL Search History.jpg`)
-            if let topHit {
-                topHitRow(topHit, isSelected: activeRowID == topHit.id || hoveredItemID == topHit.id)
+            // 1. Top Hit Row
+            if let hit {
+                topHitRow(hit, isSelected: activeRowID == hit.id || hoveredItemID == hit.id)
                 Divider()
                     .overlay(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.25))
             }
 
-            // 2. `Muse Suggestions` Section
-            if !suggestions.isEmpty {
-                let keywordStats = MuseRollingKeywordIndex.shared.stats
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text("Muse")
-                        .font(.system(size: 15, weight: .bold, design: .serif))
-                        .foregroundStyle( Color.primary.opacity(0.68) )
-                    Text("Suggestions")
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle( Color.secondary.opacity(0.85) )
-                    Spacer(minLength: 8)
-                    if keywordStats.totalKeywords > 0 {
-                        Text("\(keywordStats.totalKeywords) keywords")
-                            .font(.system(size: 10.5, weight: .regular, design: .monospaced))
-                            .foregroundStyle(Color.secondary.opacity(0.65))
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 4)
-                .help("Muse Suggestions")
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Muse Suggestions")
-
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(suggestions) { suggestion in
-                        suggestionRow(
-                            suggestion,
-                            isSelected: activeRowID == suggestion.id || hoveredItemID == suggestion.id
-                        )
-                    }
-                }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
-            }
-
-            // 3. `switch to session` Section (`matching sessions`)
-            if !matchingSessions.isEmpty {
+            // 2. Previous Sessions Chat Interactivity (`switch to session`) at the TOP
+            if !sessions.isEmpty {
                 Text("switch to session")
-                    .font(.system(size: 12.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color.primary.opacity(0.75))
-                    .padding(.horizontal, 14)
-                    .padding(.top, 6)
-                    .padding(.bottom, 5)
+                    .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Color.primary.opacity(0.70))
+                    .padding(.horizontal, 12)
+                    .padding(.top, 7)
+                    .padding(.bottom, 4)
                     .help("switch to session")
                     .accessibilityLabel("switch to session")
 
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(matchingSessions, id: \.session.id) { entry in
+                    ForEach(sessions, id: \.session.id) { entry in
                         let rowID = "switch-\(entry.session.id)"
                         switchToSessionRow(
                             project: entry.project,
@@ -757,8 +725,8 @@ struct TitlebarSearchDropdownView: View {
                     }
                 }
                 .padding(.horizontal, 6)
-                .padding(.bottom, 8)
-            } else if suggestions.isEmpty && topHit == nil {
+                .padding(.bottom, 6)
+            } else if sugs.isEmpty && hit == nil {
                 Button {
                     state.closePalette()
                     Task { await state.newChatInCurrentProject() }
@@ -778,22 +746,55 @@ struct TitlebarSearchDropdownView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            // 3. Keyword Suggestions (`Muse Suggestions`, max 2 rows) at the BOTTOM
+            if !sugs.isEmpty {
+                if !sessions.isEmpty {
+                    Divider()
+                        .overlay(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.20))
+                }
+                let keywordStats = MuseRollingKeywordIndex.shared.stats
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("Muse")
+                        .font(.system(size: 13.5, weight: .bold, design: .serif))
+                        .foregroundStyle(Color.primary.opacity(0.68))
+                    Text("Suggestions")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.secondary.opacity(0.85))
+                    Spacer(minLength: 8)
+                    if keywordStats.totalKeywords > 0 {
+                        Text("\(keywordStats.totalKeywords) keywords")
+                            .font(.system(size: 10, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Color.secondary.opacity(0.60))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 7)
+                .padding(.bottom, 3)
+                .help("Muse Suggestions")
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Muse Suggestions")
+
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(sugs) { suggestion in
+                        suggestionRow(
+                            suggestion,
+                            isSelected: activeRowID == suggestion.id || hoveredItemID == suggestion.id
+                        )
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 7)
+            }
         }
-        .frame(width: 500)
+        .frame(width: Self.dropdownWidth)
         .background(
             ZStack {
-                VisualEffectDropdownMaterial(tooltip: degradedFallbackExplanation)
+                VisualEffectDropdownMaterial(tooltip: fallbackExplanation)
                 if colorScheme == .dark {
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.24, green: 0.25, blue: 0.36, opacity: 0.78),
-                            Color(red: 0.20, green: 0.22, blue: 0.34, opacity: 0.84)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    Color(white: 0.14, opacity: 0.86)
                 } else {
-                    Color(white: 0.97, opacity: 0.88)
+                    Color(white: 0.97, opacity: 0.90)
                 }
             }
         )

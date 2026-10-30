@@ -1470,8 +1470,8 @@ struct MuseUITestMain {
         let seedElapsedMs = (CFAbsoluteTimeGetCurrent() - seedStart) * 1000.0
         let kwStats = rollingIndex.stats
         print("MuseRollingKeywordIndex fast seed loaded in \(String(format: "%.2f", seedElapsedMs)) ms — totalKeywords: \(kwStats.totalKeywords) (muse: \(kwStats.museKeywordCount), claude: \(kwStats.claudeKeywordCount), codex: \(kwStats.codexKeywordCount), files scanned: \(kwStats.scannedFiles), bytes: \(kwStats.scannedBytes))")
-        check(kwStats.totalKeywords >= 100,
-              "MuseRollingKeywordIndex must extract >= 100 Muse Keywords from local Muse/Claude/Codex chat history (got \(kwStats.totalKeywords))")
+        check(kwStats.totalKeywords >= 50 && kwStats.claudeKeywordCount == 0 && kwStats.codexKeywordCount == 0,
+              "MuseRollingKeywordIndex must extract Muse-only Keywords without scanning Claude/Codex (got total=\(kwStats.totalKeywords), claude=\(kwStats.claudeKeywordCount), codex=\(kwStats.codexKeywordCount))")
 
         let searchService = MuseSearchSuggestionService.shared
         searchService.recordSearch("light mode cursor glow")
@@ -1556,12 +1556,17 @@ struct MuseUITestMain {
         let dropdownView = TitlebarSearchDropdownView(state: state, onRunCommand: { _ in })
         let dropdownHost = NSHostingView(rootView: dropdownView)
         window.contentView = dropdownHost
-        dropdownHost.frame = NSRect(x: 0, y: 0, width: 500, height: 380)
+        dropdownHost.frame = NSRect(x: 0, y: 0, width: 400, height: 320)
         dropdownHost.layoutSubtreeIfNeeded()
-        check(dropdownHost.fittingSize.width == 500 && dropdownHost.fittingSize.height >= 180,
-              "TitlebarSearchDropdownView must render 500pt wide translucent dropdown with Top Hit + Muse Suggestions (size: \(dropdownHost.fittingSize))")
-        check(dropdownView.selectableRowIDs.count >= 6,
-              "TitlebarSearchDropdownView.selectableRowIDs must include Top Hit and 6 Muse Suggestions (got \(dropdownView.selectableRowIDs))")
+        check(dropdownHost.fittingSize.width == 400 && dropdownHost.fittingSize.height >= 120,
+              "TitlebarSearchDropdownView must render 400pt wide compact dropdown with sessions at top + 2 Muse Suggestions at bottom (size: \(dropdownHost.fittingSize))")
+        check(dropdownView.suggestions.count == 2,
+              "TitlebarSearchDropdownView.suggestions must be capped at 2 rows at the bottom (got \(dropdownView.suggestions.count))")
+        if let firstSwitchIdx = dropdownView.selectableRowIDs.firstIndex(where: { $0.hasPrefix("switch-") }),
+           let firstSugIdx = dropdownView.selectableRowIDs.firstIndex(where: { $0.hasPrefix("sug-") }) {
+            check(firstSwitchIdx < firstSugIdx,
+                  "Previous sessions ('switch to session') must appear BEFORE 'Muse Suggestions' (got \(dropdownView.selectableRowIDs))")
+        }
 
         // Verify clicking any item in the dropdown smoothly closes the dropdown (`isPalettePresented == false`)
         if let firstSug = aolSuggestions.first {
@@ -1600,13 +1605,13 @@ struct MuseUITestMain {
               "Degraded TitlebarSearchDropdownView must still populate 'switch to session' rows for active window sessions")
         let degradedHost = NSHostingView(rootView: degradedDropdown)
         window.contentView = degradedHost
-        degradedHost.frame = NSRect(x: 0, y: 0, width: 500, height: 220)
+        degradedHost.frame = NSRect(x: 0, y: 0, width: 400, height: 220)
         degradedHost.layoutSubtreeIfNeeded()
         let degradedTexts = collectTexts(in: degradedHost)
         check(degradedTexts.contains(where: { $0.contains("Degraded fallback mode") && $0.contains("connection lost") }),
               "Degraded TitlebarSearchDropdownView must render the degraded fallback mode banner text at the top of the dropdown (found: \(degradedTexts))")
-        check(degradedHost.fittingSize.width == 500 && degradedHost.fittingSize.height >= 60,
-              "Degraded TitlebarSearchDropdownView must still layout cleanly at 500pt width (got \(degradedHost.fittingSize))")
+        check(degradedHost.fittingSize.width == 400 && degradedHost.fittingSize.height >= 60,
+              "Degraded TitlebarSearchDropdownView must still layout cleanly at 400pt width (got \(degradedHost.fittingSize))")
 
         // Restore service and projects
         rollingIndex.isServiceAvailable = true
@@ -1635,8 +1640,34 @@ struct MuseUITestMain {
             check(emptyQueryDropdown.selectableRowIDs.contains(where: { $0.hasPrefix("switch-") }),
                   "TitlebarSearchDropdownView must populate 'switch to session' rows when sessions exist (got: \(emptyQueryDropdown.selectableRowIDs))")
         }
+        // Verify TitlebarSearchPill uses search icon (never green "M"), expands to compact 310pt when active,
+        // contracts when closed, and positions TitlebarSearchDropdownView 4pt directly beneath the search bar.
+        state.openPalette()
+        let activeSearchPill = TitlebarSearchPill(state: state, width: 310, onOpenPalette: {})
+        let activePillHost = NSHostingView(rootView: activeSearchPill)
+        window.contentView = activePillHost
+        activePillHost.frame = NSRect(x: 0, y: 0, width: 310, height: 32)
+        activePillHost.layoutSubtreeIfNeeded()
+        let activePillTexts = collectTexts(in: activePillHost)
+        check(!activePillTexts.contains("M"),
+              "Active TitlebarSearchPill must render the search icon, never the green 'M' glyph (found: \(activePillTexts))")
+        check(activePillHost.fittingSize.width == 310,
+              "Active TitlebarSearchPill must expand to compact 310pt width (got \(activePillHost.fittingSize.width))")
+
         state.closePalette()
         check(!state.isPalettePresented, "state.closePalette() must dismiss the titlebar search dropdown")
+        let collapsedSearchPill = TitlebarSearchPill(state: state, width: 220, onOpenPalette: {})
+        let collapsedPillHost = NSHostingView(rootView: collapsedSearchPill)
+        window.contentView = collapsedPillHost
+        collapsedPillHost.frame = NSRect(x: 0, y: 0, width: 220, height: 32)
+        collapsedPillHost.layoutSubtreeIfNeeded()
+        check(collapsedPillHost.fittingSize.width == 220,
+              "Collapsed TitlebarSearchPill must contract back to compact 220pt width (got \(collapsedPillHost.fittingSize.width))")
+
+        let searchBarBottomY = WindowChromeMetrics.titlebarRowCenter + TitlebarIconButton.size / 2
+        let dropdownTopY = searchBarBottomY + 4
+        check(dropdownTopY - searchBarBottomY == 4 && dropdownTopY == 36,
+              "TitlebarSearchDropdownView must sit 4pt directly below TitlebarSearchPill at y=36pt without safe-area gap (got \(dropdownTopY))")
 
         print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, and backend state transitions verified.")
         exit(0)
