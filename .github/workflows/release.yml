@@ -16,6 +16,11 @@ on:
         required: false
         default: false
         type: boolean
+  # Deferred-build sweeper: pushes skipped by the hourly cap are not lost.
+  # Every 5 minutes, if release capacity is available and the newest main
+  # commit has no release yet, build that newest commit (and only that one).
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: write
@@ -26,32 +31,51 @@ concurrency:
 
 jobs:
   rate-cap:
-    name: Hourly release cap (max 3/hour)
+    name: Rolling release cap (max 3 releases/hour, deferred build)
     runs-on: ubuntu-latest
     permissions:
-      actions: read
+      contents: read
     outputs:
       allowed: ${{ steps.cap.outputs.allowed }}
     steps:
-      - name: Count release runs started in the last hour
+      - name: Rolling-window capacity check
         id: cap
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Tag pushes and manual runs always pass; branch pushes are capped so
-          # rapid-fire commits cannot burn macOS runner minutes or credits.
+          # Rolling window: capacity = releases PUBLISHED in the last 60 minutes
+          # (skipped attempts never consume capacity, so the window always frees
+          # up exactly 60 minutes after each published release).
+          # Tag pushes and manual runs always pass.
           if [[ "${GITHUB_REF}" == refs/tags/* || "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             echo "allowed=true" >> "${GITHUB_OUTPUT}"; echo "cap bypass: tag/manual"; exit 0
           fi
-          SINCE="$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
-          COUNT="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?created=>=${SINCE}&per_page=100" --jq '.total_count')"
-          echo "release workflow runs in last hour (incl. this run): ${COUNT}"
-          if [[ "${COUNT}" -le 3 ]]; then
-            echo "allowed=true" >> "${GITHUB_OUTPUT}"
-          else
+          SINCE_EPOCH="$(date -u -d '1 hour ago' +%s)"
+          COUNT="$(gh release list --limit 30 --json publishedAt \
+            --jq "[.[] | select((.publishedAt | fromdateiso8601) > ${SINCE_EPOCH})] | length")"
+          echo "releases published in last 60 minutes: ${COUNT} (max 3)"
+          if [[ "${COUNT}" -ge 3 ]]; then
             echo "allowed=false" >> "${GITHUB_OUTPUT}"
-            echo "::notice::Hourly cap reached (${COUNT} runs in last hour, max 3). Skipping DMG build; the next push inside the window or a manual workflow_dispatch will rebuild."
+            echo "::notice::Rolling hourly cap reached (${COUNT} releases in last 60 min). This commit will be built by the 5-minute sweeper as soon as capacity opens."
+            exit 0
           fi
+          # Schedule (sweeper) runs build only when the newest main commit is
+          # not already the commit of the newest release.
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+            LATEST_TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')"
+            RELEASED_SHA=""
+            if [[ -n "${LATEST_TAG}" ]]; then
+              RELEASED_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${LATEST_TAG}" --jq '.object.sha')"
+            fi
+            echo "main HEAD=${HEAD_SHA} newest release ${LATEST_TAG}=${RELEASED_SHA}"
+            if [[ "${HEAD_SHA}" == "${RELEASED_SHA}" ]]; then
+              echo "allowed=false" >> "${GITHUB_OUTPUT}"
+              echo "newest commit already released; sweeper idle."
+              exit 0
+            fi
+          fi
+          echo "allowed=true" >> "${GITHUB_OUTPUT}"
 
   macos-dmg-release:
     needs: rate-cap
