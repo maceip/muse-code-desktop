@@ -211,16 +211,15 @@ enum AppTheme {
     /// appearance, white with a hairline in the light one.
     static let settingsCard = adaptive(dark: 0x212121, light: NSColor(white: 1, alpha: 1))
 
-    /// The window's own chrome: the band behind the traffic lights, the icon
-    /// rail, and the thin frame around the content card. One step lighter than
-    /// the sidebar so the card reads as set into it.
-    /// Translucent, so the window's vibrancy (`WindowVibrancy`) shows through
-    /// the way it does through a Finder sidebar.
-    static let chrome = translucent(dark: 0x333333, light: NSColor(white: 0.945, alpha: 1), alpha: 0.55)
+    /// The window's own chrome: the band behind the traffic lights, the top app
+    /// bar, the icon rail, and the thin frame around the content card. Unified with
+    /// the sidebar surface (`AppTheme.sidebar`) so the top app bar and the side
+    /// panel share one seamless translucent tint over `WindowVibrancy`.
+    static let chrome = translucent(dark: 0x212121, light: NSColor(white: 0.98, alpha: 1), alpha: 0.82)
 
-    /// The sessions sidebar and the settings menu column: the elevated surface's
-    /// tint, translucent so the window's vibrancy shows through.
-    static let sidebar = translucent(dark: 0x212121, light: NSColor(white: 0.98, alpha: 1), alpha: 0.6)
+    /// The sessions sidebar and the settings menu column: unified with `chrome`
+    /// so the top app bar and side panel match seamlessly.
+    static let sidebar = chrome
 
     /// The selected icon in the rail, and the selected row in the sidebar.
     static let railSelection = adaptive(dark: 0x444444, light: NSColor(white: 0.898, alpha: 1))
@@ -273,13 +272,14 @@ enum AppTheme {
     }
 }
 
-/// The sidebar column's fill: a translucent tint over the window's vibrancy,
-/// so the desktop behind the window shows through as it does in Finder.
+/// The sidebar column's fill: shares the unified `RootView` chrome/sidebar backdrop
+/// without stacking a second translucent tint on top of `AppTheme.chrome`, so the
+/// top app bar and the side panel render with the exact same color.
 struct SidebarColumnBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollContentBackground(.hidden)
-            .background(AppTheme.sidebar)
+            .background(Color.clear)
     }
 }
 

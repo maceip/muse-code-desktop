@@ -3,7 +3,7 @@
 //  MuseSafariExtension
 //
 //  Native WebExtension message handler for the bundled Muse Safari Bridge
-//  (`com.musecode.Pie.SafariExtension`). Bridges `browser.runtime.sendNativeMessage`
+//  (`xyz.hieunguyen.PiCode.SafariExtension`). Bridges `browser.runtime.sendNativeMessage`
 //  from `background.js` directly to the local Muse Safari Bridge queue and HTTP
 //  coordinator so the Muse agent can persistently own a Safari tab, navigate,
 //  inspect the DOM, fill forms, click elements, and extract values.
@@ -15,7 +15,7 @@ import os.log
 
 @objc(SafariWebExtensionHandler)
 final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
-    private let logger = Logger(subsystem: "com.musecode.Pie.SafariExtension", category: "Bridge")
+    private let logger = Logger(subsystem: "xyz.hieunguyen.PiCode.SafariExtension", category: "Bridge")
 
     /// Dynamically resolves the shared Safari bridge directory without hardcoded user paths.
     private static func resolveBridgeDirectory() -> URL {
@@ -54,7 +54,7 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         // Persist latest owned-tab state from background.js
         var tabState: [String: Any] = [
             "updatedAt": ISO8601DateFormatter().string(from: Date()),
-            "extensionBundleId": "com.musecode.Pie.SafariExtension"
+            "extensionBundleId": "xyz.hieunguyen.PiCode.SafariExtension"
         ]
         if let tab = message["tabState"] as? [String: Any] {
             for (k, v) in tab { tabState[k] = v }
@@ -93,7 +93,7 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             reply(context: context, payload: [
                 "ok": true,
                 "type": "pong",
-                "extension": "com.musecode.Pie.SafariExtension"
+                "extension": "xyz.hieunguyen.PiCode.SafariExtension"
             ])
         }
     }

@@ -396,6 +396,9 @@ final class AppState {
 
     init() {
         expandedProjects = preferences.expandedProjects
+        if preferences.safariBridgeEnabled {
+            MuseSafariBridgeService.shared.startServerIfNeeded(port: preferences.safariBridgePort)
+        }
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -409,6 +412,9 @@ final class AppState {
 
     func launch() async {
         phase = .starting
+        if preferences.safariBridgeEnabled {
+            MuseSafariBridgeService.shared.startServerIfNeeded(port: preferences.safariBridgePort)
+        }
         updater.startChecking()
         await harnesses.refresh()
         synchronizeProviders()

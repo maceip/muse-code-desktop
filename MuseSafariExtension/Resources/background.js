@@ -9,7 +9,7 @@
  * commands to `content.js` inside the owned tab.
  */
 
-const NATIVE_APP_ID = "com.musecode.Pie.SafariExtension";
+const NATIVE_APP_ID = "xyz.hieunguyen.PiCode.SafariExtension";
 const DEFAULT_BRIDGE_PORT = 47635;
 
 let ownedTabId = null;

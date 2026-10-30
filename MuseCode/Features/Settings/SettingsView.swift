@@ -47,7 +47,7 @@ struct SettingsView: View {
         }
         .frame(width: 256)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(AppTheme.sidebar)
+        .background(Color.clear)
     }
 
     private func settingsMenuRow(_ tab: SettingsTab) -> some View {

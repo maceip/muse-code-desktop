@@ -262,6 +262,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Pie;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Muse Code coordinates with Safari so the Muse agent can navigate, inspect, and interact with an owned Safari tab.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muse Code uses your microphone for voice transcription in the composer.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Muse Code uses macOS system speech recognition as a fast on-device backup when Muse voice transcription is unavailable.";
@@ -294,6 +295,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Pie;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Muse Code coordinates with Safari so the Muse agent can navigate, inspect, and interact with an owned Safari tab.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muse Code uses your microphone for voice transcription in the composer.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Muse Code uses macOS system speech recognition as a fast on-device backup when Muse voice transcription is unavailable.";

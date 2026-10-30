@@ -48,8 +48,8 @@ struct MuseSafariDOMInspection: Equatable, Sendable {
 @MainActor
 final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
     static let shared = MuseSafariBridgeService()
-    static let extensionBundleIdentifier = "com.musecode.Pie.SafariExtension"
-    static let skillName = "safari-browser"
+    nonisolated static let extensionBundleIdentifier = "xyz.hieunguyen.PiCode.SafariExtension"
+    nonisolated static let skillName = "safari-browser"
 
     private(set) var isServerRunning: Bool = false
     private(set) var listeningPort: Int = 47635
@@ -163,35 +163,117 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         }
     }
 
-    private static func querySafariExtensionState() async -> (enabled: Bool, message: String) {
-        await withCheckedContinuation { continuation in
-            SFSafariExtensionManager.getStateOfSafariExtension(withIdentifier: Self.extensionBundleIdentifier) { state, error in
-                if let state {
-                    if state.isEnabled {
-                        continuation.resume(returning: (true, "Enabled in Safari (\(Self.extensionBundleIdentifier))"))
-                    } else {
-                        continuation.resume(returning: (false, "Installed — enable “Muse Safari Bridge” in Safari Settings → Extensions"))
-                    }
-                } else {
-                    let bundled = Self.locateBundledAppexURL() != nil
-                    if bundled {
-                        continuation.resume(returning: (false, "Bundled in Pie.app — open Safari Settings → Extensions to enable"))
-                    } else {
-                        let detail = error?.localizedDescription ?? "Extension not registered yet"
-                        continuation.resume(returning: (false, detail))
-                    }
-                }
+    nonisolated private static func queryPlugInKitState() -> (registered: Bool, enabled: Bool) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        proc.arguments = ["-m", "-v", "-i", Self.extensionBundleIdentifier]
+        let outPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            let registered = output.contains(Self.extensionBundleIdentifier)
+            let enabled = output.split(separator: "\n").contains { line in
+                line.trimmingCharacters(in: .whitespaces).hasPrefix("+")
+                    && line.contains(Self.extensionBundleIdentifier)
             }
+            return (registered, enabled)
+        } catch {
+            return (false, false)
         }
     }
 
+    private static func querySafariExtensionState() async -> (enabled: Bool, message: String) {
+        let pkState = await Task.detached(priority: .utility) {
+            Self.queryPlugInKitState()
+        }.value
+
+        let isRunningInsideAppBundle = Bundle.main.bundlePath.hasSuffix(".app")
+        if isRunningInsideAppBundle {
+            final class ContinuationBox: @unchecked Sendable {
+                private let lock = NSLock()
+                private var continuation: CheckedContinuation<(enabled: Bool, message: String)?, Never>?
+                init(_ c: CheckedContinuation<(enabled: Bool, message: String)?, Never>) {
+                    self.continuation = c
+                }
+                func resume(_ value: (enabled: Bool, message: String)?) {
+                    lock.lock()
+                    let c = continuation
+                    continuation = nil
+                    lock.unlock()
+                    c?.resume(returning: value)
+                }
+            }
+
+            let sfResult: (enabled: Bool, message: String)? = await withCheckedContinuation { continuation in
+                let box = ContinuationBox(continuation)
+                SFSafariExtensionManager.getStateOfSafariExtension(withIdentifier: Self.extensionBundleIdentifier) { state, _ in
+                    if let state {
+                        if state.isEnabled {
+                            box.resume((true, "Enabled in Safari (\(Self.extensionBundleIdentifier))"))
+                        } else {
+                            box.resume((false, "Installed — enable “Muse Safari Bridge” in Safari Settings → Extensions"))
+                        }
+                    } else {
+                        box.resume(nil)
+                    }
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.8) {
+                    box.resume(nil)
+                }
+            }
+            if let sfResult {
+                return sfResult
+            }
+        }
+
+        if pkState.registered {
+            if pkState.enabled {
+                return (
+                    true,
+                    "Registered & enabled in PlugInKit (\(Self.extensionBundleIdentifier)) — in Safari Settings → Developer, enable “Allow unsigned extensions” if needed, then enable “Muse Safari Bridge” in Extensions"
+                )
+            }
+            return (
+                false,
+                "Registered in PlugInKit (\(Self.extensionBundleIdentifier)) — enable “Muse Safari Bridge” in Safari Settings → Extensions"
+            )
+        }
+
+        let bundled = Self.locateBundledAppexURL() != nil
+        if bundled {
+            return (
+                false,
+                "Bundled (\(Self.extensionBundleIdentifier)) — click “Open Safari Extensions…” to register and enable"
+            )
+        }
+        return (false, "Extension not registered yet")
+    }
+
     func openSafariExtensionPreferences() {
+        if let appexURL = Self.locateBundledAppexURL(), appexURL.pathExtension == "appex" {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+            p.arguments = ["-a", appexURL.path]
+            try? p.run()
+            p.waitUntilExit()
+        }
         SFSafariApplication.showPreferencesForExtension(withIdentifier: Self.extensionBundleIdentifier) { [weak self] error in
             Task { @MainActor in
-                if let error {
-                    // Fallback: launch Safari so the user can open Settings -> Extensions
-                    NSWorkspace.shared.open(URL(string: "https://www.apple.com/safari/")!)
-                    self?.lastActionMessage = "Opened Safari (\(error.localizedDescription)). Go to Safari → Settings → Extensions to enable Muse Safari Bridge."
+                if error != nil {
+                    let script = """
+                    tell application "Safari"
+                        activate
+                    end tell
+                    """
+                    let proc = Process()
+                    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    proc.arguments = ["-e", script]
+                    try? proc.run()
+                    self?.lastActionMessage = "Activated Safari. Open Safari → Settings (⌘,) → Extensions to enable Muse Safari Bridge (if hidden, check “Allow unsigned extensions” in Safari → Settings → Developer)."
                 } else {
                     self?.lastActionMessage = "Opened Safari Extensions preferences."
                 }
@@ -530,15 +612,31 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
                 ownedTab.tabId = 1
             }
             ownedTab.status = "complete"
-            ownedTab.transport = "webkit-dom"
             ownedTab.lastHeartbeat = Date()
+            let syncSafari = (command["syncSafariWindow"] as? Bool) ?? (command["html"] == nil)
             if let urlString = command["url"] as? String, !urlString.isEmpty {
-                _ = await loadURLOrHTMLInPersistentTab(urlString: urlString, html: command["html"] as? String)
+                _ = await loadURLOrHTMLInPersistentTab(
+                    urlString: urlString,
+                    html: command["html"] as? String,
+                    syncRealSafariTab: syncSafari
+                )
+            } else if syncSafari, let safariTab = await Self.syncLiveSafariTab(navigateToURL: nil) {
+                _ = await loadURLOrHTMLInPersistentTab(
+                    urlString: safariTab.url,
+                    html: safariTab.html,
+                    syncRealSafariTab: false
+                )
+                ownedTab.transport = "safari-live+webkit-dom"
+                if !safariTab.title.isEmpty {
+                    ownedTab.title = safariTab.title
+                }
             } else if ownedTab.url.isEmpty {
                 _ = await loadURLOrHTMLInPersistentTab(
                     urlString: "https://scholar.google.com",
-                    html: command["html"] as? String
+                    html: command["html"] as? String,
+                    syncRealSafariTab: false
                 )
+                ownedTab.transport = syncSafari ? "safari-live+webkit-dom" : "webkit-dom"
             }
             lastActionMessage = "Claimed tab #\(ownedTab.tabId ?? 1) (\(ownedTab.url))"
             return [
@@ -574,10 +672,12 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
             }
             let targetURL = (command["url"] as? String) ?? "https://www.google.com"
             let htmlOverride = command["html"] as? String
-            let loaded = await loadURLOrHTMLInPersistentTab(urlString: targetURL, html: htmlOverride)
-            if (command["openInSafariApp"] as? Bool) == true, let url = URL(string: targetURL) {
-                NSWorkspace.shared.open(url)
-            }
+            let syncSafari = (command["syncSafariWindow"] as? Bool) ?? (htmlOverride == nil)
+            let loaded = await loadURLOrHTMLInPersistentTab(
+                urlString: targetURL,
+                html: htmlOverride,
+                syncRealSafariTab: syncSafari
+            )
             let domResp = await evaluateContentBridgeCommand(["action": "inspectDOM"], in: webView)
             return [
                 "ok": loaded,
@@ -586,6 +686,7 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
                     "tabId": ownedTab.tabId ?? 1,
                     "url": ownedTab.url,
                     "title": ownedTab.title,
+                    "transport": ownedTab.transport,
                     "dom": domResp["data"] ?? [:]
                 ]
             ]
@@ -612,17 +713,39 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         }
     }
 
-    private func loadURLOrHTMLInPersistentTab(urlString: String, html: String?) async -> Bool {
+    private func loadURLOrHTMLInPersistentTab(
+        urlString: String,
+        html: String?,
+        syncRealSafariTab: Bool = false
+    ) async -> Bool {
         let webView = ensurePersistentWebView()
         ownedTab.status = "loading"
-        ownedTab.transport = "webkit-dom"
+        ownedTab.transport = syncRealSafariTab ? "safari-live+webkit-dom" : "webkit-dom"
         ownedTab.lastHeartbeat = Date()
+
+        var resolvedHTML = html
+        var resolvedURL = urlString
+        var safariSyncedTitle: String?
+
+        if syncRealSafariTab && (resolvedHTML == nil || resolvedHTML?.isEmpty == true) {
+            if let liveTab = await Self.syncLiveSafariTab(navigateToURL: urlString) {
+                if !liveTab.url.isEmpty {
+                    resolvedURL = liveTab.url
+                }
+                if !liveTab.title.isEmpty {
+                    safariSyncedTitle = liveTab.title
+                }
+                if !liveTab.html.isEmpty {
+                    resolvedHTML = liveTab.html
+                }
+            }
+        }
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             navigationContinuations.append(continuation)
-            if let html, !html.isEmpty {
-                webView.loadHTMLString(html, baseURL: URL(string: urlString))
-            } else if let url = URL(string: urlString) {
+            if let resolvedHTML, !resolvedHTML.isEmpty {
+                webView.loadHTMLString(resolvedHTML, baseURL: URL(string: resolvedURL))
+            } else if let url = URL(string: resolvedURL) {
                 webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12))
             } else {
                 let waiters = self.navigationContinuations
@@ -631,8 +754,11 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
                 return
             }
 
+            let timeoutNs: UInt64 = (resolvedHTML != nil && !(resolvedHTML?.isEmpty ?? true))
+                ? 1_500_000_000
+                : 6_000_000_000
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                try? await Task.sleep(nanoseconds: timeoutNs)
                 if !self.navigationContinuations.isEmpty {
                     let waiters = self.navigationContinuations
                     self.navigationContinuations.removeAll()
@@ -644,12 +770,91 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         if let scriptSource = Self.loadContentScriptSource() {
             _ = try? await webView.evaluateJavaScript(scriptSource)
         }
-        ownedTab.url = webView.url?.absoluteString ?? urlString
-        ownedTab.title = (try? await webView.evaluateJavaScript("document.title") as? String) ?? webView.title ?? ""
+        ownedTab.url = webView.url?.absoluteString ?? resolvedURL
+        let jsTitle = (try? await webView.evaluateJavaScript("document.title") as? String) ?? webView.title ?? ""
+        ownedTab.title = !jsTitle.isEmpty ? jsTitle : (safariSyncedTitle ?? "")
         ownedTab.status = "complete"
         ownedTab.lastHeartbeat = Date()
         lastActionMessage = "Loaded \(ownedTab.title.isEmpty ? ownedTab.url : ownedTab.title)"
         return true
+    }
+
+    /// Drives the real running `Safari.app` window via AppleEvents:
+    /// - Navigates the active tab of the front Safari window (or opens a window if none exists) when `navigateToURL` is provided.
+    /// - Waits for the page to render and returns its live `(url, title, html)` so `MuseSafariBridgeService` and `Safari.app` stay in lockstep.
+    nonisolated private static func syncLiveSafariTab(navigateToURL: String?) async -> (url: String, title: String, html: String)? {
+        await Task.detached(priority: .userInitiated) {
+            let escapedURL = (navigateToURL ?? "")
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            let appleScriptSource: String
+            if let navigateToURL, !navigateToURL.isEmpty {
+                appleScriptSource = """
+                tell application "Safari"
+                    if not running then launch
+                    if (count of windows) is 0 then
+                        make new document with properties {URL:"\(escapedURL)"}
+                    else
+                        set URL of current tab of front window to "\(escapedURL)"
+                    end if
+                    repeat 25 times
+                        delay 0.15
+                        try
+                            set src to source of current tab of front window
+                            if (length of src) > 200 then exit repeat
+                        end try
+                    end repeat
+                    set tUrl to URL of current tab of front window
+                    set tTitle to name of current tab of front window
+                    set tSource to source of current tab of front window
+                    return tUrl & "\\n---MUSE_SEP---\\n" & tTitle & "\\n---MUSE_SEP---\\n" & tSource
+                end tell
+                """
+            } else {
+                appleScriptSource = """
+                tell application "Safari"
+                    if not running then launch
+                    if (count of windows) is 0 then
+                        make new document with properties {URL:"https://scholar.google.com"}
+                        delay 1.0
+                    end if
+                    set tUrl to URL of current tab of front window
+                    set tTitle to name of current tab of front window
+                    set tSource to source of current tab of front window
+                    return tUrl & "\\n---MUSE_SEP---\\n" & tTitle & "\\n---MUSE_SEP---\\n" & tSource
+                end tell
+                """
+            }
+
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            proc.arguments = ["-e", appleScriptSource]
+            let outPipe = Pipe()
+            proc.standardOutput = outPipe
+            proc.standardError = Pipe()
+            do {
+                try proc.run()
+                let killItem = DispatchWorkItem {
+                    if proc.isRunning {
+                        proc.terminate()
+                    }
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2.5, execute: killItem)
+                let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                killItem.cancel()
+                guard proc.terminationStatus == 0 else { return nil }
+                guard let output = String(data: data, encoding: .utf8) else { return nil }
+                let parts = output.components(separatedBy: "\n---MUSE_SEP---\n")
+                guard parts.count >= 3 else { return nil }
+                let url = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                let html = parts.dropFirst(2).joined(separator: "\n---MUSE_SEP---\n")
+                return (url: url, title: title, html: html)
+            } catch {
+                return nil
+            }
+        }.value
     }
 
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -821,7 +1026,7 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
 
         # Muse Safari Bridge (`safari-browser`)
 
-        This skill provides a persistent JavaScript bridge into Safari via the bundled **Muse Safari Bridge** Web Extension (`com.musecode.Pie.SafariExtension`) and local bridge coordinator (`http://127.0.0.1:\(defaultPort)`).
+        This skill provides a persistent JavaScript bridge into Safari via the bundled **Muse Safari Bridge** Web Extension (`xyz.hieunguyen.PiCode.SafariExtension`) and local bridge coordinator (`http://127.0.0.1:\(defaultPort)`).
 
         It allows you to claim and own a dedicated Safari tab, navigate to pages, inspect live DOM structure, retrieve element values, fill out forms (with full React/Vue/DOM input & change events), click buttons or links, evaluate JavaScript in the page, and extract structured search results (such as Google Scholar).
 

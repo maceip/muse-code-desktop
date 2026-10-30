@@ -451,11 +451,24 @@ struct SessionIndex {
                 }
             }
 
-            for line in lines {
+            func isRelevantJSONText(_ text: String) -> Bool {
+                text.contains("runtime.session.metadata")
+                    || text.contains("runtime.session.route_facts")
+                    || text.contains("session.name.changed")
+                    || text.contains("\"started\"")
+                    || text.contains("assistant_message_committed")
+            }
+
+            for (idx, line) in lines.enumerated() {
+                guard let lineStr = String(bytes: line, encoding: .utf8) else { continue }
+                if idx > 2 && !isRelevantJSONText(lineStr) {
+                    continue
+                }
                 guard let record = try? JSONCoding.decode(Data(line)) else { continue }
                 if let children = record.array("children") {
                     for child in children {
                         if let recordJSON = child.string("record_json"),
+                           isRelevantJSONText(recordJSON),
                            let nested = try? JSONCoding.decode(Data(recordJSON.utf8)) {
                             inspect(nested)
                         }

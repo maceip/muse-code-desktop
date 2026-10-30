@@ -180,6 +180,7 @@ struct RootView: View {
         .overlay(alignment: .bottom) { toast }
         .overlay(alignment: .top) { errorBanner.padding(.top, WindowChromeMetrics.titlebarHeight) }
         .overlay { ExtensionDialogHost(state: state) }
+        .coordinateSpace(name: "picode-root-window")
     }
 
     private func openPalette() {
@@ -202,13 +203,19 @@ struct RootView: View {
                     onOpenSettings: { state.openSettings(tab: state.settingsTab) }
                 )
                 .frame(width: sidebarWidth)
+                .clipped()
                 .layoutPriority(1)
                 .transition(.move(edge: .leading).combined(with: .opacity))
 
                 paneDivider { translation in
                     if sidebarWidthAtDragStart == nil { sidebarWidthAtDragStart = sidebarWidth }
                     let start = sidebarWidthAtDragStart ?? sidebarWidth
-                    sidebarWidth = min(380, max(220, start + translation))
+                    let maxSidebarW = max(240, min(420, (detailPaneSize.width + sidebarWidth) - 520))
+                    var tx = Transaction()
+                    tx.disablesAnimations = true
+                    withTransaction(tx) {
+                        sidebarWidth = min(maxSidebarW, max(136, (start + translation).rounded()))
+                    }
                 } onEnded: {
                     sidebarWidthAtDragStart = nil
                 }
@@ -354,9 +361,13 @@ struct RootView: View {
     /// Where the titlebar controls start: when the sidebar is expanded, the
     /// sidebar toggle button sits on the trailing edge of the sidebar (just
     /// inside its right border), with the divider aligned to `cardInset + sidebarWidth`.
+    /// Clamped so narrowing the sidebar below 160pt never collides with the macOS traffic lights.
     private var controlsLeading: CGFloat {
         if isSidebarVisible {
-            return WindowChromeMetrics.cardInset + sidebarWidth - TitlebarIconButton.size - 8
+            return max(
+                WindowChromeMetrics.sidebarToggleLeading,
+                WindowChromeMetrics.cardInset + sidebarWidth - TitlebarIconButton.size - 8
+            )
         }
         return WindowChromeMetrics.sidebarToggleLeading
     }
@@ -409,7 +420,12 @@ struct RootView: View {
                                     inspectorWidthAtDragStart = inspectorWidth
                                 }
                                 let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
-                                inspectorWidth = min(480, max(280, startingWidth - translation))
+                                let maxInspectorW = max(280, min(520, detailPaneSize.width - 320))
+                                var tx = Transaction()
+                                tx.disablesAnimations = true
+                                withTransaction(tx) {
+                                    inspectorWidth = min(maxInspectorW, max(220, (startingWidth - translation).rounded()))
+                                }
                             },
                             onEnded: {
                                 inspectorWidthAtDragStart = nil
@@ -709,8 +725,8 @@ enum RootSheet: Identifiable {
 }
 
 /// Stateful split-pane resize divider that tracks both hover and active drag state
-/// so the `resizeLeftRight` cursor never gets stuck on the global `NSCursor` stack
-/// when a pane collapses or when the pointer slips off the divider mid-drag.
+/// in the fixed window coordinate space (`picode-root-window`) so moving the divider
+/// never shifts the gesture's local origin and never causes drag feedback oscillation/tremor.
 struct SplitPaneResizeHandle: View {
     var width: CGFloat
     var hitInset: CGFloat
@@ -733,7 +749,7 @@ struct SplitPaneResizeHandle: View {
                 syncCursor()
             }
             .gesture(
-                DragGesture(minimumDistance: 0)
+                DragGesture(minimumDistance: 0, coordinateSpace: .named("picode-root-window"))
                     .onChanged { value in
                         if !isDragging {
                             isDragging = true
@@ -1010,7 +1026,6 @@ struct TitlebarSearchPill: View {
             }
         }
         .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: width)
         .animation(.easeOut(duration: 0.12), value: isActive)
         .onChange(of: isActive) { _, active in
             isSearchFieldFocused = active

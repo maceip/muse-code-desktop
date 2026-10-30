@@ -1925,7 +1925,32 @@ struct MuseUITestMain {
         check(safariSettingsTexts.contains("https://scholar.google.com"),
               "SafariBridgeSettingsTab must mount the target URL field and controls (found: \(safariSettingsTexts))")
 
-        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, 3-column bounded inspector layout, bundled Safari Web Extension + persistent JS DOM bridge + Muse CLI skill, and backend state transitions verified.")
+        // Verify live Safari.app window synchronization (`syncLiveSafariTab`)
+        let liveClaim = await safariBridge.executeCommand([
+            "action": "claimTab",
+            "syncSafariWindow": true
+        ])
+        check((liveClaim["ok"] as? Bool) == true && safariBridge.ownedTab.transport.contains("safari"),
+              "Live Safari.app claimTab must synchronize with running Safari window (got: \(liveClaim))")
+
+        // Verify top app bar (`AppTheme.chrome`) and side panel (`AppTheme.sidebar`) share identical surface colors
+        for appearanceName in [NSAppearance.Name.aqua, NSAppearance.Name.darkAqua] {
+            if let app = NSAppearance(named: appearanceName) {
+                app.performAsCurrentDrawingAppearance {
+                    let c1 = NSColor(AppTheme.chrome).usingColorSpace(.sRGB)!
+                    let c2 = NSColor(AppTheme.sidebar).usingColorSpace(.sRGB)!
+                    check(
+                        abs(c1.redComponent - c2.redComponent) < 0.001
+                        && abs(c1.greenComponent - c2.greenComponent) < 0.001
+                        && abs(c1.blueComponent - c2.blueComponent) < 0.001
+                        && abs(c1.alphaComponent - c2.alphaComponent) < 0.001,
+                        "AppTheme.chrome and AppTheme.sidebar must match in \(appearanceName.rawValue)"
+                    )
+                }
+            }
+        }
+
+        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, 3-column bounded inspector layout, unified top app bar + sidebar surface, bundled Safari Web Extension + persistent JS DOM bridge + Muse CLI skill, and backend state transitions verified.")
         exit(0)
     }
 }

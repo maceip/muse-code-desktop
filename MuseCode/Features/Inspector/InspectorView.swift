@@ -70,17 +70,43 @@ struct MuseRightSidebarPanel: View {
     var controller: PiSessionController
     var initiallyExpandMessages: Bool = false
 
+    @State private var enterExitPhase: ComposerEnterExitPhase = .hidden
+    @State private var animationTask: Task<Void, Never>?
+
+    private var overviewCardView: some View {
+        MuseOverviewCard(state: state, controller: controller)
+            .frame(maxWidth: .infinity)
+            .scaleEffect(
+                x: enterExitPhase.topPillScaleX,
+                y: enterExitPhase.topPillScaleY,
+                anchor: .top
+            )
+            .blur(radius: enterExitPhase.topPillBlur)
+            .offset(y: enterExitPhase.topPillOffsetY)
+            .opacity(enterExitPhase.topPillOpacity)
+    }
+
+    private var messagesCardView: some View {
+        MuseAgentMessagesCard(
+            state: state,
+            controller: controller,
+            initiallyExpanded: initiallyExpandMessages
+        )
+        .frame(maxWidth: .infinity)
+        .scaleEffect(
+            x: enterExitPhase.subcontainerScaleX,
+            y: enterExitPhase.subcontainerScaleY,
+            anchor: .top
+        )
+        .offset(y: enterExitPhase.subcontainerOffsetY)
+        .blur(radius: enterExitPhase.subcontainerBlur)
+        .opacity(enterExitPhase.subcontainerOpacity)
+    }
+
     private var cardsStack: some View {
         VStack(spacing: 8) {
-            MuseOverviewCard(state: state, controller: controller)
-                .frame(maxWidth: .infinity)
-
-            MuseAgentMessagesCard(
-                state: state,
-                controller: controller,
-                initiallyExpanded: initiallyExpandMessages
-            )
-            .frame(maxWidth: .infinity)
+            overviewCardView
+            messagesCardView
         }
         .padding(10)
     }
@@ -91,6 +117,49 @@ struct MuseRightSidebarPanel: View {
 
             ScrollView(.vertical, showsIndicators: false) {
                 cardsStack
+            }
+        }
+        .onAppear {
+            playInspectorEnterAnimation()
+        }
+        .onDisappear {
+            animationTask?.cancel()
+            enterExitPhase = .hidden
+        }
+        .onChange(of: state.composerEnterAnimationTick) { _, _ in
+            playInspectorEnterAnimation()
+        }
+        .onChange(of: state.newSessionResetTick) { _, _ in
+            playInspectorEnterAnimation()
+        }
+    }
+
+    private func playInspectorEnterAnimation() {
+        animationTask?.cancel()
+        if state.preferences.reducedMotionOverride == true {
+            enterExitPhase = .settled
+            return
+        }
+        enterExitPhase = .hidden
+        animationTask = Task { @MainActor in
+            // Stage 1: Overview card snaps in crisp at 100%; Muse Agent Messages card materializes
+            // as a compact, blurred glass capsule centered directly beneath Overview.
+            withAnimation(.spring(response: 0.18, dampingFraction: 0.88)) {
+                enterExitPhase = .pillWithBlurredCapsule
+            }
+            try? await Task.sleep(nanoseconds: 95_000_000)
+            guard !Task.isCancelled else { return }
+
+            // Stage 2: Muse Agent Messages card expands outward & downward from `.top` anchor to 96%.
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.84)) {
+                enterExitPhase = .subcontainerExpanding
+            }
+            try? await Task.sleep(nanoseconds: 135_000_000)
+            guard !Task.isCancelled else { return }
+
+            // Stage 3: Both cards settle crisp at 100% scale, 0 blur, and 100% opacity.
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                enterExitPhase = .settled
             }
         }
     }
