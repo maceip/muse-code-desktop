@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Muse Safari Bridge Options</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      max-width: 520px;
+      margin: 32px auto;
+      padding: 0 20px;
+      line-height: 1.5;
+    }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    input {
+      width: 140px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      font-size: 13px;
+    }
+    button {
+      padding: 6px 14px;
+      border-radius: 6px;
+      border: none;
+      background: #0077ff;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      margin-left: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h2>Muse Safari Bridge Settings</h2>
+  <p>Configure the local HTTP bridge port used by Pie.app and the Muse CLI skill.</p>
+  <div>
+    <label for="portInput">Local Bridge Port</label>
+    <input id="portInput" type="number" min="1024" max="65535" value="47635">
+    <button id="saveBtn">Save</button>
+    <span id="savedMsg" style="margin-left:8px;color:#0077ff;display:none;">Saved</span>
+  </div>
+  <script src="options.js" type="module"></script>
+</body>
+</html>

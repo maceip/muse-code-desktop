@@ -136,6 +136,12 @@ final class PreferencesStore {
     private(set) var sessionIconsByKey: [String: String]
     /// User-selected 4–5 character session shorthand labels, keyed by `session.id`.
     private(set) var sessionShorthandsByKey: [String: String]
+    /// Whether the persistent Safari JavaScript bridge server is enabled.
+    var safariBridgeEnabled: Bool
+    /// Local loopback TCP port for the persistent Safari JavaScript bridge.
+    var safariBridgePort: Int
+    /// Whether the Safari bridge automatically claims the active tab when an agent command runs.
+    var safariBridgeAutoClaimTab: Bool
 
     private let defaults: UserDefaults
 
@@ -174,6 +180,10 @@ final class PreferencesStore {
         }
         sessionIconsByKey = defaults.dictionary(forKey: Keys.sessionIcons) as? [String: String] ?? [:]
         sessionShorthandsByKey = defaults.dictionary(forKey: Keys.sessionShorthands) as? [String: String] ?? [:]
+        safariBridgeEnabled = defaults.object(forKey: Keys.safariBridgeEnabled) as? Bool ?? true
+        let storedPort = defaults.object(forKey: Keys.safariBridgePort) as? Int ?? 47635
+        safariBridgePort = (1024...65535).contains(storedPort) ? storedPort : 47635
+        safariBridgeAutoClaimTab = defaults.object(forKey: Keys.safariBridgeAutoClaimTab) as? Bool ?? true
     }
 
     func persist() {
@@ -205,6 +215,9 @@ final class PreferencesStore {
         }
         defaults.set(sessionIconsByKey, forKey: Keys.sessionIcons)
         defaults.set(sessionShorthandsByKey, forKey: Keys.sessionShorthands)
+        defaults.set(safariBridgeEnabled, forKey: Keys.safariBridgeEnabled)
+        defaults.set(safariBridgePort, forKey: Keys.safariBridgePort)
+        defaults.set(safariBridgeAutoClaimTab, forKey: Keys.safariBridgeAutoClaimTab)
     }
 
     // MARK: - Per-session Icon & Shorthand
@@ -298,6 +311,9 @@ final class PreferencesStore {
         static let projectSettings = "projectSettings"
         static let sessionIcons = "sessionIconsByKey"
         static let sessionShorthands = "sessionShorthandsByKey"
+        static let safariBridgeEnabled = "safariBridgeEnabled"
+        static let safariBridgePort = "safariBridgePort"
+        static let safariBridgeAutoClaimTab = "safariBridgeAutoClaimTab"
     }
 }
 

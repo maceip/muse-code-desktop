@@ -232,13 +232,13 @@ struct ComposerView: View {
             VStack(alignment: .leading, spacing: isConsolidatedBar ? 0 : ComposerMetrics.companionGap) {
                 morphingTopInputOrOrb
                     .scaleEffect(
-                        x: enterExitPhase.topPillScaleX,
-                        y: enterExitPhase.topPillScaleY,
+                        x: isConsolidatedBar ? 1.0 : enterExitPhase.topPillScaleX,
+                        y: isConsolidatedBar ? 1.0 : enterExitPhase.topPillScaleY,
                         anchor: .top
                     )
-                    .blur(radius: enterExitPhase.topPillBlur)
-                    .offset(y: enterExitPhase.topPillOffsetY)
-                    .opacity(enterExitPhase.topPillOpacity)
+                    .blur(radius: isConsolidatedBar ? 0.0 : enterExitPhase.topPillBlur)
+                    .offset(y: isConsolidatedBar ? 0.0 : enterExitPhase.topPillOffsetY)
+                    .opacity(isConsolidatedBar ? 1.0 : enterExitPhase.topPillOpacity)
                     .zIndex(10)
 
                 // Bottom Frosted Liquid Glass Subcontainer — stays mounted in the layout during Voice Orb mode so the window/VStack height never jumps vertically (`1028 (2).mp4`)

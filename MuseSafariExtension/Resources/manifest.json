@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Muse Safari Bridge",
+  "description": "Persistent JavaScript DOM & tab control bridge allowing the Muse coding agent to own a Safari tab, navigate pages, fill forms, and inspect the DOM.",
+  "version": "1.5.1",
+
+  "icons": {
+    "512": "images/icon.svg"
+  },
+
+  "options_ui": {
+    "page": "options.html"
+  },
+
+  "action": {
+    "default_title": "Muse Safari Bridge",
+    "default_popup": "popup.html"
+  },
+
+  "permissions": [
+    "nativeMessaging",
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+
+  "host_permissions": [
+    "*://*/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+
+  "background": {
+    "scripts": [ "background.js" ],
+    "type": "module",
+    "persistent": false
+  },
+
+  "content_scripts": [
+    {
+      "matches": [ "*://*/*" ],
+      "js": [ "content.js" ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

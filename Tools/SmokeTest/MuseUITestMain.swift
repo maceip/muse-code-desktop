@@ -834,7 +834,6 @@ struct MuseUITestMain {
                                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                                         .stroke(AppTheme.cardStroke, lineWidth: 1)
                                 )
-                                .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 0)
                         }
                         .padding(.top, 10)
@@ -1707,7 +1706,226 @@ struct MuseUITestMain {
         unsetenv("MUSE_CONFIG_DIR")
         unsetenv("MUSE_SESSION_DIR")
 
-        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, and backend state transitions verified.")
+        // 31. Verify 3-column RootView layout when InspectorView has dense Overview + Muse Agent Messages (`Computer Screen.jpg` regression test):
+        //     - Top bar (`titlebarControlsBar`) is never pushed off the top of a 720pt window
+        //     - Chat input box (`ComposerView`) is never pushed off the bottom of a 720pt window
+        //     - Third column (`InspectorView`) scrolls vertically inside `detailPane` and never forces `RootView.fittingSize.height > 720`
+        let activeCtrl = state.activeController ?? controller
+        activeCtrl.subagents = (1...6).map { idx in
+            MuseSubagentInfo(
+                id: "sub-\(idx)",
+                childSessionId: "child-\(idx)",
+                commandId: "cmd-\(idx)",
+                role: "researcher",
+                title: "Investigate part \(idx) of the architecture question",
+                objective: "Map evidence for part \(idx)",
+                status: .completed,
+                summary: "Completed investigation \(idx)"
+            )
+        }
+        activeCtrl.backgroundTasks = [
+            MuseBackgroundTaskInfo(
+                id: "bg-1",
+                kind: "bash",
+                title: "Read-only watch: building commits...",
+                detail: "git log --oneline",
+                status: .completed
+            )
+        ]
+        activeCtrl.sessionArtifacts = (1...19).map { idx in
+            MuseArtifactInfo(
+                id: "art-\(idx)",
+                kind: idx == 1 ? .plan : .file,
+                title: idx == 1 ? "Task Plan & Todos" : "file_\(idx).swift",
+                path: "/tmp/file_\(idx).swift"
+            )
+        }
+        activeCtrl.agentMessages = (1...6).map { idx in
+            MuseAgentMessageInfo(
+                id: "msg-\(idx)",
+                direction: .subagentResult,
+                sender: "c379e11c-e3f7-5a1f-\(idx)",
+                target: "main",
+                workspaceLabel: "east-monoceros",
+                body: "structured result submitted for subagent \(idx)",
+                timestamp: Date(),
+                deliveryPolicy: "result_ready"
+            )
+        }
+        activeCtrl.hasDroppedComposerToBottom = true
+        state.isInspectorVisible = true
+        state.inspectorArtifact = nil
+        state.isNotificationsVisible = false
+        state.isSettingsPresented = false
+
+        let denseInspectorHost = NSHostingView(
+            rootView: VStack(spacing: 0) {
+                InspectorView(state: state)
+                    .frame(width: 310)
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
+            }
+            .frame(width: 310, height: 650)
+        )
+        window.contentView = denseInspectorHost
+        denseInspectorHost.frame = NSRect(x: 0, y: 0, width: 310, height: 650)
+        denseInspectorHost.layoutSubtreeIfNeeded()
+        check(denseInspectorHost.fittingSize.height <= 650,
+              "Dense InspectorView (6 subagents, 1 bg task, 19 artifacts, 6 agent messages) must scroll within 650pt and never exceed its container height (got \(denseInspectorHost.fittingSize.height))")
+        let denseInspectorTexts = collectTexts(in: denseInspectorHost)
+        check(denseInspectorTexts.contains("Send Muse agent message…") && denseInspectorTexts.contains("target session id or name"),
+              "Dense InspectorView must mount Muse Agent Messages controls inside its scrollable container (found: \(denseInspectorTexts))")
+
+        let unconstrainedRootHost = NSHostingView(
+            rootView: RootView(state: state)
+                .frame(minWidth: 900, minHeight: 560)
+        )
+        state.showOverview()
+        unconstrainedRootHost.layoutSubtreeIfNeeded()
+        check(unconstrainedRootHost.fittingSize.height <= 720,
+              "RootView minimum/fitting height with dense 3rd column must never exceed a 720pt window (got \(unconstrainedRootHost.fittingSize.height))")
+
+        let fullWindowRootHost = NSHostingView(
+            rootView: RootView(state: state)
+                .frame(width: 1200, height: 720)
+        )
+        window.setContentSize(NSSize(width: 1200, height: 720))
+        window.contentView = fullWindowRootHost
+        fullWindowRootHost.frame = NSRect(x: 0, y: 0, width: 1200, height: 720)
+        state.showOverview()
+        fullWindowRootHost.layoutSubtreeIfNeeded()
+        check(fullWindowRootHost.fittingSize.height <= 720,
+              "RootView with dense 3rd column must fit within 720pt window height without clipping top bar or bottom composer (got \(fullWindowRootHost.fittingSize.height))")
+        let fullWindowTexts = collectTexts(in: fullWindowRootHost)
+        check(fullWindowTexts.contains(where: { $0.contains("Ask Anything") || $0.contains("Message") }),
+              "Bottom ComposerView input placeholder must remain mounted and visible inside the 720pt window (found: \(fullWindowTexts))")
+
+        let consolidatedComposer = ComposerView(state: state, controller: activeCtrl, focusTick: 0)
+        check(consolidatedComposer.isConsolidatedBar,
+              "ComposerView with dropped bottom state must be in consolidated bottom bar mode")
+
+        // 32. Verify Bundled Safari Web Extension, Persistent JS Bridge, DOM Tab Control, Muse CLI Skill (`safari-browser`), and Settings Tab
+        let safariBridge = MuseSafariBridgeService.shared
+        await safariBridge.refreshStatus(preferences: state.preferences, installation: installation)
+        check(safariBridge.isExtensionBundled,
+              "MuseSafariBridgeService must locate the bundled MuseSafariExtension sources/appex")
+        check(safariBridge.isServerRunning,
+              "MuseSafariBridgeService must start its local loopback HTTP bridge server")
+        let skillInstalled = await safariBridge.installOrUpdateMuseSkill(installation: installation)
+        check(skillInstalled && safariBridge.isSkillInstalled,
+              "MuseSafariBridgeService must install the 'safari-browser' skill and scripts/safari_bridge.py")
+
+        let testHTML = """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Google Scholar - Muse Bridge Test</title></head>
+        <body>
+          <h1>Google Scholar</h1>
+          <form id="scholarForm" onsubmit="window.__submitted = true; return false;">
+            <label for="qInput">Search articles</label>
+            <input id="qInput" name="q" type="text" placeholder="Search articles" value="" oninput="window.__lastInput = this.value">
+            <input id="authorField" name="author" type="text" placeholder="Author" value="">
+            <select id="yearSelect" name="year">
+              <option value="2024">2024</option>
+              <option value="2025">2025</option>
+              <option value="2026">2026</option>
+            </select>
+            <button id="searchBtn" type="button" onclick="window.__clickedSearch = true">Search Scholar</button>
+          </form>
+          <div class="gs_r gs_or gs_scl">
+            <div class="gs_ri">
+              <h3 class="gs_rt"><a href="https://arxiv.org/abs/2211.17192">Fast Inference from Transformers via Speculative Decoding</a></h3>
+              <div class="gs_a">Y Leviathan, M Kalman, Y Matias - ICML, 2023</div>
+              <div class="gs_rs">Inference from large autoregressive models like Transformers is slow...</div>
+            </div>
+          </div>
+        </body>
+        </html>
+        """
+        let navResult = await safariBridge.executeCommand([
+            "action": "navigate",
+            "url": "https://scholar.google.com/scholar?q=speculative+decoding",
+            "html": testHTML
+        ])
+        check((navResult["ok"] as? Bool) == true && safariBridge.ownedTab.isClaimed,
+              "Navigating via MuseSafariBridgeService must claim the tab and load the DOM (got: \(navResult))")
+        check(safariBridge.ownedTab.title == "Google Scholar - Muse Bridge Test",
+              "Owned tab title must reflect loaded DOM title (got: \(safariBridge.ownedTab.title))")
+        check(safariBridge.latestDOMInspection?.formCount == 1 && (safariBridge.latestDOMInspection?.inputCount ?? 0) >= 3,
+              "inspectDOM must report formCount=1 and inputCount>=3 (got: \(String(describing: safariBridge.latestDOMInspection)))")
+
+        let fillResult = await safariBridge.executeCommand([
+            "action": "fillForm",
+            "fields": [
+                "q": "speculative decoding",
+                "author": "Leviathan",
+                "year": "2026"
+            ]
+        ])
+        check((fillResult["ok"] as? Bool) == true, "fillForm over persistent JS bridge must succeed (got: \(fillResult))")
+
+        let getQResult = await safariBridge.executeCommand([
+            "action": "getValue",
+            "selector": "input[name=\"q\"]"
+        ])
+        let qData = getQResult["data"] as? [String: Any]
+        check((qData?["value"] as? String) == "speculative decoding",
+              "getValue on input[name='q'] must return filled value 'speculative decoding' (got: \(String(describing: qData)))")
+
+        let getYearResult = await safariBridge.executeCommand([
+            "action": "getValue",
+            "selector": "#yearSelect"
+        ])
+        let yearData = getYearResult["data"] as? [String: Any]
+        check((yearData?["value"] as? String) == "2026",
+              "getValue on #yearSelect must return selected value '2026' (got: \(String(describing: yearData)))")
+
+        let clickResult = await safariBridge.executeCommand([
+            "action": "click",
+            "selector": "Search Scholar"
+        ])
+        check((clickResult["ok"] as? Bool) == true, "Clicking button by visible text 'Search Scholar' must succeed")
+
+        let evalResult = await safariBridge.executeCommand([
+            "action": "eval",
+            "script": "window.__clickedSearch === true && window.__lastInput === 'speculative decoding'"
+        ])
+        let evalData = evalResult["data"] as? [String: Any]
+        check((evalData?["result"] as? Bool) == true,
+              "DOM input and click handlers must have fired in page context (got: \(String(describing: evalData)))")
+
+        let scholarExtract = await safariBridge.executeCommand(["action": "extractScholar"])
+        let scholarData = scholarExtract["data"] as? [String: Any]
+        let scholarItems = scholarData?["results"] as? [[String: Any]] ?? []
+        check(scholarItems.first?["title"] as? String == "Fast Inference from Transformers via Speculative Decoding",
+              "extractScholar must extract paper title and metadata from DOM (got: \(scholarItems))")
+
+        // Also verify the Python CLI skill script (`safari_bridge.py`) end-to-end against the live HTTP bridge server
+        let cliScriptPath = MuseSafariBridgeService.userSkillDirectoryURL()
+            .appendingPathComponent("scripts/safari_bridge.py").path
+        let pyRun = await PiDiscoveryService().run(
+            executable: URL(fileURLWithPath: "/usr/bin/python3"),
+            arguments: [cliScriptPath, "--port", "\(safariBridge.listeningPort)", "get", "#authorField"],
+            directory: MuseSafariBridgeService.userSkillDirectoryURL(),
+            environment: ProcessInfo.processInfo.environment,
+            timeout: 8.0
+        )
+        check(pyRun.exitCode == 0 && pyRun.stdout.contains("Leviathan"),
+              "safari_bridge.py CLI helper must retrieve '#authorField' value 'Leviathan' over HTTP bridge (stdout: \(pyRun.stdout), stderr: \(pyRun.stderr))")
+
+        // Verify SafariBridgeSettingsTab UI rendering and preferences persistence
+        state.openSettings(tab: .safari)
+        check(state.settingsTab == .safari && state.isSettingsPresented,
+              "openSettings(tab: .safari) must present Safari Bridge settings tab")
+        let safariSettingsHost = NSHostingView(rootView: SafariBridgeSettingsTab(state: state).frame(width: 820, height: 640))
+        window.contentView = safariSettingsHost
+        safariSettingsHost.frame = NSRect(x: 0, y: 0, width: 820, height: 640)
+        safariSettingsHost.layoutSubtreeIfNeeded()
+        let safariSettingsTexts = collectTexts(in: safariSettingsHost)
+        check(safariSettingsTexts.contains("https://scholar.google.com"),
+              "SafariBridgeSettingsTab must mount the target URL field and controls (found: \(safariSettingsTexts))")
+
+        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, 3-column bounded inspector layout, bundled Safari Web Extension + persistent JS DOM bridge + Muse CLI skill, and backend state transitions verified.")
         exit(0)
     }
 }

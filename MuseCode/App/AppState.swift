@@ -429,6 +429,15 @@ final class AppState {
             installCachedIndex()
             await refreshIndex()
             MuseRollingKeywordIndex.shared.startLazyRollingScanIfNeeded(projects: projects)
+            if preferences.safariBridgeEnabled {
+                MuseSafariBridgeService.shared.startServerIfNeeded(port: preferences.safariBridgePort)
+            }
+            Task { @MainActor in
+                await MuseSafariBridgeService.shared.refreshStatus(
+                    preferences: self.preferences,
+                    installation: self.installation
+                )
+            }
             restoreLastSession()
         } else {
             let detail = harnesses.missingDetail[.pi]

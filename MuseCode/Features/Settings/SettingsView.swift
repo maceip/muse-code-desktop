@@ -84,6 +84,7 @@ struct SettingsView: View {
                 case .general: GeneralSettings(state: state)
                 case .composer: ComposerSettings(state: state)
                 case .sessions: SessionSettings(state: state)
+                case .safari: SafariBridgeSettingsTab(state: state)
                 case .pi: PiSettingsTab(state: state)
                 }
             }
@@ -132,6 +133,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
     case general
     case composer
     case sessions
+    case safari
     case pi
 
     var id: String { rawValue }
@@ -152,7 +154,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
     var group: Group {
         switch self {
         case .general, .composer: return .personal
-        case .sessions, .pi: return .coding
+        case .sessions, .safari, .pi: return .coding
         }
     }
 
@@ -161,6 +163,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
         case .general: return "General"
         case .composer: return "Composer"
         case .sessions: return "Sessions"
+        case .safari: return "Safari Bridge"
         case .pi: return "Muse & Diagnostics"
         }
     }
@@ -170,6 +173,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
         case .general: return "settings-02"
         case .composer: return "edit-02"
         case .sessions: return "message-multiple-01"
+        case .safari: return "globe"
         case .pi: return "stethoscope"
         }
     }
@@ -539,4 +543,226 @@ struct PayloadLogView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+}
+
+// MARK: - Safari Bridge
+
+struct SafariBridgeSettingsTab: View {
+    @Bindable var state: AppState
+    @Bindable private var safariBridge = MuseSafariBridgeService.shared
+    @State private var targetURLText = "https://scholar.google.com"
+    @State private var isRunningAction = false
+
+    var body: some View {
+        SettingsPage {
+            SettingsSection("Bundled Safari Web Extension") {
+                SettingsRow(
+                    "Muse Safari Bridge",
+                    detail: safariBridge.extensionStatusMessage
+                ) {
+                    HStack(spacing: 8) {
+                        Button("Refresh") {
+                            Task {
+                                await safariBridge.refreshStatus(
+                                    preferences: state.preferences,
+                                    installation: state.installation
+                                )
+                            }
+                        }
+                        .buttonStyle(.settingsPill)
+
+                        Button("Open Safari Extension Settings…") {
+                            safariBridge.openSafariExtensionPreferences()
+                        }
+                        .buttonStyle(.settingsPillProminent)
+                    }
+                }
+
+                SettingsRow(
+                    "Extension bundle identifier",
+                    detail: MuseSafariBridgeService.extensionBundleIdentifier
+                ) {
+                    CopyButton(text: MuseSafariBridgeService.extensionBundleIdentifier, help: "Copy bundle identifier")
+                }
+            }
+
+            SettingsSection("Persistent JavaScript Bridge") {
+                SettingsRow(
+                    "Enable persistent Safari JS bridge",
+                    detail: "Runs the local loopback coordinator (`\(safariBridge.bridgeEndpointURLString)`) so Muse can persistently control an owned tab and inspect or mutate the live DOM."
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { state.preferences.safariBridgeEnabled },
+                        set: { enabled in
+                            state.preferences.safariBridgeEnabled = enabled
+                            state.preferences.persist()
+                            if enabled {
+                                safariBridge.startServerIfNeeded(port: state.preferences.safariBridgePort)
+                            } else {
+                                safariBridge.stopServer()
+                            }
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+
+                SettingsRow(
+                    "Auto-claim active tab when needed",
+                    detail: "Automatically claims the active Safari tab when the Muse agent navigates or queries the DOM without a previously claimed tab."
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { state.preferences.safariBridgeAutoClaimTab },
+                        set: { autoClaim in
+                            state.preferences.safariBridgeAutoClaimTab = autoClaim
+                            state.preferences.persist()
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+
+                SettingsRow(
+                    "Bridge endpoint",
+                    detail: safariBridge.isServerRunning
+                        ? "Listening on \(safariBridge.bridgeEndpointURLString) • Queue: \(PiPaths.safariBridgeDirectory.path.abbreviatingHomeDirectory)"
+                        : "Stopped (\(safariBridge.bridgeEndpointURLString))"
+                ) {
+                    HStack(spacing: 8) {
+                        CopyButton(text: safariBridge.bridgeEndpointURLString, help: "Copy bridge URL")
+                        Button("Reveal Folder") {
+                            WorkspaceLauncher.reveal(PiPaths.safariBridgeDirectory.path)
+                        }
+                        .buttonStyle(.settingsPill)
+                    }
+                }
+            }
+
+            SettingsSection("Agent-Owned Safari Tab") {
+                SettingsRow(
+                    "Owned tab status",
+                    detail: safariBridge.ownedTab.isClaimed
+                        ? "Tab #\(safariBridge.ownedTab.tabId ?? 1) (\(safariBridge.ownedTab.transport)) — \(safariBridge.ownedTab.title.isEmpty ? safariBridge.ownedTab.url : "\(safariBridge.ownedTab.title) • \(safariBridge.ownedTab.url)")"
+                        : "No Safari tab is currently claimed by the Muse agent."
+                ) {
+                    HStack(spacing: 8) {
+                        Button("Claim Tab") {
+                            Task {
+                                isRunningAction = true
+                                defer { isRunningAction = false }
+                                _ = await safariBridge.executeCommand([
+                                    "action": "claimTab",
+                                    "url": targetURLText
+                                ])
+                            }
+                        }
+                        .buttonStyle(.settingsPill)
+                        .disabled(isRunningAction)
+
+                        if safariBridge.ownedTab.isClaimed {
+                            Button("Release") {
+                                Task {
+                                    isRunningAction = true
+                                    defer { isRunningAction = false }
+                                    _ = await safariBridge.executeCommand(["action": "releaseTab"])
+                                }
+                            }
+                            .buttonStyle(.settingsPill)
+                            .disabled(isRunningAction)
+                        }
+                    }
+                }
+
+                SettingsBlock {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            TextField("URL to open or navigate in owned tab", text: $targetURLText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.callout, design: .monospaced))
+
+                            Button("Navigate") {
+                                Task {
+                                    isRunningAction = true
+                                    defer { isRunningAction = false }
+                                    _ = await safariBridge.executeCommand([
+                                        "action": "navigate",
+                                        "url": targetURLText
+                                    ])
+                                }
+                            }
+                            .buttonStyle(.settingsPillProminent)
+                            .disabled(isRunningAction || targetURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                            Button("Inspect DOM") {
+                                Task {
+                                    isRunningAction = true
+                                    defer { isRunningAction = false }
+                                    _ = await safariBridge.executeCommand(["action": "inspectDOM"])
+                                }
+                            }
+                            .buttonStyle(.settingsPill)
+                            .disabled(isRunningAction)
+                        }
+
+                        if let dom = safariBridge.latestDOMInspection {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Live DOM Snapshot: \(dom.title.isEmpty ? dom.url : dom.title)")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                Text("Ready: \(dom.readyState) • Forms: \(dom.formCount) • Inputs: \(dom.inputCount) • Buttons: \(dom.buttonCount) • Links: \(dom.linkCount) • Headings: \(dom.headingCount)")
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                if !dom.textExcerpt.isEmpty {
+                                    Text(String(dom.textExcerpt.prefix(240)))
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(3)
+                                }
+                            }
+                            .padding(.top, 4)
+                        }
+
+                        if let msg = safariBridge.lastActionMessage {
+                            Text(msg)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            SettingsSection("Muse CLI Skill & Plugin (`safari-browser`)") {
+                SettingsRow(
+                    "Muse skill status",
+                    detail: safariBridge.isSkillInstalled
+                        ? "Installed & active at \(safariBridge.skillInstallPath.abbreviatingHomeDirectory)"
+                        : "Not installed yet in ~/.agents/skills/safari-browser"
+                ) {
+                    HStack(spacing: 8) {
+                        if safariBridge.isSkillInstalled {
+                            Button("Reveal Skill") {
+                                WorkspaceLauncher.reveal(safariBridge.skillInstallPath)
+                            }
+                            .buttonStyle(.settingsPill)
+                        }
+                        Button(safariBridge.isSkillInstalled ? "Reinstall Skill" : "Install Skill") {
+                            Task {
+                                _ = await safariBridge.installOrUpdateMuseSkill(installation: state.installation)
+                                await MuseSkillsService.shared.refresh(
+                                    cwd: state.selectedProjectPath ?? FileManager.default.currentDirectoryPath,
+                                    installation: state.installation
+                                )
+                            }
+                        }
+                        .buttonStyle(.settingsPillProminent)
+                    }
+                }
+            }
+        }
+        .task {
+            await safariBridge.refreshStatus(
+                preferences: state.preferences,
+                installation: state.installation
+            )
+        }
+    }
 }

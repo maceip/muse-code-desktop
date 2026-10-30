@@ -255,10 +255,10 @@ final class PiSessionController {
 
     // MARK: - Muse Overview & Agent Messages
 
-    private(set) var subagents: [MuseSubagentInfo] = []
-    private(set) var backgroundTasks: [MuseBackgroundTaskInfo] = []
-    private(set) var sessionArtifacts: [MuseArtifactInfo] = []
-    private(set) var agentMessages: [MuseAgentMessageInfo] = []
+    var subagents: [MuseSubagentInfo] = []
+    var backgroundTasks: [MuseBackgroundTaskInfo] = []
+    var sessionArtifacts: [MuseArtifactInfo] = []
+    var agentMessages: [MuseAgentMessageInfo] = []
 
     var runningSubagentCount: Int {
         subagents.filter { $0.status == .running || $0.status == .waiting }.count

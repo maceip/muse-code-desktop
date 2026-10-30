@@ -70,7 +70,7 @@ struct MuseRightSidebarPanel: View {
     var controller: PiSessionController
     var initiallyExpandMessages: Bool = false
 
-    var body: some View {
+    private var cardsStack: some View {
         VStack(spacing: 8) {
             MuseOverviewCard(state: state, controller: controller)
                 .frame(maxWidth: .infinity)
@@ -83,6 +83,16 @@ struct MuseRightSidebarPanel: View {
             .frame(maxWidth: .infinity)
         }
         .padding(10)
+    }
+
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            cardsStack
+
+            ScrollView(.vertical, showsIndicators: false) {
+                cardsStack
+            }
+        }
     }
 }
 
@@ -584,6 +594,7 @@ struct MuseAgentMessagesCard: View {
 
                 // Message feed (only shown when messages exist)
                 if !controller.agentMessages.isEmpty {
+                    let feedHeight = min(max(CGFloat(controller.agentMessages.count) * 46, 64), 150)
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 6) {
                             ForEach(controller.agentMessages) { msg in
@@ -593,7 +604,8 @@ struct MuseAgentMessagesCard: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: 160)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: feedHeight)
 
                     Divider()
                 }

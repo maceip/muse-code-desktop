@@ -167,10 +167,40 @@ plutil -lint "${STAGE_APP}/Contents/Info.plist"
 plutil -lint "${ENTITLEMENTS}"
 
 # ---------------------------------------------------------------------------
+# 2b. Build and embed bundled Safari Web Extension (MuseSafariExtension.appex)
+# ---------------------------------------------------------------------------
+SAFARI_EXT_SRC="${REPO_ROOT}/MuseSafariExtension"
+SAFARI_APPEX="${STAGE_APP}/Contents/PlugIns/MuseSafariExtension.appex"
+echo "==> Building bundled Safari Web Extension (MuseSafariExtension.appex)"
+rm -rf "${SAFARI_APPEX}"
+mkdir -p "${SAFARI_APPEX}/Contents/MacOS" "${SAFARI_APPEX}/Contents/Resources"
+cp "${SAFARI_EXT_SRC}/Info.plist" "${SAFARI_APPEX}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "${SAFARI_APPEX}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${SAFARI_APPEX}/Contents/Info.plist"
+plutil -lint "${SAFARI_APPEX}/Contents/Info.plist"
+ditto "${SAFARI_EXT_SRC}/Resources" "${SAFARI_APPEX}/Contents/Resources"
+
+xcrun swiftc \
+  -O \
+  -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
+  -target arm64-apple-macos14.0 \
+  -module-name MuseSafariExtension \
+  -parse-as-library \
+  -Xlinker -e -Xlinker _NSExtensionMain \
+  -framework SafariServices \
+  "${SAFARI_EXT_SRC}/SafariWebExtensionHandler.swift" \
+  -o "${SAFARI_APPEX}/Contents/MacOS/MuseSafariExtension"
+
+# ---------------------------------------------------------------------------
 # 3. Code-sign Pie.app with Hardened Runtime + Entitlements
 # ---------------------------------------------------------------------------
+SAFARI_EXT_ENTITLEMENTS="${SAFARI_EXT_SRC}/MuseSafariExtension.entitlements"
 if [[ -n "${IDENTITY}" ]]; then
-  echo "==> Signing Pie.app with Developer ID + Hardened Runtime"
+  echo "==> Signing Pie.app + MuseSafariExtension.appex with Developer ID + Hardened Runtime"
+  codesign --force --options runtime --timestamp \
+    --entitlements "${SAFARI_EXT_ENTITLEMENTS}" \
+    --sign "${IDENTITY}" \
+    "${SAFARI_APPEX}"
   if [[ -d "${STAGE_APP}/Contents/Frameworks" ]]; then
     while IFS= read -r -d '' item; do
       codesign --force --options runtime --timestamp --sign "${IDENTITY}" "${item}"
@@ -181,8 +211,12 @@ if [[ -n "${IDENTITY}" ]]; then
     --sign "${IDENTITY}" \
     "${STAGE_APP}"
 else
-  echo "==> Ad-hoc signing Pie.app with Hardened Runtime entitlements"
-  codesign --force --deep --options runtime \
+  echo "==> Ad-hoc signing MuseSafariExtension.appex + Pie.app with Hardened Runtime entitlements"
+  codesign --force --options runtime \
+    --entitlements "${SAFARI_EXT_ENTITLEMENTS}" \
+    --sign - \
+    "${SAFARI_APPEX}"
+  codesign --force --options runtime \
     --entitlements "${ENTITLEMENTS}" \
     --sign - \
     "${STAGE_APP}"

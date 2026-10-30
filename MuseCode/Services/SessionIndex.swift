@@ -22,7 +22,8 @@ enum PiPaths {
         "MUSE_SESSION_DIR",
         "MUSE_SESSIONS_DIR",
         "PI_CODING_AGENT_SESSION_DIR",
-        "MUSE_MODEL_CATALOG_DIR"
+        "MUSE_MODEL_CATALOG_DIR",
+        "MUSE_SAFARI_BRIDGE_DIR"
     ]
 
     /// Current user's home directory URL discovered dynamically from the OS / environment.
@@ -209,6 +210,15 @@ enum PiPaths {
 
     static var keybindingsFile: URL {
         agentDirectory.appendingPathComponent("keybindings.json")
+    }
+
+    /// Dynamically resolved directory for the Muse Safari Bridge queue, state, and skill assets.
+    static var safariBridgeDirectory: URL {
+        if let raw = environmentValue(for: "MUSE_SAFARI_BRIDGE_DIR"),
+           let url = validAbsoluteDirectoryURL(raw) {
+            return url
+        }
+        return agentDirectory.appendingPathComponent("safari-bridge", isDirectory: true)
     }
 
     private static func configuredSessionDirectory() -> URL? {

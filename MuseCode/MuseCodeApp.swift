@@ -94,7 +94,19 @@ struct PiCodeApp: App {
             fputs("FAIL: VoiceOrbFrameDescriptor 23-frame progression self-test failed\n", stderr)
             exit(1)
         }
-        print("PASS: MuseCode --selftest verified (\(bundleId) v\(version), \(SessionIconCatalog.all.count) icons, 23-frame orb verified)")
+        guard let pluginsURL = bundle.builtInPlugInsURL else {
+            fputs("FAIL: missing PlugIns directory in packaged app bundle\n", stderr)
+            exit(1)
+        }
+        let safariAppex = pluginsURL.appendingPathComponent("MuseSafariExtension.appex", isDirectory: true)
+        let safariManifest = safariAppex.appendingPathComponent("Contents/Resources/manifest.json")
+        let safariBin = safariAppex.appendingPathComponent("Contents/MacOS/MuseSafariExtension")
+        guard FileManager.default.fileExists(atPath: safariManifest.path),
+              FileManager.default.isExecutableFile(atPath: safariBin.path) else {
+            fputs("FAIL: bundled MuseSafariExtension.appex missing from Contents/PlugIns\n", stderr)
+            exit(1)
+        }
+        print("PASS: MuseCode --selftest verified (\(bundleId) v\(version), \(SessionIconCatalog.all.count) icons, 23-frame orb, bundled MuseSafariExtension.appex verified)")
         exit(0)
     }
 

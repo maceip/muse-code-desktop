@@ -74,6 +74,25 @@ struct RootView: View {
             }
         }
         .overlay(alignment: .top) { titlebarControlsBar }
+        .overlay(alignment: .top) {
+            ZStack(alignment: .top) {
+                if state.isPalettePresented && !state.isSettingsPresented {
+                    Color.black.opacity(0.001)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            state.closePalette()
+                        }
+
+                    TitlebarSearchDropdownView(state: state, onRunCommand: perform)
+                        .padding(.top, WindowChromeMetrics.titlebarRowCenter + TitlebarIconButton.size / 2 + 4)
+                        .transition(.opacity)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .allowsHitTesting(state.isPalettePresented && !state.isSettingsPresented)
+            .animation(.easeOut(duration: 0.11), value: state.isPalettePresented)
+            .zIndex(90)
+        }
         .ignoresSafeArea()
         .toolbarBackground(.hidden, for: .windowToolbar)
         .task {
@@ -160,25 +179,6 @@ struct RootView: View {
         }
         .overlay(alignment: .bottom) { toast }
         .overlay(alignment: .top) { errorBanner.padding(.top, WindowChromeMetrics.titlebarHeight) }
-        .overlay(alignment: .top) {
-            ZStack(alignment: .top) {
-                if state.isPalettePresented && !state.isSettingsPresented {
-                    Color.black.opacity(0.001)
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            state.closePalette()
-                        }
-
-                    TitlebarSearchDropdownView(state: state, onRunCommand: perform)
-                        .padding(.top, WindowChromeMetrics.titlebarRowCenter + TitlebarIconButton.size / 2 + 4)
-                        .transition(.opacity)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .ignoresSafeArea()
-            .animation(.easeOut(duration: 0.11), value: state.isPalettePresented)
-            .zIndex(90)
-        }
         .overlay { ExtensionDialogHost(state: state) }
     }
 
@@ -398,55 +398,58 @@ struct RootView: View {
                 .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
 
             if state.isInspectorVisible {
-                HStack(alignment: .top, spacing: 0) {
-                    SplitPaneResizeHandle(
-                        width: 6,
-                        hitInset: 0,
-                        fill: Color.clear,
-                        onChanged: { translation in
-                            if inspectorWidthAtDragStart == nil {
-                                inspectorWidthAtDragStart = inspectorWidth
+                InspectorViewportLayout {
+                    HStack(alignment: .top, spacing: 0) {
+                        SplitPaneResizeHandle(
+                            width: 6,
+                            hitInset: 0,
+                            fill: Color.clear,
+                            onChanged: { translation in
+                                if inspectorWidthAtDragStart == nil {
+                                    inspectorWidthAtDragStart = inspectorWidth
+                                }
+                                let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
+                                inspectorWidth = min(480, max(280, startingWidth - translation))
+                            },
+                            onEnded: {
+                                inspectorWidthAtDragStart = nil
                             }
-                            let startingWidth = inspectorWidthAtDragStart ?? inspectorWidth
-                            inspectorWidth = min(480, max(280, startingWidth - translation))
-                        },
-                        onEnded: {
-                            inspectorWidthAtDragStart = nil
-                        }
-                    )
-
-                    VStack(spacing: 0) {
-                        let isLightInspector = AppTheme.isLightGlass(
-                            colorScheme: colorScheme,
-                            chatBackground: state.preferences.chatBackground
                         )
-                        InspectorView(state: state)
-                            .frame(width: inspectorWidth)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(
-                                        isLightInspector ? Color.white.opacity(0.84) : Color.white.opacity(0.22),
-                                        lineWidth: 1
-                                    )
-                            )
-                            .shadow(
-                                color: isLightInspector
-                                    ? Color(red: 0.08, green: 0.24, blue: 0.14).opacity(0.14)
-                                    : .black.opacity(0.26),
-                                radius: 14,
-                                x: 0,
-                                y: 6
-                            )
-                            .fixedSize(horizontal: false, vertical: state.inspectorArtifact == nil && !state.isNotificationsVisible)
 
-                        if state.inspectorArtifact == nil && !state.isNotificationsVisible {
-                            Spacer(minLength: 0)
+                        VStack(spacing: 0) {
+                            let isLightInspector = AppTheme.isLightGlass(
+                                colorScheme: colorScheme,
+                                chatBackground: state.preferences.chatBackground
+                            )
+                            InspectorView(state: state)
+                                .frame(width: inspectorWidth)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(
+                                            isLightInspector ? Color.white.opacity(0.84) : Color.white.opacity(0.22),
+                                            lineWidth: 1
+                                        )
+                                )
+                                .shadow(
+                                    color: isLightInspector
+                                        ? Color(red: 0.08, green: 0.24, blue: 0.14).opacity(0.14)
+                                        : .black.opacity(0.26),
+                                    radius: 14,
+                                    x: 0,
+                                    y: 6
+                                )
+                                .layoutPriority(1)
+
+                            if state.inspectorArtifact == nil && !state.isNotificationsVisible {
+                                Spacer(minLength: 0)
+                            }
                         }
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 10)
+                        .padding(.trailing, 12)
+                        .padding(.bottom, 12)
                     }
-                    .padding(.top, 10)
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 12)
                 }
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
@@ -1011,6 +1014,29 @@ struct TitlebarSearchPill: View {
         .animation(.easeOut(duration: 0.12), value: isActive)
         .onChange(of: isActive) { _, active in
             isSearchFieldFocused = active
+        }
+    }
+}
+
+/// Bounds the right inspector column to the vertical viewport height offered by
+/// `detailPane` (mirroring `TranscriptViewportLayout`), so a dense Overview +
+/// Muse Agent Messages stack scrolls inside its column instead of inflating the
+/// window's fitting/minimum height and clipping the top bar or bottom composer.
+struct InspectorViewportLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = subviews.first?.sizeThatFits(ProposedViewSize(width: nil, height: nil)).width ?? (proposal.width ?? 0)
+        return CGSize(width: width, height: proposal.height ?? 0)
+    }
+
+    func explicitAlignment(of guide: HorizontalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
         }
     }
 }
