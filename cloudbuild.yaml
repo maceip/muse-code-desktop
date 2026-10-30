@@ -1,0 +1,51 @@
+# Analytics lane for muse-code-desktop on Google Cloud Build.
+# macOS app binaries are built by GitHub Actions (macos-15 runners) - Google
+# Cloud Build has no macOS builders. This lane only: validates plists,
+# computes repository analytics, and reports one event to the cheap-stack
+# ingest endpoint (BigQuery). The ingest step is failure-tolerant
+# (allowFailure) so losing the GCP project can never break this repo's builds.
+options:
+  machineType: E2_STANDARD_2
+  logging: CLOUD_LOGGING_ONLY
+steps:
+  - name: python:3.12-slim
+    id: repo-analytics
+    entrypoint: python3
+    args:
+      - -c
+      - |
+        import json, pathlib, plistlib, sys
+        root = pathlib.Path('/workspace')
+        plists = list(root.rglob('*.plist'))
+        bad = []
+        for p in plists[:200]:
+            try: plistlib.loads(p.read_bytes())
+            except Exception as e: bad.append(f'{p.relative_to(root)}: {e}')
+        swift = list(root.rglob('*.swift'))
+        loc = 0
+        for p in swift:
+            try: loc += p.read_text(errors='replace').count(chr(10))
+            except OSError: pass
+        stats = {'swiftFiles': len(swift), 'swiftLoc': loc, 'plistFiles': len(plists), 'plistBad': len(bad)}
+        pathlib.Path('/workspace/analytics.json').write_text(json.dumps(stats))
+        print(stats)
+        if bad:
+            print('INVALID PLISTS:', bad[:5]); sys.exit(1)
+  - name: gcr.io/cloud-builders/curl
+    id: report-analytics
+    allowFailure: true
+    entrypoint: bash
+    secretEnv: ['INGEST_TOKEN']
+    args:
+      - -c
+      - |
+        DETAIL=$$(cat /workspace/analytics.json)
+        curl -fsS -m 15 -X POST https://cheap-stack-api-4mvkrnysdq-uc.a.run.app/api/events/muse-desktop \
+          -H "Authorization: Bearer $$INGEST_TOKEN" -H 'Content-Type: application/json' \
+          -d "{\"kind\":\"cloudbuild-analytics\",\"detail\":$$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$$DETAIL")}" \
+          || echo 'WARN: cheap-stack ingest unavailable - continuing (fail-open)'
+availableSecrets:
+  secretManager:
+    - versionName: projects/388281103542/secrets/cheap-stack-ingest-token/versions/latest
+      env: INGEST_TOKEN
+timeout: 600s

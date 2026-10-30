@@ -5,6 +5,10 @@ on:
     branches: [main]
     tags:
       - "v*"
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
   workflow_dispatch:
     inputs:
       require_notarization:
@@ -21,7 +25,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  rate-cap:
+    name: Hourly release cap (max 3/hour)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      allowed: ${{ steps.cap.outputs.allowed }}
+    steps:
+      - name: Count release runs started in the last hour
+        id: cap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Tag pushes and manual runs always pass; branch pushes are capped so
+          # rapid-fire commits cannot burn macOS runner minutes or credits.
+          if [[ "${GITHUB_REF}" == refs/tags/* || "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "allowed=true" >> "${GITHUB_OUTPUT}"; echo "cap bypass: tag/manual"; exit 0
+          fi
+          SINCE="$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
+          COUNT="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?created=>=${SINCE}&per_page=100" --jq '.total_count')"
+          echo "release workflow runs in last hour (incl. this run): ${COUNT}"
+          if [[ "${COUNT}" -le 3 ]]; then
+            echo "allowed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "allowed=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Hourly cap reached (${COUNT} runs in last hour, max 3). Skipping DMG build; the next push inside the window or a manual workflow_dispatch will rebuild."
+          fi
+
   macos-dmg-release:
+    needs: rate-cap
+    if: needs.rate-cap.outputs.allowed == 'true'
     name: Build, Sign, Notarize & Upload Debug DMG
     runs-on: macos-15
     timeout-minutes: 45

@@ -21,6 +21,7 @@ struct PiCodeApp: App {
             Self.runSelfTestAndExit()
         }
         _state = State(initialValue: AppState())
+        CheapStackAnalytics.appLaunch() // opt-in, fail-open: no-op without a token
         #if DEBUG
         DebugSnapshot.scheduleIfRequested()
         DebugScrollBench.scheduleIfRequested()
