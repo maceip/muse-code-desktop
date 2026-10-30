@@ -40,7 +40,10 @@ enum CheapStackAnalytics {
     static func event(_ kind: String, _ fields: [String: Any] = [:]) {
         guard let token else { return }
         guard let url = URL(string: "\(baseURL)/api/events/\(appName)") else { return }
-        let detail = (try? JSONSerialization.data(withJSONObject: fields))
+        var merged = sessionFields
+        for (k, v) in fields { merged[k] = v }
+        merged["props"] = fields
+        let detail = (try? JSONSerialization.data(withJSONObject: merged))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let body: [String: Any] = ["kind": kind, "detail": detail]
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return }
@@ -59,5 +62,29 @@ enum CheapStackAnalytics {
     static func appLaunch() {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         event("app-launch", ["version": version, "os": ProcessInfo.processInfo.operatingSystemVersionString])
+    }
+
+    /// Stable anonymous id + 30-minute-idle session id, matching the SDK clients.
+    private static var sessionFields: [String: Any] {
+        let defaults = UserDefaults.standard
+        let now = Date()
+        if defaults.string(forKey: "cs.anonId") == nil {
+            defaults.set(UUID().uuidString, forKey: "cs.anonId")
+        }
+        let last = defaults.double(forKey: "cs.sessionLast")
+        var sessionId = defaults.string(forKey: "cs.sessionId")
+        if sessionId == nil || now.timeIntervalSince1970 - last > 30 * 60 {
+            sessionId = UUID().uuidString
+            defaults.set(sessionId, forKey: "cs.sessionId")
+            defaults.set(now.timeIntervalSince1970, forKey: "cs.sessionStart")
+        }
+        defaults.set(now.timeIntervalSince1970, forKey: "cs.sessionLast")
+        let start = defaults.double(forKey: "cs.sessionStart")
+        return [
+            "sessionId": sessionId ?? "",
+            "anonymousId": defaults.string(forKey: "cs.anonId") ?? "",
+            "platform": "macos",
+            "sessionMs": Int((now.timeIntervalSince1970 - start) * 1000),
+        ]
     }
 }
