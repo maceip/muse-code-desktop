@@ -31,19 +31,27 @@ steps:
         print(stats)
         if bad:
             print('INVALID PLISTS:', bad[:5]); sys.exit(1)
-  - name: gcr.io/cloud-builders/curl
+  - name: python:3.12-slim
     id: report-analytics
     allowFailure: true
-    entrypoint: bash
+    entrypoint: python3
     secretEnv: ['INGEST_TOKEN']
     args:
       - -c
       - |
-        DETAIL=$$(cat /workspace/analytics.json)
-        curl -fsS -m 15 -X POST https://cheap-stack-api-4mvkrnysdq-uc.a.run.app/api/events/muse-desktop \
-          -H "Authorization: Bearer $$INGEST_TOKEN" -H 'Content-Type: application/json' \
-          -d "{\"kind\":\"cloudbuild-analytics\",\"detail\":$$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$$DETAIL")}" \
-          || echo 'WARN: cheap-stack ingest unavailable - continuing (fail-open)'
+        import json, os, pathlib, urllib.request
+        detail = pathlib.Path('/workspace/analytics.json').read_text()
+        body = json.dumps({'kind': 'cloudbuild-analytics', 'detail': detail}).encode()
+        req = urllib.request.Request(
+            'https://cheap-stack-api-4mvkrnysdq-uc.a.run.app/api/events/muse-desktop',
+            data=body, method='POST',
+            headers={'Content-Type': 'application/json',
+                     'Authorization': 'Bearer ' + os.environ['INGEST_TOKEN']})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                print('ingest response:', r.read().decode())
+        except Exception as e:
+            print('WARN: cheap-stack ingest unavailable - continuing (fail-open):', e)
 availableSecrets:
   secretManager:
     - versionName: projects/388281103542/secrets/cheap-stack-ingest-token/versions/latest
