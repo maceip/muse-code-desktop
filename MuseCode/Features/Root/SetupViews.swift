@@ -84,7 +84,7 @@ struct PiSetupView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(state.installation != nil ? "Muse is Installed" : "Muse CLI Required")
                             .font(.title2.weight(.semibold))
-                        Text("Pie wraps your local `muse` CLI binary directly and reads sessions from `~/.local/share/muse/sessions`.")
+                        Text("Pie wraps your local `muse` CLI binary directly and reads sessions from `\(PiPaths.sessionsDirectory.path.abbreviatingHomeDirectory)`.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }

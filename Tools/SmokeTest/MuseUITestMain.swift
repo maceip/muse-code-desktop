@@ -1669,6 +1669,44 @@ struct MuseUITestMain {
         check(dropdownTopY - searchBarBottomY == 4 && dropdownTopY == 36,
               "TitlebarSearchDropdownView must sit 4pt directly below TitlebarSearchPill at y=36pt without safe-area gap (got \(dropdownTopY))")
 
+        // 30. Verify dynamic path discovery for relocated Muse session, config, and data directories
+        let tempMuseRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pie-dynamic-muse-paths-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let customSessionsDir = tempMuseRoot.appendingPathComponent("custom-sessions", isDirectory: true)
+        let customSessionSubdir = customSessionsDir.appendingPathComponent("2026/10/30/session-relocated-01", isDirectory: true)
+        let customConfigDir = tempMuseRoot.appendingPathComponent("custom-config", isDirectory: true)
+        try? FileManager.default.createDirectory(at: customSessionSubdir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: customConfigDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempMuseRoot) }
+
+        let relocatedSessionFile = customSessionSubdir.appendingPathComponent("session.jsonl")
+        let relocatedJSONL = """
+        {"type":"session","id":"relocated-01","cwd":"\(tempMuseRoot.path)","timestamp":"2026-10-30T12:00:00Z"}
+        {"type":"session_info","name":"Relocated Custom Session Store"}
+        {"type":"message","message":{"role":"user","content":[{"type":"text","text":"verify dynamic custom session path discovery TensorRT pipeline"}]}}
+        """
+        try? relocatedJSONL.write(to: relocatedSessionFile, atomically: true, encoding: .utf8)
+
+        setenv("MUSE_CONFIG_DIR", customConfigDir.path, 1)
+        setenv("MUSE_SESSION_DIR", customSessionsDir.path, 1)
+        check(PiPaths.agentDirectory.path == customConfigDir.standardizedFileURL.path,
+              "PiPaths.agentDirectory must dynamically resolve MUSE_CONFIG_DIR (\(PiPaths.agentDirectory.path))")
+        check(PiPaths.sessionsDirectory.path == customSessionsDir.standardizedFileURL.path,
+              "PiPaths.sessionsDirectory must dynamically resolve MUSE_SESSION_DIR (\(PiPaths.sessionsDirectory.path))")
+        let relocatedRefs = SessionIndex().loadAllSessions()
+        check(relocatedRefs.contains(where: { $0.name == "Relocated Custom Session Store" }),
+              "SessionIndex must dynamically index sessions from relocated MUSE_SESSION_DIR (found \(relocatedRefs.count) sessions)")
+
+        let customDBURL = tempMuseRoot.appendingPathComponent("relocated-keywords.sqlite")
+        let relocatedIndex = MuseRollingKeywordIndex(dbURL: customDBURL, enableDiskScan: true)
+        relocatedIndex.ensureFastSeedLoaded()
+        let relocatedMatches = relocatedIndex.matchKeywords(for: "tensorrt", limit: 4)
+        check(relocatedMatches.contains(where: { $0.phrase.contains("tensorrt") }),
+              "MuseRollingKeywordIndex must dynamically scan relocated PiPaths.sessionsDirectory without hardcoded paths (got: \(relocatedMatches.map(\.phrase)))")
+
+        unsetenv("MUSE_CONFIG_DIR")
+        unsetenv("MUSE_SESSION_DIR")
+
         print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, and backend state transitions verified.")
         exit(0)
     }

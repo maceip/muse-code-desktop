@@ -4,25 +4,22 @@
 //
 //  Mirrors Pi's project trust semantics instead of inventing a new promise.
 //
-//  Pi considers a directory to have trust-requiring resources when it finds:
-//    - .pi/settings.json
-//    - .pi/extensions, .pi/skills, .pi/prompts, .pi/themes
-//    - .pi/SYSTEM.md, .pi/APPEND_SYSTEM.md
+//  Muse considers a directory to have trust-requiring resources when it finds:
+//    - .muse/settings.json (or .pi/settings.json)
+//    - .muse/extensions, .muse/skills, .muse/prompts, .muse/themes
+//    - .muse/SYSTEM.md, .muse/APPEND_SYSTEM.md
 //    - a project .agents/skills directory in this or an ancestor directory
 //      (the user-global ~/.agents/skills is always trusted)
 //
-//  Saved decisions live in `~/.pi/agent/trust.json` as `{ "<canonical path>": true|false }`
-//  with nearest-ancestor lookup. That file is Pi's supported store (`/trust`
-//  writes it), so PiCode writes the same format and does not maintain a rival
-//  source of truth. Trust is an input-loading guard, not a sandbox.
-//
+//  Saved decisions live in `PiPaths.trustFile` as `{ "<canonical path>": true|false }`
+//  with nearest-ancestor lookup.
 
 import Foundation
 
 struct ProjectTrustService {
     private let fileManager = FileManager.default
 
-    /// Resource names under `.pi` that Pi gates behind trust.
+    /// Resource names under `.muse` / `.pi` that Muse gates behind trust.
     static let trustRequiringResources = [
         "settings.json",
         "extensions",
@@ -33,19 +30,24 @@ struct ProjectTrustService {
         "APPEND_SYSTEM.md"
     ]
 
+    /// Project-level configuration directory names checked for trust-requiring resources.
+    static let projectConfigDirectoryNames = [".muse", ".pi"]
+
     // MARK: - Resource detection
 
     func hasTrustRequiringResources(cwd: String) -> Bool {
-        let home = CanonicalPath.of(NSHomeDirectory())
+        let home = CanonicalPath.of(PiPaths.userHomeDirectory.path)
         let userAgentsSkills = URL(fileURLWithPath: home)
             .appendingPathComponent(".agents/skills").path
 
         var current = CanonicalPath.of(cwd)
-        let configDirectory = URL(fileURLWithPath: current).appendingPathComponent(".pi")
-        for resource in Self.trustRequiringResources where fileManager.fileExists(
-            atPath: configDirectory.appendingPathComponent(resource).path
-        ) {
-            return true
+        for dirName in Self.projectConfigDirectoryNames {
+            let configDirectory = URL(fileURLWithPath: current).appendingPathComponent(dirName)
+            for resource in Self.trustRequiringResources where fileManager.fileExists(
+                atPath: configDirectory.appendingPathComponent(resource).path
+            ) {
+                return true
+            }
         }
 
         while true {

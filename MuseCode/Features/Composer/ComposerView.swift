@@ -2680,7 +2680,7 @@ struct VoiceOrbEnterMetrics: Equatable {
         )
     }
 
-    /// Evaluates the exact frame-by-frame Enter progression measured from `/Users/mac/Desktop/1028 (2)/1028 (2).mp4` (`F018` at `0.000s` through `F046` at `0.933s`):
+    /// Evaluates the exact frame-by-frame Enter progression measured from the reference voice orb motion study (`F018` at `0.000s` through `F046` at `0.933s`):
     /// - `0.000s..0.067s` (`F019..F020`): Full-width S-curve plasma wave ignites inside the `100% -> 97.5%` pill while placeholder & mic remain visible and subcontainer is crisp (`alpha = 1.0 -> 0.966`).
     /// - `0.067s..0.167s` (`F021..F023`): Pill contracts to `83.9%` width, lower belly glows silver-white (`pillBottomWhiteGlow = 0.92`), placeholder fades to `0.18` with slight motion blur, mic fades out, subcontainer blurs (`11pt`) & drops to `alpha = 0.80`.
     /// - `0.167s..0.267s` (`F024..F026`): Pill contracts to `68.7%` width, lower belly white glow peaks (`0.96`), placeholder reaches `0.0`, subcontainer blurs (`20pt`) & drops to `alpha = 0.64`.

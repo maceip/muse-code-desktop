@@ -965,16 +965,17 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
     }
 
     private static func findSessionFilePath(forSessionID sessionID: String) -> String? {
-        let root = PiPaths.sessionsDirectory
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else { return nil }
-        for case let url as URL in enumerator {
-            if url.lastPathComponent == "session.jsonl",
-               url.deletingLastPathComponent().lastPathComponent == sessionID {
-                return url.path
+        for root in PiPaths.candidateSessionDirectories {
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for case let url as URL in enumerator {
+                if url.lastPathComponent == "session.jsonl",
+                   url.deletingLastPathComponent().lastPathComponent == sessionID {
+                    return url.path
+                }
             }
         }
         return nil

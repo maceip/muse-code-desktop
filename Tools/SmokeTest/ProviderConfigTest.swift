@@ -267,7 +267,7 @@ func runProviders() async -> Int32 {
     print("== the user's real configuration is only ever read ==")
     // The harness overrides PI_CODING_AGENT_DIR, so address the real directory
     // explicitly: reads are the whole story, and reading must change nothing.
-    let realAgent = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".pi/agent")
+    let realAgent = PiPaths.userHomeDirectory.appendingPathComponent(".config/muse")
     let realAuth = realAgent.appendingPathComponent("auth.json")
     let realModels = realAgent.appendingPathComponent("models.json")
     var stampBefore: [String] = []

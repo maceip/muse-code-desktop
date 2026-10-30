@@ -39,9 +39,9 @@ enum MuseFeaturesTest {
             }
         }
         print("INFO: Parsed \(totalSubagents) subagents, \(totalArtifacts) artifacts, \(totalMessages) agent messages across real Muse sessions")
-        check(totalSubagents > 0, "Discovered real Muse subagents from ~/.local/share/muse/sessions")
-        check(totalArtifacts > 0, "Discovered real Muse artifacts from ~/.local/share/muse/sessions")
-        check(totalMessages > 0, "Discovered real Muse agent messages from ~/.local/share/muse/sessions")
+        check(totalSubagents > 0, "Discovered real Muse subagents from \(sessionsRoot.path.abbreviatingHomeDirectory)")
+        check(totalArtifacts > 0, "Discovered real Muse artifacts from \(sessionsRoot.path.abbreviatingHomeDirectory)")
+        check(totalMessages > 0, "Discovered real Muse agent messages from \(sessionsRoot.path.abbreviatingHomeDirectory)")
 
         // 3. Verify MuseUsageService battery calculation and live CLI query
         let usage = await MainActor.run { MuseUsageService.shared }

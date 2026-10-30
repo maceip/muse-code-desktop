@@ -2,59 +2,189 @@
 //  SessionIndex.swift
 //  PiCode
 //
-//  Builds the project and session list from Muse's own session directory
-//  (`~/.local/share/muse/sessions`).
+//  Builds the project and session list from Muse's discovered session directory.
 //
 
 import Foundation
 
 enum PiPaths {
-    /// Muse's configuration directory. Defaults to `~/.config/muse`, with
-    /// `MUSE_HOME` / `PI_CODING_AGENT_DIR` overrides supported.
-    static var agentDirectory: URL {
+    private static let shellEnvLock = NSLock()
+    private static var cachedLoginShellOverrides: [String: String]?
+
+    /// Environment variable keys that can relocate Muse's config, data, or session directories.
+    private static let pathOverrideEnvKeys = [
+        "MUSE_HOME",
+        "MUSE_CONFIG_DIR",
+        "PI_CODING_AGENT_DIR",
+        "XDG_CONFIG_HOME",
+        "MUSE_DATA_DIR",
+        "XDG_DATA_HOME",
+        "MUSE_SESSION_DIR",
+        "MUSE_SESSIONS_DIR",
+        "PI_CODING_AGENT_SESSION_DIR",
+        "MUSE_MODEL_CATALOG_DIR"
+    ]
+
+    /// Current user's home directory URL discovered dynamically from the OS / environment.
+    static var userHomeDirectory: URL {
+        if let envHome = ProcessInfo.processInfo.environment["HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !envHome.isEmpty,
+           envHome.hasPrefix("/") {
+            return URL(fileURLWithPath: envHome, isDirectory: true).standardizedFileURL
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+    }
+
+    /// Resolves an environment variable from `ProcessInfo.processInfo.environment` first,
+    /// falling back to the user's login shell environment when launched as a macOS GUI app.
+    static func environmentValue(for key: String) -> String? {
         let env = ProcessInfo.processInfo.environment
-        if let raw = env["MUSE_HOME"] ?? env["PI_CODING_AGENT_DIR"] {
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return expandAndStandardize(trimmed)
+        if let raw = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            return raw
+        }
+        // In CLI tests that pass a minimal custom environment without login shell overrides,
+        // only probe the login shell when no Muse path override variable is already present in `env`.
+        let hasExplicitProcessOverride = pathOverrideEnvKeys.contains { env[$0] != nil }
+        guard !hasExplicitProcessOverride else { return nil }
+        return loginShellEnvironmentOverrides()[key]
+    }
+
+    private static func loginShellEnvironmentOverrides() -> [String: String] {
+        shellEnvLock.lock()
+        if let cached = cachedLoginShellOverrides {
+            shellEnvLock.unlock()
+            return cached
+        }
+        shellEnvLock.unlock()
+
+        var discovered: [String: String] = [:]
+        // Read user shell profile files (`~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.bash_profile`, `~/.profile`)
+        // non-blocking so GUI launches immediately honor exported `MUSE_*` / `XDG_*` variables without spawning a subshell on the main thread.
+        let home = userHomeDirectory
+        let profileFiles = [".zshenv", ".zprofile", ".zshrc", ".bash_profile", ".profile"]
+        for file in profileFiles {
+            let fileURL = home.appendingPathComponent(file)
+            guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
+            for rawLine in text.split(whereSeparator: \.isNewline) {
+                var line = rawLine.trimmingCharacters(in: .whitespaces)
+                guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+                if line.hasPrefix("export ") {
+                    line = String(line.dropFirst("export ".count)).trimmingCharacters(in: .whitespaces)
+                }
+                guard let eq = line.firstIndex(of: "=") else { continue }
+                let key = String(line[..<eq]).trimmingCharacters(in: .whitespaces)
+                guard pathOverrideEnvKeys.contains(key) else { continue }
+                var value = String(line[line.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+                if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")),
+                   value.count >= 2 {
+                    value = String(value.dropFirst().dropLast())
+                }
+                value = value
+                    .replacingOccurrences(of: "$HOME", with: home.path)
+                    .replacingOccurrences(of: "${HOME}", with: home.path)
+                if !value.isEmpty {
+                    discovered[key] = value
+                }
             }
         }
-        return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+
+        shellEnvLock.lock()
+        cachedLoginShellOverrides = discovered
+        shellEnvLock.unlock()
+        return discovered
+    }
+
+    /// Muse's configuration directory. Dynamically discovers `MUSE_HOME`, `MUSE_CONFIG_DIR`,
+    /// `PI_CODING_AGENT_DIR`, `XDG_CONFIG_HOME/muse`, or `<home>/.config/muse`.
+    static var agentDirectory: URL {
+        for key in ["MUSE_HOME", "MUSE_CONFIG_DIR", "PI_CODING_AGENT_DIR"] {
+            if let raw = environmentValue(for: key),
+               let url = validAbsoluteDirectoryURL(raw) {
+                return url
+            }
+        }
+        if let xdgConfig = environmentValue(for: "XDG_CONFIG_HOME"),
+           let xdgURL = validAbsoluteDirectoryURL(xdgConfig) {
+            return xdgURL.appendingPathComponent("muse", isDirectory: true).standardizedFileURL
+        }
+        return userHomeDirectory
             .appendingPathComponent(".config/muse", isDirectory: true)
             .standardizedFileURL
     }
 
-    /// Muse's shared data directory (`~/.local/share/muse`).
+    /// Muse's shared data directory. Dynamically discovers `MUSE_DATA_DIR`, `dataDir` in
+    /// `settings.json`, `MUSE_HOME` / `PI_CODING_AGENT_DIR`, `XDG_DATA_HOME/muse`,
+    /// or `<home>/.local/share/muse`.
     static var dataDirectory: URL {
-        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        if let raw = environmentValue(for: "MUSE_DATA_DIR"),
+           let url = validAbsoluteDirectoryURL(raw) {
+            return url
+        }
+        if let configuredData = configuredDirectory(forKeys: ["dataDir", "data_dir"]) {
+            return configuredData
+        }
+        if let rawHome = environmentValue(for: "MUSE_HOME") ?? environmentValue(for: "PI_CODING_AGENT_DIR"),
+           let url = validAbsoluteDirectoryURL(rawHome) {
+            return url
+        }
+        if let xdgData = environmentValue(for: "XDG_DATA_HOME"),
+           let xdgURL = validAbsoluteDirectoryURL(xdgData) {
+            return xdgURL.appendingPathComponent("muse", isDirectory: true).standardizedFileURL
+        }
+        return userHomeDirectory
             .appendingPathComponent(".local/share/muse", isDirectory: true)
             .standardizedFileURL
     }
 
-    /// Muse's cached model catalog directory (`~/.local/share/muse/model-catalog`).
+    /// Muse's cached model catalog directory. Dynamically discovers `MUSE_MODEL_CATALOG_DIR`,
+    /// `modelCatalogDir` in `settings.json`, or `dataDirectory/model-catalog`.
     static var modelCatalogDirectory: URL {
-        dataDirectory.appendingPathComponent("model-catalog", isDirectory: true)
-    }
-
-    /// Muse's session root directory. Defaults to `~/.local/share/muse/sessions`
-    /// unless overridden by environment or `settings.json`.
-    static var sessionsDirectory: URL {
-        let env = ProcessInfo.processInfo.environment
-        if let raw = env["MUSE_SESSION_DIR"] ?? env["PI_CODING_AGENT_SESSION_DIR"],
+        if let raw = environmentValue(for: "MUSE_MODEL_CATALOG_DIR"),
            let url = validAbsoluteDirectoryURL(raw) {
             return url
+        }
+        if let configuredCatalog = configuredDirectory(forKeys: ["modelCatalogDir", "model_catalog_dir"]) {
+            return configuredCatalog
+        }
+        return dataDirectory.appendingPathComponent("model-catalog", isDirectory: true).standardizedFileURL
+    }
+
+    /// Muse's primary session root directory. Dynamically resolves environment overrides
+    /// (`MUSE_SESSION_DIR`, `MUSE_SESSIONS_DIR`, `PI_CODING_AGENT_SESSION_DIR`),
+    /// `settings.json` (`sessionDir` / `sessionsDir` / `session_dir`), `MUSE_HOME`,
+    /// `MUSE_DATA_DIR`, `XDG_DATA_HOME`, or `dataDirectory/sessions`.
+    static var sessionsDirectory: URL {
+        for key in ["MUSE_SESSION_DIR", "MUSE_SESSIONS_DIR", "PI_CODING_AGENT_SESSION_DIR"] {
+            if let raw = environmentValue(for: key),
+               let url = validAbsoluteDirectoryURL(raw) {
+                return url
+            }
         }
         if let configured = configuredSessionDirectory() {
             return configured
         }
-        if env["MUSE_HOME"] != nil || env["PI_CODING_AGENT_DIR"] != nil {
-            return agentDirectory
-                .appendingPathComponent("sessions", isDirectory: true)
-                .standardizedFileURL
-        }
         return dataDirectory
             .appendingPathComponent("sessions", isDirectory: true)
             .standardizedFileURL
+    }
+
+    /// All candidate Muse session root directories to index when a user may have relocated
+    /// their session store or has sessions across both custom and default locations.
+    static var candidateSessionDirectories: [URL] {
+        var urls: [URL] = [sessionsDirectory]
+        let env = ProcessInfo.processInfo.environment
+        let hasExplicitProcessOverride = pathOverrideEnvKeys.contains { env[$0] != nil }
+        if !hasExplicitProcessOverride {
+            let xdgOrDefault = dataDirectory.appendingPathComponent("sessions", isDirectory: true).standardizedFileURL
+            if !urls.contains(xdgOrDefault) {
+                urls.append(xdgOrDefault)
+            }
+            let agentSessions = agentDirectory.appendingPathComponent("sessions", isDirectory: true).standardizedFileURL
+            if !urls.contains(agentSessions), FileManager.default.fileExists(atPath: agentSessions.path) {
+                urls.append(agentSessions)
+            }
+        }
+        return urls
     }
 
     static var settingsFile: URL {
@@ -82,14 +212,23 @@ enum PiPaths {
     }
 
     private static func configuredSessionDirectory() -> URL? {
-        guard let data = try? Data(contentsOf: settingsFile),
-              let json = try? JSONCoding.decode(data),
-              let raw = json.string("sessionDir")
-        else { return nil }
-        return validAbsoluteDirectoryURL(raw)
+        configuredDirectory(forKeys: ["sessionDir", "sessionsDir", "session_dir", "sessions_dir"])
     }
 
-    private static func validAbsoluteDirectoryURL(_ raw: String) -> URL? {
+    private static func configuredDirectory(forKeys keys: [String]) -> URL? {
+        guard let data = try? Data(contentsOf: settingsFile),
+              let json = try? JSONCoding.decode(data)
+        else { return nil }
+        for key in keys {
+            if let raw = json.string(key),
+               let url = validAbsoluteDirectoryURL(raw) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    static func validAbsoluteDirectoryURL(_ raw: String) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.hasPrefix("/") || trimmed.hasPrefix("~") else {
             return nil
@@ -98,11 +237,12 @@ enum PiPaths {
     }
 
     private static func expandAndStandardize(_ path: String) -> URL {
+        let homePath = userHomeDirectory.path
         let expanded: String
         if path == "~" {
-            expanded = NSHomeDirectory()
+            expanded = homePath
         } else if path.hasPrefix("~/") {
-            expanded = NSHomeDirectory() + "/" + path.dropFirst(2)
+            expanded = homePath + "/" + path.dropFirst(2)
         } else {
             expanded = (path as NSString).expandingTildeInPath
         }
@@ -128,30 +268,35 @@ struct SessionIndex {
         return dirs
     }
 
-    /// Returns all valid `.jsonl` session files under `PiPaths.sessionsDirectory`,
+    /// Returns all valid `.jsonl` session files across `PiPaths.candidateSessionDirectories`,
     /// excluding `/subagent/` logs and non-session sidecar streams.
     func sessionFileURLs() -> [URL] {
-        let root = PiPaths.sessionsDirectory
         let fm = FileManager.default
-        guard fm.fileExists(atPath: root.path),
-              let enumerator = fm.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .contentModificationDateKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return []
-        }
-
+        var seenPaths = Set<String>()
         var candidates: [URL] = []
-        for case let url as URL in enumerator {
-            if url.lastPathComponent == "subagent" {
-                enumerator.skipDescendants()
+
+        for root in PiPaths.candidateSessionDirectories {
+            guard fm.fileExists(atPath: root.path),
+                  let enumerator = fm.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .contentModificationDateKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
                 continue
             }
-            guard url.pathExtension == "jsonl",
-                  !url.path.contains("/subagent/") else { continue }
-            if loadSessionRef(at: url) != nil {
-                candidates.append(url)
+
+            for case let url as URL in enumerator {
+                if url.lastPathComponent == "subagent" {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                guard url.pathExtension == "jsonl",
+                      !url.path.contains("/subagent/") else { continue }
+                let canonicalFile = url.standardizedFileURL.path
+                guard seenPaths.insert(canonicalFile).inserted else { continue }
+                if loadSessionRef(at: url) != nil {
+                    candidates.append(url)
+                }
             }
         }
         return candidates

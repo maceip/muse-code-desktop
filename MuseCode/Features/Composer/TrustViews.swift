@@ -152,7 +152,7 @@ struct ComposerAccessControl: View {
                     .buttonStyle(.settingsPill)
             }
 
-            Text("Changing this restarts Muse for this session. Decisions are written to Muse's own trust store (`~/.config/muse/trust.json`).")
+            Text("Changing this restarts Muse for this session. Decisions are written to Muse's own trust store (`\(PiPaths.trustFile.path.abbreviatingHomeDirectory)`).")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

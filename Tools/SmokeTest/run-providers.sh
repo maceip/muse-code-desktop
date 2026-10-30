@@ -12,7 +12,7 @@ APP="$PWD/MuseCode"
 TMP="${TMPDIR:-/tmp}"
 OUT="${TMP%/}/picode-provider-test"
 SDK="$(xcrun --show-sdk-path --sdk macosx)"
-PI="/Users/mac/.nvm/versions/node/v24.15.0/bin/pi"
+PI="${PICODE_TEST_PI:-$(command -v pi || command -v muse || true)}"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/agent"

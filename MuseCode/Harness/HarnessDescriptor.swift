@@ -80,7 +80,7 @@ extension HarnessDescriptor {
             documentationURL: nil,
             fallbackBinaries: [],
             hasAdapter: true,
-            supportNote: "Driven over `muse exec --json`, with sessions indexed from `~/.local/share/muse/sessions` and configuration in `~/.config/muse`."
+            supportNote: "Driven over `muse exec --json`, with sessions indexed from `\(PiPaths.sessionsDirectory.path.abbreviatingHomeDirectory)` and configuration in `\(PiPaths.agentDirectory.path.abbreviatingHomeDirectory)`."
         )
     }()
 

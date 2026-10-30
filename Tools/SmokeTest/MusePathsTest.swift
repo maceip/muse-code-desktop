@@ -133,6 +133,46 @@ func run() async -> Int32 {
               resolved.sessions.abbreviatingHomeDirectory)
     }
 
+    print("== MUSE_DATA_DIR & XDG_DATA_HOME & XDG_CONFIG_HOME ==")
+    let customDataDir = root.appendingPathComponent("custom-muse-data", isDirectory: true)
+    if let resolved = resolve(["MUSE_DATA_DIR": customDataDir.path]) {
+        check("session directory follows MUSE_DATA_DIR/sessions",
+              resolved.sessions == customDataDir.appendingPathComponent("sessions").standardizedFileURL.path,
+              resolved.sessions)
+    }
+    let xdgDataHome = root.appendingPathComponent("xdg-data", isDirectory: true)
+    let xdgConfigHome = root.appendingPathComponent("xdg-config", isDirectory: true)
+    if let resolved = resolve([
+        "XDG_DATA_HOME": xdgDataHome.path,
+        "XDG_CONFIG_HOME": xdgConfigHome.path
+    ]) {
+        check("agent directory follows XDG_CONFIG_HOME/muse",
+              resolved.agent == xdgConfigHome.appendingPathComponent("muse").standardizedFileURL.path,
+              resolved.agent)
+        check("session directory follows XDG_DATA_HOME/muse/sessions",
+              resolved.sessions == xdgDataHome.appendingPathComponent("muse/sessions").standardizedFileURL.path,
+              resolved.sessions)
+    }
+
+    print("== login shell profile (.zshrc) dynamic discovery ==")
+    let fakeHome = root.appendingPathComponent("fake-user-home", isDirectory: true)
+    let profileSessions = fakeHome.appendingPathComponent("relocated-muse-sessions", isDirectory: true)
+    let profileConfig = fakeHome.appendingPathComponent("relocated-muse-config", isDirectory: true)
+    try? FileManager.default.createDirectory(at: fakeHome, withIntermediateDirectories: true)
+    let zshrc = """
+    export MUSE_CONFIG_DIR="\(profileConfig.path)"
+    export MUSE_SESSION_DIR="\(profileSessions.path)"
+    """
+    try? zshrc.data(using: .utf8)?.write(to: fakeHome.appendingPathComponent(".zshrc"))
+    if let resolved = resolve(["HOME": fakeHome.path]) {
+        check("GUI app without env vars discovers MUSE_CONFIG_DIR from ~/.zshrc",
+              resolved.agent == profileConfig.standardizedFileURL.path,
+              resolved.agent)
+        check("GUI app without env vars discovers MUSE_SESSION_DIR from ~/.zshrc",
+              resolved.sessions == profileSessions.standardizedFileURL.path,
+              resolved.sessions)
+    }
+
     print(failures == 0 ? "RESULT: all checks passed" : "RESULT: \(failures) check(s) failed")
     return failures == 0 ? 0 : 1
 }

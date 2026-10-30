@@ -4,12 +4,9 @@
 //
 //  Low-energy, low-compute, local-only lazy rolling keyword indexer & matcher.
 //  Extracts "Muse Keywords" (high-signal 1–3 word topical keywords, phrases, and
-//  co-occurring semantic neighbors) across the user's chat interaction history:
-//    1. Muse transcripts (`~/.local/share/muse/sessions/**/*.jsonl`)
-//    2. Claude transcripts (`~/.claude/history.jsonl`, `~/.claude/projects/**/*.jsonl`)
-//    3. Codex transcripts (`~/.codex/history.jsonl`, `~/.codex/sessions/**/*.jsonl`,
-//       `~/.codex/archived_sessions/**/*.jsonl`)
-//    4. Active project session titles & opening user messages
+//  co-occurring semantic neighbors) across the user's Muse chat interaction history:
+//    1. Muse transcripts discovered dynamically via `PiPaths.candidateSessionDirectories`
+//    2. Active project session titles & opening user messages
 //
 //  Designed to scale effortlessly to gigabytes of chat history with near-zero CPU
 //  and memory overhead via:
@@ -192,7 +189,7 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
     // MARK: - Public API
 
     /// Ensures the index has an immediate seed of Muse Keywords from active projects and
-    /// recent Muse sessions (`~/.local/share/muse/sessions`), then kicks off the low-energy
+    /// recent Muse sessions discovered via `PiPaths`, then kicks off the low-energy
     /// lazy rolling background scanner across Muse session transcripts off the main thread.
     func startLazyRollingScanIfNeeded(projects: [ProjectGroup] = []) {
         guard isServiceAvailable else { return }
@@ -214,7 +211,7 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
         }
     }
 
-    /// Synchronously guarantees that recent `~/.local/share/muse/sessions` files plus `projects`
+    /// Synchronously guarantees that recent Muse session files discovered via `PiPaths` plus `projects`
     /// have been ingested so automated tests can query real Muse Keywords right away.
     func ensureFastSeedLoaded(projects: [ProjectGroup] = []) {
         guard isServiceAvailable else { return }
@@ -707,17 +704,18 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
 
     private func performFastHistorySeedLocked() {
         guard enableDiskScan else { return }
-        let home = NSHomeDirectory()
         var fastFiles: [(path: String, source: String)] = []
+        var seenPaths = Set<String>()
 
-        let museSessionsRoot = (home as NSString).appendingPathComponent(".local/share/muse/sessions")
-        let recentMuseFiles = Self.collectRecentJSONLFiles(
-            in: museSessionsRoot,
-            skipSubagents: true,
-            maxFiles: 20
-        )
-        for path in recentMuseFiles {
-            fastFiles.append((path, "muse"))
+        for sessionRoot in PiPaths.candidateSessionDirectories {
+            let recentMuseFiles = Self.collectRecentJSONLFiles(
+                in: sessionRoot.path,
+                skipSubagents: true,
+                maxFiles: 20
+            )
+            for path in recentMuseFiles where seenPaths.insert(path).inserted {
+                fastFiles.append((path, "muse"))
+            }
         }
 
         var dirty = false
@@ -792,14 +790,18 @@ final class MuseRollingKeywordIndex: @unchecked Sendable {
             }
         }
 
-        let home = NSHomeDirectory()
-        let museDir = (home as NSString).appendingPathComponent(".local/share/muse/sessions")
-        let paths = Self.collectRecentJSONLFiles(
-            in: museDir,
-            skipSubagents: true,
-            maxFiles: 80
-        )
-        let allTargets: [(path: String, source: String)] = paths.map { ($0, "muse") }
+        var allTargets: [(path: String, source: String)] = []
+        var seenTargetPaths = Set<String>()
+        for sessionRoot in PiPaths.candidateSessionDirectories {
+            let paths = Self.collectRecentJSONLFiles(
+                in: sessionRoot.path,
+                skipSubagents: true,
+                maxFiles: 80
+            )
+            for path in paths where seenTargetPaths.insert(path).inserted {
+                allTargets.append((path, "muse"))
+            }
+        }
 
         let batchSize = 8
         var idx = 0

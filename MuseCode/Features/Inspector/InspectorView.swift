@@ -771,7 +771,7 @@ struct MuseExtensionsPane: View {
                 EmptyStateView(
                     systemImage: "puzzle",
                     title: "No Muse skills found",
-                    message: "Install skills in ~/.config/muse/skills or .muse/skills."
+                    message: "Install skills in \(PiPaths.agentDirectory.appendingPathComponent("skills").path.abbreviatingHomeDirectory) or .muse/skills."
                 )
             } else {
                 List {
