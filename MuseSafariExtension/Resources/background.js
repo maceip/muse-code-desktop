@@ -18,6 +18,9 @@ let isPaused = false;
 let bridgePort = DEFAULT_BRIDGE_PORT;
 let isPolling = false;
 let cachedIconData = null;
+const cachedDomSnapshots = new Map();
+const pendingTabCommands = new Map();
+const pendingCommandResolvers = new Map();
 
 function buildActionIconImageData(isClaimed) {
   if (typeof OffscreenCanvas === "undefined") {
@@ -263,24 +266,93 @@ async function buildTabStateSummary() {
 }
 
 async function sendToContentScript(tabId, payload) {
+  let lastErr = null;
   try {
     const response = await browser.tabs.sendMessage(tabId, payload);
     if (response) {
       return response;
     }
-  } catch (_) {
-    // Inject content.js on demand if the tab was opened before the extension loaded
-    try {
-      await browser.scripting.executeScript({
-        target: { tabId },
-        files: ["content.js"]
-      });
-      return await browser.tabs.sendMessage(tabId, payload);
-    } catch (err) {
-      return { ok: false, error: String(err && err.message ? err.message : err) };
+  } catch (err) {
+    lastErr = `sendMessage1: ${err && err.message ? err.message : err}`;
+  }
+
+  // Inject content.js on demand if the tab was opened before the extension loaded
+  // or if the previous content script listener was invalidated when the extension reloaded
+  try {
+    await browser.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"]
+    });
+  } catch (err) {
+    lastErr = `${lastErr || ""} | executeScript(files): ${err && err.message ? err.message : err}`;
+  }
+
+  try {
+    const retryResponse = await browser.tabs.sendMessage(tabId, payload);
+    if (retryResponse) {
+      return retryResponse;
+    }
+  } catch (err) {
+    lastErr = `${lastErr || ""} | sendMessage2: ${err && err.message ? err.message : err}`;
+  }
+
+  // Fallback 1: execute directly via browser.scripting.executeScript
+  try {
+    const injected = await browser.scripting.executeScript({
+      target: { tabId },
+      func: async (cmd) => {
+        if (window.__museSafariBridge && typeof window.__museSafariBridge.handleCommand === "function") {
+          return await window.__museSafariBridge.handleCommand(cmd);
+        }
+        return null;
+      },
+      args: [payload]
+    });
+    if (Array.isArray(injected) && injected.length > 0 && injected[0].result) {
+      return injected[0].result;
+    }
+  } catch (err) {
+    lastErr = `${lastErr || ""} | executeScript(func): ${err && err.message ? err.message : err}`;
+  }
+
+  // Fallback 2: if inspectDOM or snapshot, return the cached DOM snapshot pushed by content.js if fresh
+  if (payload && (payload.action === "inspectDOM" || payload.action === "snapshot")) {
+    const cached = cachedDomSnapshots.get(tabId);
+    if (cached && Date.now() - cached.timestamp < 5000) {
+      return { ok: true, action: payload.action, data: cached.dom };
     }
   }
-  return { ok: false, error: "No response from content script" };
+
+  // Fallback 3: Piggyback command on the next content.js -> background.js ping
+  if (payload && payload.action !== "markOwned") {
+    const cmdId = payload.id || `cmd_${Date.now()}_${Math.random()}`;
+    const cmdWithId = Object.assign({}, payload, { id: cmdId });
+    const queue = pendingTabCommands.get(tabId) || [];
+    queue.push(cmdWithId);
+    pendingTabCommands.set(tabId, queue);
+
+    const piggybackResult = await new Promise((resolve) => {
+      pendingCommandResolvers.set(cmdId, resolve);
+      setTimeout(() => {
+        if (pendingCommandResolvers.has(cmdId)) {
+          pendingCommandResolvers.delete(cmdId);
+          resolve(null);
+        }
+      }, 2800);
+    });
+    if (piggybackResult) {
+      return piggybackResult;
+    }
+  }
+
+  if (payload && (payload.action === "inspectDOM" || payload.action === "snapshot")) {
+    const cached = cachedDomSnapshots.get(tabId);
+    if (cached) {
+      return { ok: true, action: payload.action, data: cached.dom };
+    }
+  }
+
+  return { ok: false, error: `No response from content script (${lastErr || "no error details"})` };
 }
 
 async function executeBridgeCommand(command, senderTabId = null) {
@@ -358,9 +430,23 @@ async function executeBridgeCommand(command, senderTabId = null) {
       tab = await browser.tabs.create({ url: targetUrl, active: true });
       await saveOwnedTabId(tab.id);
     } else {
-      tab = await browser.tabs.update(tab.id, { url: targetUrl, active: true });
+      const updated = await browser.tabs.update(tab.id, { url: targetUrl, active: true });
+      if (updated && updated.id) {
+        tab = updated;
+        await saveOwnedTabId(tab.id);
+      }
     }
     const loaded = await waitForTabLoad(tab.id, command.timeoutMs || 15000);
+    if (loaded && loaded.id) {
+      tab = loaded;
+      await saveOwnedTabId(tab.id);
+    } else {
+      const activeTabs = await browser.tabs.query({ active: true, currentWindow: true });
+      if (activeTabs && activeTabs.length > 0 && activeTabs[0].id) {
+        tab = activeTabs[0];
+        await saveOwnedTabId(tab.id);
+      }
+    }
     await sendToContentScript(tab.id, { action: "markOwned", owned: true });
     await updateToolbarActionVisuals();
     const domResult = await sendToContentScript(tab.id, { action: "inspectDOM" });
@@ -466,7 +552,44 @@ async function pollNativeAndLocalBridge() {
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.target === "background") {
     const senderTabId = sender && sender.tab ? sender.tab.id : null;
-    executeBridgeCommand(message.command || { action: "status" }, senderTabId).then(sendResponse);
+    if (senderTabId !== null && sender && sender.tab && sender.tab.active && ownedTabId !== null && senderTabId !== ownedTabId && !isPaused) {
+      // Safari may assign a new tabId across top-level navigation in the active claimed tab
+      saveOwnedTabId(senderTabId);
+    }
+    if (senderTabId !== null && message.domSnapshot) {
+      cachedDomSnapshots.set(senderTabId, {
+        dom: message.domSnapshot,
+        timestamp: Date.now()
+      });
+    }
+    if (message.commandResult) {
+      const { id, result, domSnapshot } = message.commandResult;
+      if (senderTabId !== null && domSnapshot) {
+        cachedDomSnapshots.set(senderTabId, {
+          dom: domSnapshot,
+          timestamp: Date.now()
+        });
+      }
+      if (id && pendingCommandResolvers.has(id)) {
+        const resolve = pendingCommandResolvers.get(id);
+        pendingCommandResolvers.delete(id);
+        resolve(result);
+      }
+      sendResponse({ ok: true });
+      return true;
+    }
+
+    pollNativeAndLocalBridge();
+    executeBridgeCommand(message.command || { action: "status" }, senderTabId).then((resp) => {
+      if (senderTabId !== null) {
+        const queue = pendingTabCommands.get(senderTabId);
+        if (queue && queue.length > 0) {
+          resp.pendingCommand = queue.shift();
+          pendingTabCommands.set(senderTabId, queue);
+        }
+      }
+      sendResponse(resp);
+    });
     return true;
   }
   return false;
@@ -491,5 +614,13 @@ browser.tabs.onRemoved.addListener((tabId) => {
 
 loadStoredState().then(() => {
   setInterval(pollNativeAndLocalBridge, 350);
+  try {
+    if (browser.alarms) {
+      browser.alarms.create("museBridgePoll", { periodInMinutes: 0.05 });
+      browser.alarms.onAlarm.addListener(() => {
+        pollNativeAndLocalBridge();
+      });
+    }
+  } catch (_) {}
   pollNativeAndLocalBridge();
 });

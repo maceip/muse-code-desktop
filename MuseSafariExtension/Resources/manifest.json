@@ -32,7 +32,8 @@
     "tabs",
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "alarms"
   ],
 
   "host_permissions": [
@@ -42,7 +43,8 @@
 
   "background": {
     "scripts": [ "background.js" ],
-    "type": "module"
+    "type": "module",
+    "persistent": true
   },
 
   "content_scripts": [

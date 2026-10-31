@@ -7,9 +7,51 @@
  */
 
 (() => {
-  if (window.__museSafariBridgeInstalled) {
-    return;
+  let lastPingTime = 0;
+
+  const pollLocalHTTPAndBackground = () => {
+    try {
+      const now = Date.now();
+      if (now - lastPingTime < 3000) {
+        return;
+      }
+      lastPingTime = now;
+
+      if (typeof browser !== "undefined" && browser.runtime && browser.runtime.sendMessage) {
+        browser.runtime
+          .sendMessage({
+            target: "background",
+            command: { action: "checkIfThisTabOwned" }
+          })
+          .then((resp) => {
+            if (resp && resp.data && resp.data.owned && window.__museSafariBridge && window.__museSafariBridge.updateOwnedBadge) {
+              window.__museSafariBridge.updateOwnedBadge(true);
+            }
+            if (resp && resp.pendingCommand && window.__museSafariBridge && window.__museSafariBridge.handleCommand) {
+              const cmd = resp.pendingCommand;
+              window.__museSafariBridge.handleCommand(cmd).then((cmdResult) => {
+                browser.runtime
+                  .sendMessage({
+                    target: "background",
+                    commandResult: {
+                      id: cmd.id,
+                      result: cmdResult
+                    }
+                  })
+                  .catch(() => {});
+              });
+            }
+          })
+          .catch(() => {});
+      }
+    } catch (_) {}
+  };
+  const pingBackground = pollLocalHTTPAndBackground;
+
+  if (window.__museSafariBridgeInterval) {
+    clearInterval(window.__museSafariBridgeInterval);
   }
+  const alreadyInstalled = Boolean(window.__museSafariBridgeInstalled);
   window.__museSafariBridgeInstalled = true;
 
   function computeSelector(el) {
@@ -68,20 +110,50 @@
 
     const lowered = String(selectorOrHint).toLowerCase().trim();
     const candidates = Array.from(
-      document.querySelectorAll("input, textarea, select, button, a, [role='button'], [contenteditable='true']")
+      document.querySelectorAll(
+        "input, textarea, select, button, a, label, [role='button'], [role='menuitem'], [role='option'], [role='checkbox'], [role='radio'], [contenteditable='true']"
+      )
     );
+    const exactMatches = [];
     for (const el of candidates) {
       const name = (el.getAttribute("name") || "").toLowerCase();
       const id = (el.id || "").toLowerCase();
-      const placeholder = (el.getAttribute("placeholder") || "").toLowerCase();
-      const label = findLabelForElement(el).toLowerCase();
+      const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
       const text = (el.innerText || el.value || "").toLowerCase().trim();
       if (
         name === lowered ||
         id === lowered ||
+        ariaLabel === lowered ||
+        text === lowered
+      ) {
+        exactMatches.push(el);
+      }
+    }
+    if (exactMatches.length > 0) {
+      // Prefer an enabled match inside an open modal/dialog, or the last enabled match in DOM order
+      const enabledInModal = exactMatches.filter(
+        (el) => !el.disabled && el.closest("[role='dialog'], [aria-modal='true'], .modal, .ReactModal__Content")
+      );
+      if (enabledInModal.length > 0) {
+        return enabledInModal[enabledInModal.length - 1];
+      }
+      const enabledMatches = exactMatches.filter((el) => !el.disabled);
+      if (enabledMatches.length > 0) {
+        return enabledMatches[enabledMatches.length - 1];
+      }
+      return exactMatches[exactMatches.length - 1];
+    }
+    for (const el of candidates) {
+      const name = (el.getAttribute("name") || "").toLowerCase();
+      const id = (el.id || "").toLowerCase();
+      const placeholder = (el.getAttribute("placeholder") || "").toLowerCase();
+      const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+      const label = findLabelForElement(el).toLowerCase();
+      const text = (el.innerText || el.value || "").toLowerCase().trim();
+      if (
         placeholder.includes(lowered) ||
+        ariaLabel.includes(lowered) ||
         label.includes(lowered) ||
-        text === lowered ||
         text.includes(lowered)
       ) {
         return el;
@@ -126,7 +198,7 @@
   }
 
   function inspectDOM() {
-    const inputs = Array.from(document.querySelectorAll("input, textarea, select")).slice(0, 60).map((el) => ({
+    const inputs = Array.from(document.querySelectorAll("input, textarea, select")).slice(0, 120).map((el) => ({
       tag: el.tagName.toLowerCase(),
       type: el.getAttribute("type") || (el.tagName === "TEXTAREA" ? "textarea" : "text"),
       selector: computeSelector(el),
@@ -136,13 +208,22 @@
       placeholder: el.getAttribute("placeholder") || "",
       value: el.type === "password" ? "***" : el.value || "",
       checked: Boolean(el.checked),
-      disabled: Boolean(el.disabled)
+      disabled: Boolean(el.disabled),
+      options:
+        el.tagName === "SELECT"
+          ? Array.from(el.options).slice(0, 60).map((o) => ({ value: o.value, text: o.text.trim() }))
+          : undefined
     }));
 
-    const buttons = Array.from(document.querySelectorAll("button, input[type='submit'], [role='button']"))
-      .slice(0, 40)
+    const buttons = Array.from(
+      document.querySelectorAll(
+        "button, input[type='submit'], [role='button'], [role='menuitem'], [role='option'], [role='checkbox'], [role='radio'], [role='dialog'] a:not([href]), [aria-modal='true'] a:not([href])"
+      )
+    )
+      .slice(0, 120)
       .map((el) => ({
         tag: el.tagName.toLowerCase(),
+        role: el.getAttribute("role") || "",
         selector: computeSelector(el),
         text: (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 100),
         disabled: Boolean(el.disabled)
@@ -396,6 +477,12 @@
         return { ok: false, action, error: `Clickable element not found: ${cmd.selector || cmd.text}` };
       }
       el.scrollIntoView({ block: "center", behavior: "instant" });
+      try {
+        el.focus();
+        for (const evType of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
+          el.dispatchEvent(new MouseEvent(evType, { bubbles: true, cancelable: true, view: window }));
+        }
+      } catch (_) {}
       el.click();
       return {
         ok: true,
@@ -465,24 +552,22 @@
     inspectDOM,
     extractScholarResults,
     resolveElement,
-    setNativeElementValue
+    setNativeElementValue,
+    updateOwnedBadge
   };
 
   if (typeof browser !== "undefined" && browser.runtime && browser.runtime.onMessage) {
-    browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      handleCommand(message || {}).then(sendResponse);
-      return true;
-    });
-    // Automatically check on page load whether this tab is the Muse-claimed tab
-    try {
-      browser.runtime
-        .sendMessage({ target: "background", command: { action: "checkIfThisTabOwned" } })
-        .then((resp) => {
-          if (resp && resp.data && resp.data.owned) {
-            updateOwnedBadge(true);
-          }
-        })
-        .catch(() => {});
-    } catch (_) {}
+    if (!alreadyInstalled) {
+      browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        const handler =
+          window.__museSafariBridge && window.__museSafariBridge.handleCommand
+            ? window.__museSafariBridge.handleCommand
+            : handleCommand;
+        handler(message || {}).then(sendResponse);
+        return true;
+      });
+    }
+    pingBackground();
+    window.__museSafariBridgeInterval = setInterval(pingBackground, 5000);
   }
 })();
