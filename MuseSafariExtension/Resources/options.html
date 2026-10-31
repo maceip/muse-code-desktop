@@ -6,10 +6,16 @@
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      max-width: 520px;
-      margin: 32px auto;
+      max-width: 540px;
+      margin: 28px auto;
       padding: 0 20px;
       line-height: 1.5;
+    }
+    .card {
+      padding: 14px 16px;
+      border-radius: 10px;
+      border: 1px solid rgba(128, 128, 128, 0.25);
+      margin-bottom: 16px;
     }
     label { display: block; font-weight: 600; margin-bottom: 6px; }
     input {
@@ -20,24 +26,31 @@
       font-size: 13px;
     }
     button {
-      padding: 6px 14px;
+      padding: 7px 14px;
       border-radius: 6px;
       border: none;
       background: #0077ff;
       color: white;
       font-weight: 600;
       cursor: pointer;
-      margin-left: 8px;
     }
   </style>
 </head>
 <body>
   <h2>Muse Safari Bridge Settings</h2>
-  <p>Configure the local HTTP bridge port used by Pie.app and the Muse CLI skill.</p>
-  <div>
+
+  <div class="card">
+    <label>All Websites Permission</label>
+    <p id="permText" style="margin: 0 0 10px 0; font-size: 13px;">
+      Grant Muse Safari Bridge access to all websites (<code>*://*/*</code>) so the Muse agent can navigate and inspect any page.
+    </p>
+    <button id="allowAllBtn">Allow on All Websites…</button>
+  </div>
+
+  <div class="card">
     <label for="portInput">Local Bridge Port</label>
     <input id="portInput" type="number" min="1024" max="65535" value="47635">
-    <button id="saveBtn">Save</button>
+    <button id="saveBtn" style="margin-left: 8px;">Save</button>
     <span id="savedMsg" style="margin-left:8px;color:#0077ff;display:none;">Saved</span>
   </div>
   <script src="options.js" type="module"></script>

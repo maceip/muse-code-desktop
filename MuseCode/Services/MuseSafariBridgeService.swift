@@ -84,12 +84,20 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
 
     // MARK: - Directory & Bundled Extension Discovery
 
+    static func allBridgeDirectories() -> [URL] {
+        let primary = PiPaths.safariBridgeDirectory
+        let container = PiPaths.userHomeDirectory
+            .appendingPathComponent("Library/Containers/\(extensionBundleIdentifier)/Data/.muse/safari-bridge", isDirectory: true)
+        return [primary, container]
+    }
+
     func ensureBridgeDirectoriesExist() {
-        let root = PiPaths.safariBridgeDirectory
-        let requests = root.appendingPathComponent("requests", isDirectory: true)
-        let responses = root.appendingPathComponent("responses", isDirectory: true)
-        try? FileManager.default.createDirectory(at: requests, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: responses, withIntermediateDirectories: true)
+        for root in Self.allBridgeDirectories() {
+            let requests = root.appendingPathComponent("requests", isDirectory: true)
+            let responses = root.appendingPathComponent("responses", isDirectory: true)
+            try? FileManager.default.createDirectory(at: requests, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: responses, withIntermediateDirectories: true)
+        }
     }
 
     static func locateBundledAppexURL() -> URL? {
@@ -138,10 +146,21 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         isExtensionEnabledInSafari = safariState.enabled
         extensionStatusMessage = safariState.message
 
-        // Check native extension handler state file if present
-        let stateFile = PiPaths.safariBridgeDirectory.appendingPathComponent("extension-state.json")
-        if let data = try? Data(contentsOf: stateFile),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        // Check native extension handler state file if present (both primary and sandbox container)
+        for dir in Self.allBridgeDirectories() {
+            let stateFile = dir.appendingPathComponent("extension-state.json")
+            guard let data = try? Data(contentsOf: stateFile),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            isExtensionEnabledInSafari = true
+            extensionStatusMessage = "Active & connected in Safari (\(Self.extensionBundleIdentifier))"
+            if let updatedAtStr = json["updatedAt"] as? String,
+               let date = ISO8601DateFormatter().date(from: updatedAtStr),
+               Date().timeIntervalSince(date) < 10.0 {
+                ownedTab.lastHeartbeat = date
+                ownedTab.transport = "safari-extension"
+            }
             if let tabId = json["ownedTabId"] as? Int {
                 ownedTab.tabId = tabId
                 ownedTab.url = (json["url"] as? String) ?? ownedTab.url
@@ -527,18 +546,37 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
 
     private func dispatchToConnectedSafariExtension(_ command: [String: Any], id: String) async -> [String: Any] {
         pendingExtensionCommands.append(command)
-        // Also write to the shared file queue for SafariWebExtensionHandler
-        let reqFile = PiPaths.safariBridgeDirectory
-            .appendingPathComponent("requests", isDirectory: true)
-            .appendingPathComponent("\(id).json")
+        // Also write to both primary and sandboxed container request queues for SafariWebExtensionHandler
         if let data = try? JSONSerialization.data(withJSONObject: command) {
-            try? data.write(to: reqFile, options: .atomic)
+            for dir in Self.allBridgeDirectories() {
+                let reqFile = dir
+                    .appendingPathComponent("requests", isDirectory: true)
+                    .appendingPathComponent("\(id).json")
+                try? data.write(to: reqFile, options: .atomic)
+            }
         }
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<[String: Any], Never>) in
             pendingWaiters[id] = continuation
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                for _ in 0..<30 {
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    guard self.pendingWaiters[id] != nil else { return }
+                    for dir in Self.allBridgeDirectories() {
+                        let respFile = dir
+                            .appendingPathComponent("responses", isDirectory: true)
+                            .appendingPathComponent("\(id).json")
+                        if let data = try? Data(contentsOf: respFile),
+                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            try? FileManager.default.removeItem(at: respFile)
+                            if let waiter = self.pendingWaiters.removeValue(forKey: id) {
+                                let resultPayload = (obj["result"] as? [String: Any]) ?? obj
+                                waiter.resume(returning: resultPayload)
+                                return
+                            }
+                        }
+                    }
+                }
                 if let waiter = self.pendingWaiters.removeValue(forKey: id) {
                     waiter.resume(returning: ["ok": false, "error": "Safari extension timed out"])
                 }

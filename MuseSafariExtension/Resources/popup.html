@@ -5,7 +5,7 @@
   <title>Muse Safari Bridge</title>
   <style>
     body {
-      width: 280px;
+      width: 300px;
       margin: 0;
       padding: 14px;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
@@ -23,11 +23,21 @@
       padding: 8px 10px;
       border-radius: 8px;
       background: rgba(0, 119, 255, 0.12);
-      margin-bottom: 10px;
+      margin-bottom: 8px;
       font-size: 12px;
-      word-break: break-all;
+      word-break: break-word;
     }
-    .actions { display: flex; gap: 8px; }
+    .perm-status {
+      padding: 6px 10px;
+      border-radius: 7px;
+      background: rgba(34, 197, 94, 0.14);
+      margin-bottom: 10px;
+      font-size: 11.5px;
+    }
+    .perm-status.pending {
+      background: rgba(245, 158, 11, 0.16);
+    }
+    .actions { display: flex; gap: 8px; margin-bottom: 8px; }
     button {
       flex: 1;
       padding: 7px 10px;
@@ -39,6 +49,10 @@
       background: #0077ff;
       color: white;
     }
+    button.full {
+      width: 100%;
+      display: block;
+    }
     button.secondary {
       background: #e2e6ee;
       color: #1d222b;
@@ -49,10 +63,12 @@
   <h3>Muse Safari Bridge</h3>
   <p>Persistent DOM &amp; tab control bridge for Muse Code.</p>
   <div id="status" class="status">Checking owned tab…</div>
+  <div id="permStatus" class="perm-status pending">Checking website access…</div>
   <div class="actions">
     <button id="claimBtn">Claim This Tab</button>
     <button id="releaseBtn" class="secondary">Release</button>
   </div>
+  <button id="allowAllBtn" class="full">Allow on All Websites…</button>
   <script src="popup.js" type="module"></script>
 </body>
 </html>
