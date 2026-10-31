@@ -91,18 +91,26 @@ async function updateToolbarActionVisuals() {
     const isFocusedOnClaimedTab = ownedTabId !== null && activeTabId === ownedTabId;
 
     const iconData = buildActionIconImageData(isFocusedOnClaimedTab);
-    const iconPath = isFocusedOnClaimedTab ? "images/icon-claimed.svg" : "images/icon.svg";
+    const iconPaths = isFocusedOnClaimedTab
+      ? {
+          16: "images/icon-claimed-16.png",
+          32: "images/icon-claimed-32.png",
+          64: "images/icon-claimed-64.png",
+          128: "images/icon-claimed-128.png"
+        }
+      : {
+          16: "images/icon-idle-16.png",
+          32: "images/icon-idle-32.png",
+          64: "images/icon-idle-64.png",
+          128: "images/icon-idle-128.png"
+        };
 
     // Update global default action state to reflect whether the currently focused tab is the claimed tab
     try {
-      if (iconData) {
-        await browser.action.setIcon({ imageData: iconData });
-      } else {
-        await browser.action.setIcon({ path: iconPath });
-      }
+      await browser.action.setIcon({ path: iconPaths });
     } catch (_) {
       try {
-        await browser.action.setIcon({ path: iconPath });
+        if (iconData) await browser.action.setIcon({ imageData: iconData });
       } catch (_) {}
     }
 
@@ -110,29 +118,32 @@ async function updateToolbarActionVisuals() {
       try {
         await browser.action.setBadgeText({ text: "ON" });
         await browser.action.setBadgeBackgroundColor({ color: "#10b981" });
-        await browser.action.setTitle({ title: `Muse Safari Bridge — Claimed Tab (#${ownedTabId})` });
+        await browser.action.setTitle({ title: `Muse on Safari — Claimed Tab (#${ownedTabId})` });
       } catch (_) {}
     } else if (ownedTabId !== null) {
       try {
         await browser.action.setBadgeText({ text: "" });
-        await browser.action.setTitle({ title: `Muse Safari Bridge (Tab #${ownedTabId} claimed in background)` });
+        await browser.action.setTitle({ title: `Muse on Safari (Tab #${ownedTabId} claimed)` });
       } catch (_) {}
     } else {
       try {
         await browser.action.setBadgeText({ text: "" });
-        await browser.action.setTitle({ title: "Muse Safari Bridge — Click to Claim Tab" });
+        await browser.action.setTitle({ title: "Muse on Safari" });
       } catch (_) {}
     }
 
     // Also set tab-specific icon/badge on ownedTabId if present
     if (ownedTabId !== null) {
-      const claimedData = buildActionIconImageData(true);
       try {
-        if (claimedData) {
-          await browser.action.setIcon({ tabId: ownedTabId, imageData: claimedData });
-        } else {
-          await browser.action.setIcon({ tabId: ownedTabId, path: "images/icon-claimed.svg" });
-        }
+        await browser.action.setIcon({
+          tabId: ownedTabId,
+          path: {
+            16: "images/icon-claimed-16.png",
+            32: "images/icon-claimed-32.png",
+            64: "images/icon-claimed-64.png",
+            128: "images/icon-claimed-128.png"
+          }
+        });
         await browser.action.setBadgeText({ tabId: ownedTabId, text: "ON" });
         await browser.action.setBadgeBackgroundColor({ tabId: ownedTabId, color: "#10b981" });
       } catch (_) {}
@@ -163,12 +174,15 @@ async function saveOwnedTabId(tabId) {
     try {
       await sendToContentScript(previousTabId, { action: "markOwned", owned: false });
       if (browser.action) {
-        const idleData = buildActionIconImageData(false);
-        if (idleData) {
-          await browser.action.setIcon({ tabId: previousTabId, imageData: idleData });
-        } else {
-          await browser.action.setIcon({ tabId: previousTabId, path: "images/icon.svg" });
-        }
+        await browser.action.setIcon({
+          tabId: previousTabId,
+          path: {
+            16: "images/icon-idle-16.png",
+            32: "images/icon-idle-32.png",
+            64: "images/icon-idle-64.png",
+            128: "images/icon-idle-128.png"
+          }
+        });
         await browser.action.setBadgeText({ tabId: previousTabId, text: "" });
       }
     } catch (_) {}

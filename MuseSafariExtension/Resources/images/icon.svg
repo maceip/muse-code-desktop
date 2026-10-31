@@ -1,12 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-    <linearGradient id="linearGradient1" x1="512" y1="961" x2="512" y2="64" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="#0077ff" stop-opacity="1"/>
-        <stop offset="1" stop-color="#00bcff" stop-opacity="1"/>
-    </linearGradient>
-    <path id="Shield" fill="url(#linearGradient1)" fill-rule="evenodd" stroke="none" d="M 512 961 C 512 961 131 780 131 535 C 131 290 131 166 131 166 L 512 64 L 512 961 Z M 512 961 C 512 961 893 780 893 535 C 893 290 893 166 893 166 L 512 64 L 512 961 Z"/>
-    <g id="Compass">
-        <polygon fill="#ffffff" points="512,220 640,512 512,460 384,512"/>
-        <polygon fill="#6ec7ff" points="512,804 640,512 512,564 384,512"/>
-    </g>
+    <circle cx="512" cy="512" r="450" fill="#475569"/>
+    <path fill="none" stroke="#ffffff" stroke-width="96" stroke-linecap="round" stroke-linejoin="round" d="M 280 680 L 280 340 L 512 550 L 744 340 L 744 680"/>
 </svg>
