@@ -190,6 +190,28 @@
       } else {
         el.value = String(value);
       }
+      // Also update React/Redux controlled form fibers in main world if present
+      if (el.id) {
+        try {
+          const s = document.createElement("script");
+          s.textContent = `(() => {
+            const target = document.getElementById(${JSON.stringify(el.id)});
+            if (!target) return;
+            if (target._valueTracker) target._valueTracker.setValue("");
+            const fk = Object.keys(target).find(k => k.startsWith("__reactInternalInstance") || k.startsWith("__reactFiber"));
+            let f = fk ? target[fk] : null;
+            while (f) {
+              if (f.memoizedProps && typeof f.memoizedProps.onChange === "function" && String(f.memoizedProps.onChange).includes("nextValue")) {
+                try { f.memoizedProps.onChange(${JSON.stringify(String(value))}); } catch (_) {}
+                break;
+              }
+              f = f.return;
+            }
+          })()`;
+          document.documentElement.appendChild(s);
+          s.remove();
+        } catch (_) {}
+      }
     }
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
