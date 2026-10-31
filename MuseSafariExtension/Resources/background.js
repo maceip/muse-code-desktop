@@ -14,6 +14,7 @@ const NATIVE_APP_ID = "xyz.hieunguyen.PiCode.SafariExtension";
 const DEFAULT_BRIDGE_PORT = 47635;
 
 let ownedTabId = null;
+let isPaused = false;
 let bridgePort = DEFAULT_BRIDGE_PORT;
 let isPolling = false;
 let cachedIconData = null;
@@ -153,14 +154,20 @@ async function updateToolbarActionVisuals() {
 
 async function loadStoredState() {
   try {
-    const stored = await browser.storage.local.get(["ownedTabId", "bridgePort"]);
+    const stored = await browser.storage.local.get(["ownedTabId", "isPaused", "bridgePort"]);
     if (typeof stored.ownedTabId === "number") {
       ownedTabId = stored.ownedTabId;
+    }
+    if (typeof stored.isPaused === "boolean") {
+      isPaused = stored.isPaused;
     }
     if (typeof stored.bridgePort === "number" && stored.bridgePort > 0) {
       bridgePort = stored.bridgePort;
     }
   } catch (_) {}
+  if (!isPaused && ownedTabId === null) {
+    await getOwnedOrActiveTab(true);
+  }
   await updateToolbarActionVisuals();
 }
 
@@ -244,12 +251,13 @@ async function waitForTabLoad(tabId, timeoutMs = 12000) {
 }
 
 async function buildTabStateSummary() {
-  const tab = await getOwnedOrActiveTab(false);
+  const tab = await getOwnedOrActiveTab(!isPaused);
   return {
     ownedTabId: tab ? tab.id : null,
+    isPaused,
     url: tab ? tab.url || "" : "",
     title: tab ? tab.title || "" : "",
-    status: tab ? tab.status || "unknown" : "unclaimed",
+    status: isPaused ? "paused" : (tab ? tab.status || "complete" : "ready"),
     bridgePort
   };
 }
@@ -289,6 +297,8 @@ async function executeBridgeCommand(command, senderTabId = null) {
   }
 
   if (action === "claimTab") {
+    isPaused = false;
+    try { await browser.storage.local.set({ isPaused: false }); } catch (_) {}
     let tab = null;
     if (typeof command.tabId === "number") {
       tab = await browser.tabs.get(command.tabId);
@@ -300,7 +310,9 @@ async function executeBridgeCommand(command, senderTabId = null) {
     } else {
       tab = await getOwnedOrActiveTab(true);
     }
-    await sendToContentScript(tab.id, { action: "markOwned", owned: true });
+    if (tab && tab.id) {
+      await sendToContentScript(tab.id, { action: "markOwned", owned: true });
+    }
     await updateToolbarActionVisuals();
     return {
       ok: true,
@@ -310,6 +322,8 @@ async function executeBridgeCommand(command, senderTabId = null) {
   }
 
   if (action === "releaseTab") {
+    isPaused = true;
+    try { await browser.storage.local.set({ isPaused: true }); } catch (_) {}
     if (ownedTabId !== null) {
       try {
         await sendToContentScript(ownedTabId, { action: "markOwned", owned: false });
@@ -322,6 +336,12 @@ async function executeBridgeCommand(command, senderTabId = null) {
       action,
       data: await buildTabStateSummary()
     };
+  }
+
+  // Any active Muse command (navigate, openTab, inspectDOM, fill, click, etc.) automatically unpauses and claims/uses the tab
+  if (isPaused) {
+    isPaused = false;
+    try { await browser.storage.local.set({ isPaused: false }); } catch (_) {}
   }
 
   if (action === "navigate" || action === "openTab") {

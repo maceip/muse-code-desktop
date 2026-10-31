@@ -744,8 +744,20 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
             if ownedTab.tabId == nil {
                 ownedTab.tabId = 1
                 ownedTab.status = "complete"
-                ownedTab.transport = "webkit-dom"
                 ownedTab.lastHeartbeat = Date()
+                if ownedTab.url.isEmpty, let safariTab = await Self.syncLiveSafariTab(navigateToURL: nil) {
+                    _ = await loadURLOrHTMLInPersistentTab(
+                        urlString: safariTab.url,
+                        html: safariTab.html,
+                        syncRealSafariTab: false
+                    )
+                    ownedTab.transport = "safari-live+webkit-dom"
+                    if !safariTab.title.isEmpty {
+                        ownedTab.title = safariTab.title
+                    }
+                } else {
+                    ownedTab.transport = "webkit-dom"
+                }
             }
             return await evaluateContentBridgeCommand(command, in: webView)
         }

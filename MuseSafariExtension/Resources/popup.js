@@ -34,31 +34,45 @@ async function refreshStatus() {
   const activeTab = await getActiveTab();
   const activeTabId = activeTab ? activeTab.id : null;
 
-  const resp = await browser.runtime.sendMessage({
+  let resp = await browser.runtime.sendMessage({
     target: "background",
     command: { action: "status" }
   });
 
-  const ownedTabId = resp && resp.data ? resp.data.ownedTabId : null;
-  const isCurrentTabClaimed = ownedTabId !== null && activeTabId === ownedTabId;
+  const isPaused = Boolean(resp && resp.data && resp.data.isPaused);
+  let ownedTabId = resp && resp.data ? resp.data.ownedTabId : null;
+
+  // Auto-claim active tab on popup open if not explicitly paused
+  if (!isPaused && ownedTabId === null && activeTabId !== null) {
+    resp = await browser.runtime.sendMessage({
+      target: "background",
+      command: { action: "claimTab", tabId: activeTabId }
+    });
+    ownedTabId = resp && resp.data ? resp.data.ownedTabId : activeTabId;
+  }
+
+  const isCurrentTabClaimed = !isPaused && ownedTabId !== null && activeTabId === ownedTabId;
 
   if (isCurrentTabClaimed) {
     subtitleEl.textContent = "Let Muse code drive Safari";
-    claimBtn.textContent = "✓ Tab Claimed";
+    claimBtn.textContent = "✓ Active on This Tab";
     claimBtn.classList.add("claimed-btn");
     claimBtn.disabled = true;
+    releaseBtn.textContent = "Release";
     releaseBtn.disabled = false;
-  } else if (ownedTabId !== null) {
-    subtitleEl.textContent = `Let Muse code drive Safari (Tab #${ownedTabId} active)`;
-    claimBtn.textContent = "Claim This Tab";
+  } else if (!isPaused && ownedTabId !== null) {
+    subtitleEl.textContent = "Let Muse code drive Safari";
+    claimBtn.textContent = "Use This Tab";
     claimBtn.classList.remove("claimed-btn");
     claimBtn.disabled = false;
+    releaseBtn.textContent = "Release";
     releaseBtn.disabled = false;
   } else {
     subtitleEl.textContent = "Let Muse code drive Safari";
-    claimBtn.textContent = "Claim This Tab";
+    claimBtn.textContent = "Use This Tab";
     claimBtn.classList.remove("claimed-btn");
     claimBtn.disabled = false;
+    releaseBtn.textContent = "Release";
     releaseBtn.disabled = true;
   }
 }
@@ -66,7 +80,7 @@ async function refreshStatus() {
 claimBtn.addEventListener("click", async () => {
   if (claimBtn.disabled) return;
   claimBtn.disabled = true;
-  claimBtn.textContent = "Claiming…";
+  claimBtn.textContent = "Connecting…";
   await requestAllSitesPermissionIfNeeded();
   const activeTab = await getActiveTab();
   const tabId = activeTab ? activeTab.id : undefined;
