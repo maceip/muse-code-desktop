@@ -20,5 +20,10 @@
 	<!-- AppleEvents to Safari so Muse Safari Bridge can directly inspect and control a live Safari tab even before the toolbar extension is enabled. -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+	<!-- Shared App Group container with bundled MuseSafariExtension.appex. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>D74F5NNMRQ.ai.zmax.musecode</string>
+	</array>
 </dict>
 </plist>

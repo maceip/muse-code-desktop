@@ -3,7 +3,7 @@
 //  MuseSafariExtension
 //
 //  Native WebExtension message handler for the bundled Muse Safari Bridge
-//  (`xyz.hieunguyen.PiCode.SafariExtension`). Bridges `browser.runtime.sendNativeMessage`
+//  (`ai.zmax.musecode.SafariExtension`). Bridges `browser.runtime.sendNativeMessage`
 //  from `background.js` directly to the local Muse Safari Bridge queue and HTTP
 //  coordinator so the Muse agent can persistently own a Safari tab, navigate,
 //  inspect the DOM, fill forms, click elements, and extract values.
@@ -15,7 +15,7 @@ import os.log
 
 @objc(SafariWebExtensionHandler)
 final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
-    private let logger = Logger(subsystem: "xyz.hieunguyen.PiCode.SafariExtension", category: "Bridge")
+    private let logger = Logger(subsystem: "ai.zmax.musecode.SafariExtension", category: "Bridge")
 
     /// Dynamically resolves the shared Safari bridge directory without hardcoded user paths.
     private static func resolveBridgeDirectory() -> URL {
@@ -24,6 +24,9 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         if let explicit = env["MUSE_SAFARI_BRIDGE_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !explicit.isEmpty {
             return URL(fileURLWithPath: (explicit as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        if let groupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: "D74F5NNMRQ.ai.zmax.musecode") {
+            return groupURL.appendingPathComponent(".muse/safari-bridge", isDirectory: true)
         }
         if let configDir = env["MUSE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !configDir.isEmpty {
@@ -54,7 +57,7 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         // Persist latest owned-tab state from background.js
         var tabState: [String: Any] = [
             "updatedAt": ISO8601DateFormatter().string(from: Date()),
-            "extensionBundleId": "xyz.hieunguyen.PiCode.SafariExtension"
+            "extensionBundleId": "ai.zmax.musecode.SafariExtension"
         ]
         if let tab = message["tabState"] as? [String: Any] {
             for (k, v) in tab { tabState[k] = v }
@@ -93,7 +96,7 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             reply(context: context, payload: [
                 "ok": true,
                 "type": "pong",
-                "extension": "xyz.hieunguyen.PiCode.SafariExtension"
+                "extension": "ai.zmax.musecode.SafariExtension"
             ])
         }
     }

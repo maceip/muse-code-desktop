@@ -10,7 +10,7 @@
  * DOM commands to `content.js` inside the owned tab.
  */
 
-const NATIVE_APP_ID = "xyz.hieunguyen.PiCode.SafariExtension";
+const NATIVE_APP_ID = "ai.zmax.musecode.SafariExtension";
 const DEFAULT_BRIDGE_PORT = 47635;
 
 let ownedTabId = null;
@@ -347,6 +347,13 @@ async function executeBridgeCommand(command, senderTabId = null) {
   if (action === "navigate" || action === "openTab") {
     const targetUrl = command.url || "https://www.google.com";
     let tab = await getOwnedOrActiveTab(false);
+    if (!tab) {
+      const activeTabs = await browser.tabs.query({ active: true, currentWindow: true });
+      if (activeTabs && activeTabs.length > 0 && activeTabs[0].id) {
+        tab = activeTabs[0];
+        await saveOwnedTabId(tab.id);
+      }
+    }
     if (!tab || action === "openTab") {
       tab = await browser.tabs.create({ url: targetUrl, active: true });
       await saveOwnedTabId(tab.id);

@@ -173,6 +173,11 @@ plutil -lint "${ENTITLEMENTS}"
 # ---------------------------------------------------------------------------
 # 2b. Build and embed bundled Safari Web Extension (MuseSafariExtension.appex)
 # ---------------------------------------------------------------------------
+PROFILES_DIR="${BUILD_ROOT}/ProvisioningProfiles"
+if [[ -f "${PROFILES_DIR}/Muse_Code_Direct_Distribution.provisionprofile" ]]; then
+  cp "${PROFILES_DIR}/Muse_Code_Direct_Distribution.provisionprofile" "${STAGE_APP}/Contents/embedded.provisionprofile"
+fi
+
 SAFARI_EXT_SRC="${REPO_ROOT}/MuseSafariExtension"
 SAFARI_APPEX="${STAGE_APP}/Contents/PlugIns/MuseSafariExtension.appex"
 echo "==> Building bundled Safari Web Extension (MuseSafariExtension.appex)"
@@ -183,6 +188,9 @@ cp "${SAFARI_EXT_SRC}/Info.plist" "${SAFARI_APPEX}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${SAFARI_APPEX}/Contents/Info.plist"
 plutil -lint "${SAFARI_APPEX}/Contents/Info.plist"
 ditto "${SAFARI_EXT_SRC}/Resources" "${SAFARI_APPEX}/Contents/Resources"
+if [[ -f "${PROFILES_DIR}/Muse_Safari_Extension_Direct_Distribution.provisionprofile" ]]; then
+  cp "${PROFILES_DIR}/Muse_Safari_Extension_Direct_Distribution.provisionprofile" "${SAFARI_APPEX}/Contents/embedded.provisionprofile"
+fi
 
 xcrun swiftc \
   -O \
@@ -228,6 +236,51 @@ fi
 
 echo "==> Verifying Muse Code.app signature"
 codesign --verify --deep --strict --verbose=2 "${STAGE_APP}"
+
+# ---------------------------------------------------------------------------
+# 3b. Build Mac App Store signed bundle + installer .pkg (when MAS certs & profiles exist)
+# ---------------------------------------------------------------------------
+MAS_APP_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+  | sed -n 's/.*\([0-9A-F]\{40\}\) "3rd Party Mac Developer Application: [^"]*".*/\1/p' \
+  | head -n 1 || true)"
+MAS_PKG_IDENTITY="$(security find-identity -v 2>/dev/null \
+  | sed -n 's/.*"\(3rd Party Mac Developer Installer: [^"]*\)".*/\1/p' \
+  | head -n 1 || true)"
+
+if [[ -n "${MAS_APP_IDENTITY}" && -n "${MAS_PKG_IDENTITY}" \
+      && -f "${PROFILES_DIR}/Muse_Code_Mac_App_Store.provisionprofile" \
+      && -f "${PROFILES_DIR}/Muse_Safari_Extension_Mac_App_Store.provisionprofile" ]]; then
+  echo "==> Building Mac App Store bundle & signed .pkg installer (Team D74F5NNMRQ)"
+  MAS_STAGE_DIR="${BUILD_ROOT}/mas-stage"
+  MAS_APP="${MAS_STAGE_DIR}/Muse Code.app"
+  MAS_APPEX="${MAS_APP}/Contents/PlugIns/MuseSafariExtension.appex"
+  MAS_PKG="${BUILD_ROOT}/MuseCode-AppStore.pkg"
+  rm -rf "${MAS_STAGE_DIR}" "${MAS_PKG}"
+  mkdir -p "${MAS_STAGE_DIR}"
+  ditto "${STAGE_APP}" "${MAS_APP}"
+
+  cp "${PROFILES_DIR}/Muse_Code_Mac_App_Store.provisionprofile" "${MAS_APP}/Contents/embedded.provisionprofile"
+  cp "${PROFILES_DIR}/Muse_Safari_Extension_Mac_App_Store.provisionprofile" "${MAS_APPEX}/Contents/embedded.provisionprofile"
+
+  codesign --force --options runtime --timestamp \
+    --entitlements "${SAFARI_EXT_SRC}/MuseSafariExtension-AppStore.entitlements" \
+    --sign "${MAS_APP_IDENTITY}" \
+    "${MAS_APPEX}"
+
+  codesign --force --options runtime --timestamp \
+    --entitlements "${REPO_ROOT}/MuseCode/MuseCode-AppStore.entitlements" \
+    --sign "${MAS_APP_IDENTITY}" \
+    "${MAS_APP}"
+
+  codesign --verify --deep --strict --verbose=2 "${MAS_APP}"
+
+  productbuild \
+    --component "${MAS_APP}" /Applications \
+    --sign "${MAS_PKG_IDENTITY}" \
+    "${MAS_PKG}"
+  pkgutil --check-signature "${MAS_PKG}"
+  echo "==> Mac App Store package verified: ${MAS_PKG}"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Notarize & staple Muse Code.app before packaging into DMG + ZIP

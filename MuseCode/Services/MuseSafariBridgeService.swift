@@ -48,7 +48,7 @@ struct MuseSafariDOMInspection: Equatable, Sendable {
 @MainActor
 final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
     static let shared = MuseSafariBridgeService()
-    nonisolated static let extensionBundleIdentifier = "xyz.hieunguyen.PiCode.SafariExtension"
+    nonisolated static let extensionBundleIdentifier = "ai.zmax.musecode.SafariExtension"
     nonisolated static let skillName = "safari-browser"
 
     private(set) var isServerRunning: Bool = false
@@ -88,7 +88,11 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         let primary = PiPaths.safariBridgeDirectory
         let container = PiPaths.userHomeDirectory
             .appendingPathComponent("Library/Containers/\(extensionBundleIdentifier)/Data/.muse/safari-bridge", isDirectory: true)
-        return [primary, container]
+        var dirs = [primary, container]
+        if let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "D74F5NNMRQ.ai.zmax.musecode") {
+            dirs.append(groupURL.appendingPathComponent(".muse/safari-bridge", isDirectory: true))
+        }
+        return dirs
     }
 
     func ensureBridgeDirectoriesExist() {
@@ -1047,8 +1051,8 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         let fm = FileManager.default
         let targetDirs = [Self.userSkillDirectoryURL(), Self.bridgeStagedSkillDirectoryURL()]
 
-        let skillMarkdown = Self.buildSkillMarkdown(defaultPort: listeningPort)
-        let cliPythonScript = Self.buildSafariBridgeCLIScript(defaultPort: listeningPort)
+        let skillMarkdown = Self.buildSkillMarkdown(defaultPort: 47635)
+        let cliPythonScript = Self.buildSafariBridgeCLIScript(defaultPort: 47635)
 
         for dir in targetDirs {
             let scriptsDir = dir.appendingPathComponent("scripts", isDirectory: true)
@@ -1107,7 +1111,7 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
 
         # Muse Safari Bridge (`safari-browser`)
 
-        This skill provides a persistent JavaScript bridge into Safari via the bundled **Muse Safari Bridge** Web Extension (`xyz.hieunguyen.PiCode.SafariExtension`) and local bridge coordinator (`http://127.0.0.1:\(defaultPort)`).
+        This skill provides a persistent JavaScript bridge into Safari via the bundled **Muse Safari Bridge** Web Extension (`ai.zmax.musecode.SafariExtension`) and local bridge coordinator (`http://127.0.0.1:\(defaultPort)`).
 
         It allows you to claim and own a dedicated Safari tab, navigate to pages, inspect live DOM structure, retrieve element values, fill out forms (with full React/Vue/DOM input & change events), click buttons or links, evaluate JavaScript in the page, and extract structured search results (such as Google Scholar).
 
@@ -1154,7 +1158,7 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         #!/usr/bin/env python3
         \"\"\"
         safari_bridge.py — Muse CLI helper for the Persistent Safari JavaScript Bridge.
-        Communicates with Pie.app's MuseSafariBridgeService (`http://127.0.0.1:\(defaultPort)/api/v1/command`).
+        Communicates with Muse Code.app's MuseSafariBridgeService (`http://127.0.0.1:\(defaultPort)/api/v1/command`).
         \"\"\"
 
         import argparse
