@@ -6,7 +6,100 @@
 //  provider definitions. Harness-owned accounts stay with their harness.
 //
 
+import AppKit
 import SwiftUI
+
+/// Dedicated native macOS Settings window controller so opening Settings from
+/// the sidebar gear button, the app rail, the Command Palette, or `Pie -> Settings…` (`⌘,`)
+/// always presents a standalone macOS Settings window without replacing the main workspace window.
+@MainActor
+final class SettingsWindowController: NSObject, NSWindowDelegate {
+    static let shared = SettingsWindowController()
+
+    private(set) var window: NSWindow?
+    private weak var boundState: AppState?
+    private var isClosingWindow = false
+
+    func show(state: AppState) {
+        boundState = state
+        let targetAppearance: NSAppearance? = {
+            switch state.preferences.appearance {
+            case .system: return nil
+            case .light: return NSAppearance(named: .aqua)
+            case .dark: return NSAppearance(named: .darkAqua)
+            }
+        }()
+
+        if let existing = window {
+            existing.appearance = targetAppearance
+            if let hosting = existing.contentViewController as? NSHostingController<SettingsWindowContainerView> {
+                hosting.rootView = SettingsWindowContainerView(state: state)
+            }
+            if !existing.isVisible {
+                existing.makeKeyAndOrderFront(nil)
+            } else {
+                existing.orderFrontRegardless()
+                existing.makeKey()
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let rootView = SettingsWindowContainerView(state: state)
+        let hostingController = NSHostingController(rootView: rootView)
+
+        let win = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 920, height: 640),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        win.title = "Settings"
+        win.titleVisibility = .hidden
+        win.titlebarAppearsTransparent = true
+        win.toolbarStyle = .unifiedCompact
+        win.isMovableByWindowBackground = false
+        win.isReleasedWhenClosed = false
+        win.minSize = NSSize(width: 720, height: 480)
+        win.appearance = targetAppearance
+        win.contentViewController = hostingController
+        win.delegate = self
+        win.setFrameAutosaveName("PieStandaloneSettingsWindow")
+        win.center()
+        self.window = win
+
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func close() {
+        guard let win = window, win.isVisible, !isClosingWindow else { return }
+        isClosingWindow = true
+        win.close()
+        isClosingWindow = false
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard !isClosingWindow else { return }
+        boundState?.isSettingsPresented = false
+    }
+}
+
+struct SettingsWindowContainerView: View {
+    @Bindable var state: AppState
+
+    var body: some View {
+        SettingsView(state: state)
+            .frame(minWidth: 720, minHeight: 480)
+            .background {
+                ZStack {
+                    WindowVibrancy()
+                    AppTheme.chrome
+                }
+            }
+            .preferredColorScheme(state.preferences.appearance.colorScheme)
+    }
+}
 
 struct SettingsView: View {
     @Bindable var state: AppState
@@ -27,7 +120,8 @@ struct SettingsView: View {
     private var menu: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 2) {
-                Color.clear.frame(height: 8)
+                // Leave vertical room for the Settings window's native traffic light buttons
+                Color.clear.frame(height: 28)
 
                 ForEach(SettingsTab.Group.allCases) { group in
                     let tabs = SettingsTab.allCases.filter { $0.group == group }

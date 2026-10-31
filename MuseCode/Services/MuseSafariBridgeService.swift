@@ -325,8 +325,10 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
                         if let actualPort = nwListener.port?.rawValue {
                             self?.listeningPort = Int(actualPort)
                         }
-                    case .failed, .cancelled:
-                        self?.isServerRunning = false
+                    case .failed:
+                        self?.startFallbackEphemeralServerIfNeeded()
+                    case .cancelled:
+                        break
                     default:
                         break
                     }
@@ -339,9 +341,34 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
             self.listener = nwListener
             self.isServerRunning = true
         } catch {
-            self.isServerRunning = false
-            self.lastActionMessage = "Bridge listener error: \(error.localizedDescription)"
+            self.startFallbackEphemeralServerIfNeeded()
         }
+    }
+
+    private func startFallbackEphemeralServerIfNeeded() {
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: .any)
+        guard let fallback = try? NWListener(using: params) else {
+            self.isServerRunning = false
+            return
+        }
+        fallback.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in
+                if case .ready = state {
+                    self?.isServerRunning = true
+                    if let actualPort = fallback.port?.rawValue {
+                        self?.listeningPort = Int(actualPort)
+                    }
+                }
+            }
+        }
+        fallback.newConnectionHandler = { [weak self] connection in
+            self?.handleIncomingHTTPConnection(connection)
+        }
+        fallback.start(queue: DispatchQueue(label: "com.musecode.Pie.SafariBridgeServer.Fallback", qos: .userInitiated))
+        self.listener = fallback
+        self.isServerRunning = true
     }
 
     func stopServer() {

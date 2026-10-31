@@ -179,9 +179,9 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
     private func runTurnLoop(initialPrompt: String, initialImages: [PiImagePayload]) async {
         var nextItem: (prompt: String, images: [PiImagePayload])? = (initialPrompt, initialImages)
         while let current = nextItem {
-            recordUser(current.prompt)
+            let userMsg = recordUser(current.prompt)
             userMessages += 1
-            appendRuntimeEntry(message: AgentWire.userMessage(current.prompt))
+            appendRuntimeEntry(message: userMsg.raw)
             await runTurn(prompt: current.prompt, images: current.images)
             if !steeringQueue.isEmpty {
                 nextItem = steeringQueue.removeFirst()
@@ -564,11 +564,11 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             stateFields.messageCount = messages.count
             stateFields.isStreaming = false
             emit(.messageEnd(finalMessage))
-            emit(.agentEnd(messages: [finalMessage], willRetry: false))
+            emit(.agentEnd(messages: messages, willRetry: false))
         } else {
             stateFields.isStreaming = false
-            if let lastAssistant = messages.last {
-                emit(.agentEnd(messages: [lastAssistant], willRetry: false))
+            if !messages.isEmpty {
+                emit(.agentEnd(messages: messages, willRetry: false))
             }
         }
         emit(.agentSettled)

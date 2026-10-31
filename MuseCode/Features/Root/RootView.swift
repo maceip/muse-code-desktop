@@ -40,7 +40,7 @@ struct RootView: View {
     @State private var detailPaneSize: CGSize = CGSize(width: 1147, height: 820)
 
     private var showsAppRail: Bool {
-        !isSidebarVisible || state.isSettingsPresented
+        !isSidebarVisible
     }
 
     var body: some View {
@@ -53,13 +53,7 @@ struct RootView: View {
                 )
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            Group {
-                if state.isSettingsPresented {
-                    settingsCard
-                } else {
-                    contentCard
-                }
-            }
+            contentCard
                 .padding(.leading, showsAppRail ? 0 : WindowChromeMetrics.cardInset)
                 .padding(.trailing, WindowChromeMetrics.cardInset)
                 .padding(.bottom, WindowChromeMetrics.cardInset)
@@ -76,7 +70,7 @@ struct RootView: View {
         .overlay(alignment: .top) { titlebarControlsBar }
         .overlay(alignment: .top) {
             ZStack(alignment: .top) {
-                if state.isPalettePresented && !state.isSettingsPresented {
+                if state.isPalettePresented {
                     Color.black.opacity(0.001)
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -89,7 +83,7 @@ struct RootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .allowsHitTesting(state.isPalettePresented && !state.isSettingsPresented)
+            .allowsHitTesting(state.isPalettePresented)
             .animation(.easeOut(duration: 0.11), value: state.isPalettePresented)
             .zIndex(90)
         }
@@ -267,7 +261,7 @@ struct RootView: View {
     /// search pill to collide.
     @ViewBuilder
     private var titlebarControlsBar: some View {
-        if !state.isSettingsPresented {
+        if true {
             let buttonTop = WindowChromeMetrics.titlebarRowCenter - TitlebarIconButton.size / 2
             GeometryReader { geo in
                 let totalW = max(320, geo.size.width)

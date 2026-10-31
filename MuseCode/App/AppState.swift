@@ -329,10 +329,11 @@ final class AppState {
 
     func toggleTerminal() { isTerminalVisible.toggle() }
 
-    /// Replaces the window content with Settings, on a specific tab.
+    /// Opens the standalone macOS Settings window on a specific tab.
     func openSettings(tab: SettingsTab) {
         settingsTab = tab
         isSettingsPresented = true
+        SettingsWindowController.shared.show(state: self)
     }
 
     /// Pi reads `models.json` and its model catalog when a process starts, so a
@@ -366,7 +367,15 @@ final class AppState {
         }
         showToast("Restarting \(connected.count) session(s) so the new providers appear.")
     }
-    var isSettingsPresented = false
+    var isSettingsPresented = false {
+        didSet {
+            if isSettingsPresented {
+                SettingsWindowController.shared.show(state: self)
+            } else {
+                SettingsWindowController.shared.close()
+            }
+        }
+    }
     /// Which settings tab is showing, so a command can open the relevant one.
     var settingsTab: SettingsTab = .general
     var isOnboardingPresented = false

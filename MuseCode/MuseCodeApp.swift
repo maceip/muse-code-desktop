@@ -145,7 +145,7 @@ struct PiCodeCommands: Commands {
         }
 
         CommandGroup(replacing: .appSettings) {
-            Button(PaletteCommand.openSettings.title) { state.run(.openSettings) }
+            Button(PaletteCommand.openSettings.title) { state.openSettings(tab: state.settingsTab) }
                 .keyboardShortcut(",", modifiers: .command)
         }
 

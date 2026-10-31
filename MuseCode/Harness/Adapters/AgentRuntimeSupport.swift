@@ -168,9 +168,14 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
 
     // MARK: Canonical message construction + event pairs
 
-    func recordUser(_ text: String) {
-        messages.append(PiMessage(raw: AgentWire.userMessage(text)))
+    @discardableResult
+    func recordUser(_ text: String) -> PiMessage {
+        let msg = PiMessage(raw: AgentWire.userMessage(text))
+        messages.append(msg)
         stateFields.messageCount = messages.count
+        emit(.messageStart(msg))
+        emit(.messageEnd(msg))
+        return msg
     }
 
     func beginAssistant(model: String?, provider: String?, sessionId: String? = nil) {
@@ -197,7 +202,7 @@ class BufferedAgentRuntime: AgentRuntime, @unchecked Sendable {
         stateFields.messageCount = messages.count
         stateFields.isStreaming = false
         emit(.messageEnd(message))
-        emit(.agentEnd(messages: [message], willRetry: false))
+        emit(.agentEnd(messages: messages, willRetry: false))
     }
 
     func startTool(id: String, name: String, arguments: JSONValue?) {

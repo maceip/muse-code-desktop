@@ -31,6 +31,7 @@ enum TranscriptHistory {
         // original order without scanning the history or shifting arrays.
         var byIdentity: [TranscriptMessageIdentity: [Int]] = [:]
         var withoutTimestamp: [JSONValue: [Int]] = [:]
+        var byRoleAndText: [String: [Int]] = [:]
         for index in history.indices.reversed() {
             let message = history[index]
             if message.timestamp != nil {
@@ -39,7 +40,13 @@ enum TranscriptHistory {
             } else {
                 withoutTimestamp[message.raw, default: []].append(index)
             }
+            let normalizedText = message.textContent.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedText.isEmpty {
+                let fallbackKey = "\(message.role)|\(normalizedText)"
+                byRoleAndText[fallbackKey, default: []].append(index)
+            }
         }
+        var consumedIndices = Set<Int>()
         let hasCompaction = branch.contains { $0.type == "compaction" }
         let hasBranchSummary = branch.contains { $0.type == "branch_summary" }
         for message in context {
@@ -47,14 +54,37 @@ enum TranscriptHistory {
             // the transcript shows the marker at its actual point in history.
             if message.role == "compactionSummary", hasCompaction { continue }
             if message.role == "branchSummary", hasBranchSummary { continue }
-            let index: Int?
+            var index: Int?
             if message.timestamp != nil {
                 let key = TranscriptMessageIdentity(role: message.role, timestamp: message.timestamp, text: message.textContent)
-                index = byIdentity[key]?.popLast()
+                while let candidate = byIdentity[key]?.popLast() {
+                    if !consumedIndices.contains(candidate) {
+                        index = candidate
+                        break
+                    }
+                }
             } else {
-                index = withoutTimestamp[message.raw]?.popLast()
+                while let candidate = withoutTimestamp[message.raw]?.popLast() {
+                    if !consumedIndices.contains(candidate) {
+                        index = candidate
+                        break
+                    }
+                }
+            }
+            if index == nil {
+                let normalizedText = message.textContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !normalizedText.isEmpty {
+                    let fallbackKey = "\(message.role)|\(normalizedText)"
+                    while let candidate = byRoleAndText[fallbackKey]?.popLast() {
+                        if !consumedIndices.contains(candidate) {
+                            index = candidate
+                            break
+                        }
+                    }
+                }
             }
             if let index {
+                consumedIndices.insert(index)
                 history[index] = message
             } else {
                 history.append(message)

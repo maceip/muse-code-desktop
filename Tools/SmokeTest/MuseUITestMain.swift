@@ -1955,7 +1955,61 @@ struct MuseUITestMain {
         await state.refreshIndex(showIndicator: false)
         check(!state.isIndexing, "state.isIndexing must be false after refreshIndex completes")
 
-        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, 3-column bounded inspector layout, unified top app bar + sidebar surface, bundled Safari Web Extension + persistent JS DOM bridge + Muse CLI skill, and backend state transitions verified.")
+        // Verify Settings opens in its own standalone macOS NSWindow (`SettingsWindowController.shared.window`)
+        // without replacing the main window's contentCard
+        state.openSettings(tab: .general)
+        check(SettingsWindowController.shared.window != nil && SettingsWindowController.shared.window?.isVisible == true,
+              "Opening Settings must present a standalone macOS NSWindow via SettingsWindowController")
+        check(SettingsWindowController.shared.window !== window,
+              "Settings window must be a separate NSWindow from the main workspace window")
+        state.isSettingsPresented = false
+        check(SettingsWindowController.shared.window?.isVisible == false,
+              "Setting state.isSettingsPresented = false must close the standalone Settings window")
+
+        // Verify loaded session + new turn never duplicates the user message after the assistant response
+        let entry1User = PiSessionEntry(json: .object([
+            "id": .string("e1"),
+            "type": .string("message"),
+            "timestamp": .string("2026-10-31T01:00:00Z"),
+            "message": AgentWire.userMessage("First loaded prompt", timestamp: Date(timeIntervalSince1970: 1700000000.0))
+        ]))
+        let entry2Asst = PiSessionEntry(json: .object([
+            "id": .string("e2"),
+            "parentId": .string("e1"),
+            "type": .string("message"),
+            "timestamp": .string("2026-10-31T01:00:02Z"),
+            "message": AgentWire.assistantMessage(text: "First loaded reply", timestamp: Date(timeIntervalSince1970: 1700000002.0)).raw
+        ]))
+        let entry3User = PiSessionEntry(json: .object([
+            "id": .string("e3"),
+            "parentId": .string("e2"),
+            "type": .string("message"),
+            "timestamp": .string("2026-10-31T01:01:00Z"),
+            "message": AgentWire.userMessage("Follow-up prompt on loaded session", timestamp: Date(timeIntervalSince1970: 1700000060.100))
+        ]))
+        let entry4Asst = PiSessionEntry(json: .object([
+            "id": .string("e4"),
+            "parentId": .string("e3"),
+            "type": .string("message"),
+            "timestamp": .string("2026-10-31T01:01:05Z"),
+            "message": AgentWire.assistantMessage(text: "Follow-up reply from agent", timestamp: Date(timeIntervalSince1970: 1700000065.0)).raw
+        ]))
+        let contextMessages: [PiMessage] = [
+            PiMessage(raw: AgentWire.userMessage("First loaded prompt", timestamp: Date(timeIntervalSince1970: 1700000000.0))),
+            AgentWire.assistantMessage(text: "First loaded reply", timestamp: Date(timeIntervalSince1970: 1700000002.0)),
+            // Simulate slight timestamp offset between in-memory user message and persisted entry
+            PiMessage(raw: AgentWire.userMessage("Follow-up prompt on loaded session", timestamp: Date(timeIntervalSince1970: 1700000060.250))),
+            AgentWire.assistantMessage(text: "Follow-up reply from agent", timestamp: Date(timeIntervalSince1970: 1700000065.0))
+        ]
+        let mergedHistory = TranscriptHistory.messages(
+            entries: [entry1User, entry2Asst, entry3User, entry4Asst],
+            leafId: "e4",
+            context: contextMessages
+        )
+        check(mergedHistory.count == 4 && mergedHistory.last?.isAssistant == true,
+              "Loaded session history merge must not duplicate user prompt after assistant reply (got \(mergedHistory.count) messages: \(mergedHistory.map { "\($0.role): \($0.textContent)" }))")
+
+        print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, 3-column bounded inspector layout, unified top app bar + sidebar surface, standalone macOS Settings window, loaded-session non-duplication, bundled Safari Web Extension + persistent JS DOM bridge + Muse CLI skill, and backend state transitions verified.")
         exit(0)
     }
 }
