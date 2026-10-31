@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		04C124633057E23700CFC5C2 /* Pie.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pie.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		04C124633057E23700CFC5C2 /* Muse Code.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Muse Code.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,7 +40,7 @@
 		04C124643057E23700CFC5C2 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				04C124633057E23700CFC5C2 /* Pie.app */,
+				04C124633057E23700CFC5C2 /* Muse Code.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -66,8 +66,8 @@
 			name = MuseCode;
 			packageProductDependencies = (
 			);
-			productName = MuseCode;
-			productReference = 04C124633057E23700CFC5C2 /* Pie.app */;
+			productName = "Muse Code";
+			productReference = 04C124633057E23700CFC5C2 /* Muse Code.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -260,7 +260,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Pie;
+				INFOPLIST_KEY_CFBundleDisplayName = "Muse Code";
+				INFOPLIST_KEY_CFBundleName = "Muse Code";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Muse Code coordinates with Safari so the Muse agent can navigate, inspect, and interact with an owned Safari tab.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -273,7 +274,7 @@
 				);
 				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = xyz.hieunguyen.PiCode;
-				PRODUCT_NAME = Pie;
+				PRODUCT_NAME = "Muse Code";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -293,7 +294,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Pie;
+				INFOPLIST_KEY_CFBundleDisplayName = "Muse Code";
+				INFOPLIST_KEY_CFBundleName = "Muse Code";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Muse Code coordinates with Safari so the Muse agent can navigate, inspect, and interact with an owned Safari tab.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -306,7 +308,7 @@
 				);
 				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = xyz.hieunguyen.PiCode;
-				PRODUCT_NAME = Pie;
+				PRODUCT_NAME = "Muse Code";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};

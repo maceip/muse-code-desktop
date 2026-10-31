@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, sign, notarize, and package Muse Code (Pie.app) into a runnable
+# Build, sign, notarize, and package Muse Code (Muse Code.app) into a runnable
 # macOS disk image (.dmg) and update archive (.zip).
 #
 # Usage:
@@ -127,7 +127,7 @@ if [[ "${DO_NOTARIZE}" -eq 1 ]] && ! has_notary_credentials; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Build Pie.app via xcodebuild (ENABLE_DEBUG_DYLIB=NO ensures a single
+# 2. Build Muse Code.app via xcodebuild (ENABLE_DEBUG_DYLIB=NO ensures a single
 #    self-contained Mach-O executable in Debug builds on Xcode 16+)
 # ---------------------------------------------------------------------------
 mkdir -p "${BUILD_ROOT}"
@@ -147,22 +147,26 @@ xcodebuild \
   CODE_SIGN_IDENTITY="" \
   build
 
-BUILT_APP="${DERIVED_DATA}/Build/Products/${BUILD_CONFIG}/Pie.app"
+BUILT_APP="${DERIVED_DATA}/Build/Products/${BUILD_CONFIG}/Muse Code.app"
 if [[ ! -d "${BUILT_APP}" ]]; then
   echo "ERROR: Expected built app bundle at ${BUILT_APP}" >&2
   exit 1
 fi
 
-STAGE_APP="${BUILD_ROOT}/Pie.app"
-rm -rf "${STAGE_APP}"
+STAGE_APP="${BUILD_ROOT}/Muse Code.app"
+rm -rf "${STAGE_APP}" "${BUILD_ROOT}/Pie.app"
 ditto "${BUILT_APP}" "${STAGE_APP}"
 
 # Remove any stray .debug.dylib if present from an incremental build
 rm -f "${STAGE_APP}/Contents/MacOS/"*.debug.dylib
 
-# Stamp version metadata in Info.plist
+# Stamp version metadata and display name in Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "${STAGE_APP}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${STAGE_APP}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Muse Code" "${STAGE_APP}/Contents/Info.plist" 2>/dev/null || \
+  /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Muse Code" "${STAGE_APP}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName Muse Code" "${STAGE_APP}/Contents/Info.plist" 2>/dev/null || \
+  /usr/libexec/PlistBuddy -c "Add :CFBundleName string Muse Code" "${STAGE_APP}/Contents/Info.plist"
 plutil -lint "${STAGE_APP}/Contents/Info.plist"
 plutil -lint "${ENTITLEMENTS}"
 
@@ -192,11 +196,11 @@ xcrun swiftc \
   -o "${SAFARI_APPEX}/Contents/MacOS/MuseSafariExtension"
 
 # ---------------------------------------------------------------------------
-# 3. Code-sign Pie.app with Hardened Runtime + Entitlements
+# 3. Code-sign Muse Code.app with Hardened Runtime + Entitlements
 # ---------------------------------------------------------------------------
 SAFARI_EXT_ENTITLEMENTS="${SAFARI_EXT_SRC}/MuseSafariExtension.entitlements"
 if [[ -n "${IDENTITY}" ]]; then
-  echo "==> Signing Pie.app + MuseSafariExtension.appex with Developer ID + Hardened Runtime"
+  echo "==> Signing Muse Code.app + MuseSafariExtension.appex with Developer ID + Hardened Runtime"
   codesign --force --options runtime --timestamp \
     --entitlements "${SAFARI_EXT_ENTITLEMENTS}" \
     --sign "${IDENTITY}" \
@@ -211,7 +215,7 @@ if [[ -n "${IDENTITY}" ]]; then
     --sign "${IDENTITY}" \
     "${STAGE_APP}"
 else
-  echo "==> Ad-hoc signing MuseSafariExtension.appex + Pie.app with Hardened Runtime entitlements"
+  echo "==> Ad-hoc signing MuseSafariExtension.appex + Muse Code.app with Hardened Runtime entitlements"
   codesign --force --options runtime \
     --entitlements "${SAFARI_EXT_ENTITLEMENTS}" \
     --sign - \
@@ -222,24 +226,24 @@ else
     "${STAGE_APP}"
 fi
 
-echo "==> Verifying Pie.app signature"
+echo "==> Verifying Muse Code.app signature"
 codesign --verify --deep --strict --verbose=2 "${STAGE_APP}"
 
 # ---------------------------------------------------------------------------
-# 4. Notarize & staple Pie.app before packaging into DMG + ZIP
+# 4. Notarize & staple Muse Code.app before packaging into DMG + ZIP
 # ---------------------------------------------------------------------------
 NOTARIZED_STATUS="not-notarized"
 if [[ "${DO_NOTARIZE}" -eq 1 ]]; then
-  APP_NOTARY_ZIP="${BUILD_ROOT}/Pie-notarize.zip"
+  APP_NOTARY_ZIP="${BUILD_ROOT}/MuseCode-notarize.zip"
   rm -f "${APP_NOTARY_ZIP}"
   echo "==> Creating archive ${APP_NOTARY_ZIP} for app notarization"
   ditto -c -k --keepParent "${STAGE_APP}" "${APP_NOTARY_ZIP}"
 
-  echo "==> Submitting Pie.app to Apple notary service"
+  echo "==> Submitting Muse Code.app to Apple notary service"
   run_notarytool submit "${APP_NOTARY_ZIP}" --wait
   rm -f "${APP_NOTARY_ZIP}"
 
-  echo "==> Stapling notarization ticket to Pie.app"
+  echo "==> Stapling notarization ticket to Muse Code.app"
   xcrun stapler staple "${STAGE_APP}"
   xcrun stapler validate "${STAGE_APP}"
   spctl --assess --type execute --verbose=4 "${STAGE_APP}"
@@ -261,7 +265,7 @@ VERSIONED_DMG_OUT="${BUILD_ROOT}/muse-code-macos-${APP_VERSION}-${CONFIG_LOWER}.
 DMG_OUT="${BUILD_ROOT}/MuseCode.dmg"
 rm -rf "${DMG_STAGE}" "${VERSIONED_DMG_OUT}" "${DMG_OUT}"
 mkdir -p "${DMG_STAGE}"
-ditto "${STAGE_APP}" "${DMG_STAGE}/Pie.app"
+ditto "${STAGE_APP}" "${DMG_STAGE}/Muse Code.app"
 ln -s /Applications "${DMG_STAGE}/Applications"
 
 echo "==> Building compressed disk image ${VERSIONED_DMG_OUT}"
@@ -311,7 +315,7 @@ cp -f "${VERSIONED_DMG_OUT}" "${DMG_OUT}"
 printf '%s\n' "${NOTARIZED_STATUS}" > "${BUILD_ROOT}/notarization.status"
 
 # ---------------------------------------------------------------------------
-# 6. Mount the built DMG and execute Pie.app --selftest directly from it
+# 6. Mount the built DMG and execute Muse Code.app --selftest directly from it
 # ---------------------------------------------------------------------------
 VERIFY_MOUNT="$(mktemp -d /tmp/muse-dmg-verify.XXXXXX)"
 cleanup_mount() {
@@ -322,10 +326,10 @@ trap cleanup_mount EXIT
 
 echo "==> Mounting ${VERSIONED_DMG_OUT} to verify executable inside DMG"
 hdiutil attach "${VERSIONED_DMG_OUT}" -mountpoint "${VERIFY_MOUNT}" -nobrowse -readonly -quiet
-test -d "${VERIFY_MOUNT}/Pie.app"
+test -d "${VERIFY_MOUNT}/Muse Code.app"
 test -L "${VERIFY_MOUNT}/Applications"
-codesign --verify --deep --strict --verbose=2 "${VERIFY_MOUNT}/Pie.app"
-"${VERIFY_MOUNT}/Pie.app/Contents/MacOS/Pie" --selftest
+codesign --verify --deep --strict --verbose=2 "${VERIFY_MOUNT}/Muse Code.app"
+"${VERIFY_MOUNT}/Muse Code.app/Contents/MacOS/Muse Code" --selftest
 cleanup_mount
 trap - EXIT
 

@@ -39,6 +39,16 @@ struct PiCodeApp: App {
             fputs("FAIL: missing CFBundleShortVersionString in packaged app bundle\n", stderr)
             exit(1)
         }
+        guard let displayName = bundle.infoDictionary?["CFBundleDisplayName"] as? String,
+              displayName == "Muse Code" else {
+            fputs("FAIL: CFBundleDisplayName must be 'Muse Code' in packaged app bundle\n", stderr)
+            exit(1)
+        }
+        guard let bundleName = bundle.infoDictionary?["CFBundleName"] as? String,
+              bundleName == "Muse Code" else {
+            fputs("FAIL: CFBundleName must be 'Muse Code' in packaged app bundle\n", stderr)
+            exit(1)
+        }
         guard let micDesc = bundle.infoDictionary?["NSMicrophoneUsageDescription"] as? String,
               !micDesc.isEmpty else {
             fputs("FAIL: missing NSMicrophoneUsageDescription in Info.plist\n", stderr)

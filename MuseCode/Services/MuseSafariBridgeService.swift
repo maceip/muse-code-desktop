@@ -114,9 +114,13 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
             return appBundleAppex
         }
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true)
-        let stageCandidate = cwd.appendingPathComponent("build/Pie.app/Contents/PlugIns/MuseSafariExtension.appex", isDirectory: true)
+        let stageCandidate = cwd.appendingPathComponent("build/Muse Code.app/Contents/PlugIns/MuseSafariExtension.appex", isDirectory: true)
         if fm.fileExists(atPath: stageCandidate.path) {
             return stageCandidate
+        }
+        let legacyStageCandidate = cwd.appendingPathComponent("build/Pie.app/Contents/PlugIns/MuseSafariExtension.appex", isDirectory: true)
+        if fm.fileExists(atPath: legacyStageCandidate.path) {
+            return legacyStageCandidate
         }
         let sourceManifest = cwd.appendingPathComponent("MuseSafariExtension/Resources/manifest.json")
         if fm.fileExists(atPath: sourceManifest.path) {
