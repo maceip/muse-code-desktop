@@ -3,10 +3,11 @@
  * MuseSafariExtension
  *
  * Persistent Safari Web Extension background coordinator for Muse Code.
- * Maintains the Muse agent's owned Safari tab (`ownedTabId`), polls both
- * native messaging (`SafariWebExtensionHandler`) and the local Muse Safari
- * Bridge HTTP server (`127.0.0.1:47635`), and dispatches navigation and DOM
- * commands to `content.js` inside the owned tab.
+ * Maintains the Muse agent's owned Safari tab (`ownedTabId`), updates the
+ * Safari toolbar icon & badge per-tab so the claimed tab is unmistakably marked,
+ * polls both native messaging (`SafariWebExtensionHandler`) and the local Muse
+ * Safari Bridge HTTP server (`127.0.0.1:47635`), and dispatches navigation and
+ * DOM commands to `content.js` inside the owned tab.
  */
 
 const NATIVE_APP_ID = "xyz.hieunguyen.PiCode.SafariExtension";
@@ -15,6 +16,129 @@ const DEFAULT_BRIDGE_PORT = 47635;
 let ownedTabId = null;
 let bridgePort = DEFAULT_BRIDGE_PORT;
 let isPolling = false;
+let cachedIconData = null;
+
+function buildActionIconImageData(isClaimed) {
+  if (typeof OffscreenCanvas === "undefined") {
+    return null;
+  }
+  if (!cachedIconData) {
+    cachedIconData = { claimed: null, idle: null };
+  }
+  const key = isClaimed ? "claimed" : "idle";
+  if (cachedIconData[key]) {
+    return cachedIconData[key];
+  }
+  try {
+    const result = {};
+    for (const size of [16, 32, 64]) {
+      const canvas = new OffscreenCanvas(size, size);
+      const ctx = canvas.getContext("2d");
+      const r = size * 0.44;
+      const cx = size * 0.5;
+      const cy = size * 0.5;
+
+      ctx.clearRect(0, 0, size, size);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = isClaimed ? "#10b981" : "#64748b";
+      ctx.fill();
+
+      ctx.lineWidth = Math.max(1.5, size * 0.08);
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+
+      if (isClaimed) {
+        // Draw bold white checkmark inside the emerald circle
+        ctx.beginPath();
+        ctx.moveTo(size * 0.30, size * 0.52);
+        ctx.lineTo(size * 0.45, size * 0.67);
+        ctx.lineTo(size * 0.72, size * 0.36);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = Math.max(2, size * 0.11);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.stroke();
+      } else {
+        // Draw "M" monogram for idle state
+        ctx.beginPath();
+        ctx.moveTo(size * 0.30, size * 0.66);
+        ctx.lineTo(size * 0.30, size * 0.34);
+        ctx.lineTo(size * 0.50, size * 0.54);
+        ctx.lineTo(size * 0.70, size * 0.34);
+        ctx.lineTo(size * 0.70, size * 0.66);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = Math.max(1.6, size * 0.09);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.stroke();
+      }
+      result[size] = ctx.getImageData(0, 0, size, size);
+    }
+    cachedIconData[key] = result;
+    return result;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function updateToolbarActionVisuals() {
+  if (!browser.action) return;
+  try {
+    const activeTabs = await browser.tabs.query({ active: true, currentWindow: true });
+    const activeTab = activeTabs && activeTabs.length > 0 ? activeTabs[0] : null;
+    const activeTabId = activeTab ? activeTab.id : null;
+    const isFocusedOnClaimedTab = ownedTabId !== null && activeTabId === ownedTabId;
+
+    const iconData = buildActionIconImageData(isFocusedOnClaimedTab);
+    const iconPath = isFocusedOnClaimedTab ? "images/icon-claimed.svg" : "images/icon.svg";
+
+    // Update global default action state to reflect whether the currently focused tab is the claimed tab
+    try {
+      if (iconData) {
+        await browser.action.setIcon({ imageData: iconData });
+      } else {
+        await browser.action.setIcon({ path: iconPath });
+      }
+    } catch (_) {
+      try {
+        await browser.action.setIcon({ path: iconPath });
+      } catch (_) {}
+    }
+
+    if (isFocusedOnClaimedTab) {
+      try {
+        await browser.action.setBadgeText({ text: "ON" });
+        await browser.action.setBadgeBackgroundColor({ color: "#10b981" });
+        await browser.action.setTitle({ title: `Muse Safari Bridge — Claimed Tab (#${ownedTabId})` });
+      } catch (_) {}
+    } else if (ownedTabId !== null) {
+      try {
+        await browser.action.setBadgeText({ text: "" });
+        await browser.action.setTitle({ title: `Muse Safari Bridge (Tab #${ownedTabId} claimed in background)` });
+      } catch (_) {}
+    } else {
+      try {
+        await browser.action.setBadgeText({ text: "" });
+        await browser.action.setTitle({ title: "Muse Safari Bridge — Click to Claim Tab" });
+      } catch (_) {}
+    }
+
+    // Also set tab-specific icon/badge on ownedTabId if present
+    if (ownedTabId !== null) {
+      const claimedData = buildActionIconImageData(true);
+      try {
+        if (claimedData) {
+          await browser.action.setIcon({ tabId: ownedTabId, imageData: claimedData });
+        } else {
+          await browser.action.setIcon({ tabId: ownedTabId, path: "images/icon-claimed.svg" });
+        }
+        await browser.action.setBadgeText({ tabId: ownedTabId, text: "ON" });
+        await browser.action.setBadgeBackgroundColor({ tabId: ownedTabId, color: "#10b981" });
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
 
 async function loadStoredState() {
   try {
@@ -26,13 +150,30 @@ async function loadStoredState() {
       bridgePort = stored.bridgePort;
     }
   } catch (_) {}
+  await updateToolbarActionVisuals();
 }
 
 async function saveOwnedTabId(tabId) {
+  const previousTabId = ownedTabId;
   ownedTabId = tabId;
   try {
     await browser.storage.local.set({ ownedTabId: tabId });
   } catch (_) {}
+  if (previousTabId !== null && previousTabId !== tabId) {
+    try {
+      await sendToContentScript(previousTabId, { action: "markOwned", owned: false });
+      if (browser.action) {
+        const idleData = buildActionIconImageData(false);
+        if (idleData) {
+          await browser.action.setIcon({ tabId: previousTabId, imageData: idleData });
+        } else {
+          await browser.action.setIcon({ tabId: previousTabId, path: "images/icon.svg" });
+        }
+        await browser.action.setBadgeText({ tabId: previousTabId, text: "" });
+      }
+    } catch (_) {}
+  }
+  await updateToolbarActionVisuals();
 }
 
 async function getOwnedOrActiveTab(autoClaim = true) {
@@ -120,8 +261,13 @@ async function sendToContentScript(tabId, payload) {
   return { ok: false, error: "No response from content script" };
 }
 
-async function executeBridgeCommand(command) {
+async function executeBridgeCommand(command, senderTabId = null) {
   const action = command.action || "status";
+
+  if (action === "checkIfThisTabOwned") {
+    const isOwned = ownedTabId !== null && senderTabId === ownedTabId;
+    return { ok: true, action, data: { owned: isOwned, ownedTabId } };
+  }
 
   if (action === "status" || action === "ping") {
     const summary = await buildTabStateSummary();
@@ -141,6 +287,7 @@ async function executeBridgeCommand(command) {
       tab = await getOwnedOrActiveTab(true);
     }
     await sendToContentScript(tab.id, { action: "markOwned", owned: true });
+    await updateToolbarActionVisuals();
     return {
       ok: true,
       action,
@@ -155,6 +302,7 @@ async function executeBridgeCommand(command) {
       } catch (_) {}
     }
     await saveOwnedTabId(null);
+    await updateToolbarActionVisuals();
     return {
       ok: true,
       action,
@@ -173,6 +321,7 @@ async function executeBridgeCommand(command) {
     }
     const loaded = await waitForTabLoad(tab.id, command.timeoutMs || 15000);
     await sendToContentScript(tab.id, { action: "markOwned", owned: true });
+    await updateToolbarActionVisuals();
     const domResult = await sendToContentScript(tab.id, { action: "inspectDOM" });
     return {
       ok: true,
@@ -190,6 +339,8 @@ async function executeBridgeCommand(command) {
     const tab = await getOwnedOrActiveTab(true);
     await browser.tabs.reload(tab.id);
     const loaded = await waitForTabLoad(tab.id, command.timeoutMs || 12000);
+    await sendToContentScript(tab.id, { action: "markOwned", owned: true });
+    await updateToolbarActionVisuals();
     return {
       ok: true,
       action,
@@ -201,12 +352,14 @@ async function executeBridgeCommand(command) {
     const tab = await getOwnedOrActiveTab(true);
     const resp = await sendToContentScript(tab.id, { action });
     await waitForTabLoad(tab.id, 4000);
+    await sendToContentScript(tab.id, { action: "markOwned", owned: true });
     return resp;
   }
 
   // All DOM-level actions run in the owned tab via content.js
   const tab = await getOwnedOrActiveTab(true);
   await sendToContentScript(tab.id, { action: "markOwned", owned: true });
+  await updateToolbarActionVisuals();
   return await sendToContentScript(tab.id, command);
 }
 
@@ -271,10 +424,22 @@ async function pollNativeAndLocalBridge() {
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.target === "background") {
-    executeBridgeCommand(message.command || { action: "status" }).then(sendResponse);
+    const senderTabId = sender && sender.tab ? sender.tab.id : null;
+    executeBridgeCommand(message.command || { action: "status" }, senderTabId).then(sendResponse);
     return true;
   }
   return false;
+});
+
+browser.tabs.onActivated.addListener(() => {
+  updateToolbarActionVisuals();
+});
+
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (tabId === ownedTabId && changeInfo && changeInfo.status === "complete") {
+    sendToContentScript(tabId, { action: "markOwned", owned: true });
+  }
+  updateToolbarActionVisuals();
 });
 
 browser.tabs.onRemoved.addListener((tabId) => {

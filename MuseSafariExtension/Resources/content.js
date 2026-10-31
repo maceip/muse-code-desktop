@@ -204,27 +204,84 @@
 
   function updateOwnedBadge(owned) {
     let badge = document.getElementById("__muse-safari-owned-pill");
+    let topBar = document.getElementById("__muse-safari-top-bar");
+    let themeMeta = document.querySelector('meta[name="theme-color"]');
+
     if (!owned) {
       if (badge) badge.remove();
+      if (topBar) topBar.remove();
+      if (themeMeta && themeMeta.hasAttribute("data-muse-owned")) {
+        const prev = themeMeta.getAttribute("data-muse-prev-color");
+        if (prev) {
+          themeMeta.setAttribute("content", prev);
+          themeMeta.removeAttribute("data-muse-owned");
+          themeMeta.removeAttribute("data-muse-prev-color");
+        } else {
+          themeMeta.remove();
+        }
+      }
+      if (document.title.startsWith("🟢 ")) {
+        document.title = document.title.slice(3);
+      }
       return;
     }
+
+    // 1. Tint Safari tab bar via <meta name="theme-color">
+    if (document.head) {
+      if (!themeMeta) {
+        themeMeta = document.createElement("meta");
+        themeMeta.setAttribute("name", "theme-color");
+        themeMeta.setAttribute("data-muse-owned", "true");
+        document.head.appendChild(themeMeta);
+      } else if (!themeMeta.hasAttribute("data-muse-owned")) {
+        themeMeta.setAttribute("data-muse-prev-color", themeMeta.getAttribute("content") || "");
+        themeMeta.setAttribute("data-muse-owned", "true");
+      }
+      themeMeta.setAttribute("content", "#10b981");
+    }
+
+    // 2. Prefix tab title with a green indicator dot so the tab itself stands out in the Safari tab bar
+    if (document.title && !document.title.startsWith("🟢 ")) {
+      document.title = "🟢 " + document.title;
+    }
+
+    // 3. Render a 3px emerald-blue glowing top border across the viewport
+    if (!topBar && document.body) {
+      topBar = document.createElement("div");
+      topBar.id = "__muse-safari-top-bar";
+      Object.assign(topBar.style, {
+        position: "fixed",
+        top: "0",
+        left: "0",
+        right: "0",
+        height: "3px",
+        zIndex: "2147483647",
+        background: "linear-gradient(90deg, #10b981 0%, #0077ff 50%, #10b981 100%)",
+        boxShadow: "0 1px 10px rgba(16, 185, 129, 0.75)",
+        pointerEvents: "none"
+      });
+      document.body.appendChild(topBar);
+    }
+
+    // 4. Render floating corner pill badge
     if (!badge && document.body) {
       badge = document.createElement("div");
       badge.id = "__muse-safari-owned-pill";
-      badge.textContent = "Muse Agent Tab";
+      badge.textContent = "● Muse Claimed Tab";
       Object.assign(badge.style, {
         position: "fixed",
         bottom: "12px",
         right: "12px",
         zIndex: "2147483647",
-        padding: "5px 10px",
+        padding: "5px 11px",
         borderRadius: "999px",
-        background: "rgba(0, 119, 255, 0.88)",
+        background: "linear-gradient(135deg, #059669, #10b981)",
         color: "#ffffff",
         fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
-        fontSize: "11px",
+        fontSize: "11.5px",
         fontWeight: "600",
-        boxShadow: "0 4px 12px rgba(0, 0, 0, 0.25)",
+        boxShadow: "0 4px 14px rgba(16, 185, 129, 0.45)",
+        border: "1px solid rgba(255, 255, 255, 0.35)",
         pointerEvents: "none"
       });
       document.body.appendChild(badge);
@@ -416,5 +473,16 @@
       handleCommand(message || {}).then(sendResponse);
       return true;
     });
+    // Automatically check on page load whether this tab is the Muse-claimed tab
+    try {
+      browser.runtime
+        .sendMessage({ target: "background", command: { action: "checkIfThisTabOwned" } })
+        .then((resp) => {
+          if (resp && resp.data && resp.data.owned) {
+            updateOwnedBadge(true);
+          }
+        })
+        .catch(() => {});
+    } catch (_) {}
   }
 })();

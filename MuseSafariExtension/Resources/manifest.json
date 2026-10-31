@@ -14,7 +14,8 @@
 
   "action": {
     "default_title": "Muse Safari Bridge",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": "images/icon.svg"
   },
 
   "permissions": [
@@ -26,10 +27,6 @@
   ],
 
   "host_permissions": [
-    "<all_urls>"
-  ],
-
-  "optional_host_permissions": [
     "<all_urls>",
     "*://*/*"
   ],
@@ -41,7 +38,7 @@
 
   "content_scripts": [
     {
-      "matches": [ "<all_urls>" ],
+      "matches": [ "<all_urls>", "*://*/*" ],
       "js": [ "content.js" ],
       "run_at": "document_idle",
       "all_frames": false
