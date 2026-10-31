@@ -691,29 +691,30 @@ struct TitlebarSearchDropdownView: View {
             // 0. Degraded Service Fallback Mode Banner (tiny connection-lost icon + explanation)
             if let fallbackExplanation {
                 degradedFallbackBanner(explanation: fallbackExplanation)
-                Divider()
-                    .overlay(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.25))
             }
 
             // 1. Top Hit Row
             if let hit {
-                topHitRow(hit, isSelected: activeRowID == hit.id || hoveredItemID == hit.id)
-                Divider()
-                    .overlay(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.25))
+                VStack(alignment: .leading, spacing: 0) {
+                    topHitRow(hit, isSelected: activeRowID == hit.id || hoveredItemID == hit.id)
+                }
+                .padding(.horizontal, 6)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
             }
 
             // 2. Previous Sessions Chat Interactivity (`switch to session`) at the TOP
             if !sessions.isEmpty {
-                Text("switch to session")
-                    .font(.system(size: 11.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color.primary.opacity(0.70))
-                    .padding(.horizontal, 12)
-                    .padding(.top, 7)
+                Text("Switch to Session")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.44) : Color.secondary.opacity(0.75))
+                    .padding(.horizontal, 14)
+                    .padding(.top, hit == nil ? 8 : 6)
                     .padding(.bottom, 4)
                     .help("switch to session")
                     .accessibilityLabel("switch to session")
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(sessions, id: \.session.id) { entry in
                         let rowID = "switch-\(entry.session.id)"
                         switchToSessionRow(
@@ -725,7 +726,7 @@ struct TitlebarSearchDropdownView: View {
                     }
                 }
                 .padding(.horizontal, 6)
-                .padding(.bottom, 6)
+                .padding(.bottom, 4)
             } else if sugs.isEmpty && hit == nil {
                 Button {
                     state.closePalette()
@@ -733,11 +734,11 @@ struct TitlebarSearchDropdownView: View {
                 } label: {
                     HStack(spacing: 10) {
                         HugeIcon(name: "bubble-chat-add", size: 14)
-                            .foregroundStyle(Color.secondary)
+                            .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.secondary)
                             .frame(width: 20, height: 20)
                         Text("Start a new chat session")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.primary)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.90) : Color.primary)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 12)
@@ -749,33 +750,26 @@ struct TitlebarSearchDropdownView: View {
 
             // 3. Keyword Suggestions (`Muse Suggestions`, max 2 rows) at the BOTTOM
             if !sugs.isEmpty {
-                if !sessions.isEmpty {
-                    Divider()
-                        .overlay(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.20))
-                }
                 let keywordStats = MuseRollingKeywordIndex.shared.stats
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text("Muse")
-                        .font(.system(size: 13.5, weight: .bold, design: .serif))
-                        .foregroundStyle(Color.primary.opacity(0.68))
-                    Text("Suggestions")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.secondary.opacity(0.85))
+                    Text("Muse Suggestions")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.44) : Color.secondary.opacity(0.75))
                     Spacer(minLength: 8)
                     if keywordStats.totalKeywords > 0 {
                         Text("\(keywordStats.totalKeywords) keywords")
-                            .font(.system(size: 10, weight: .regular, design: .monospaced))
-                            .foregroundStyle(Color.secondary.opacity(0.60))
+                            .font(.system(size: 10.5, weight: .regular))
+                            .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.36) : Color.secondary.opacity(0.55))
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 7)
-                .padding(.bottom, 3)
+                .padding(.horizontal, 14)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
                 .help("Muse Suggestions")
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Muse Suggestions")
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(sugs) { suggestion in
                         suggestionRow(
                             suggestion,
@@ -792,21 +786,31 @@ struct TitlebarSearchDropdownView: View {
             ZStack {
                 VisualEffectDropdownMaterial(tooltip: fallbackExplanation)
                 if colorScheme == .dark {
-                    Color(white: 0.14, opacity: 0.86)
+                    // Safari dark-mode completion sheet frosted slate-gray surface
+                    Color(red: 0.36, green: 0.36, blue: 0.38).opacity(0.74)
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.08),
+                            Color.white.opacity(0.02),
+                            Color.black.opacity(0.08)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 } else {
-                    Color(white: 0.97, opacity: 0.90)
+                    Color(white: 0.97, opacity: 0.88)
                 }
             }
         )
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
-                    colorScheme == .dark ? Color.white.opacity(0.22) : Color.black.opacity(0.12),
+                    colorScheme == .dark ? Color.white.opacity(0.18) : Color.black.opacity(0.12),
                     lineWidth: 1
                 )
         )
-        .shadow(color: .black.opacity(0.32), radius: 22, x: 0, y: 12)
+        .shadow(color: .black.opacity(0.34), radius: 22, x: 0, y: 12)
         .onAppear {
             if escapeEventMonitor == nil {
                 escapeEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
@@ -828,6 +832,8 @@ struct TitlebarSearchDropdownView: View {
 
     // MARK: - Rows
 
+    private static let safariSelectionFill = Color(red: 0.36, green: 0.23, blue: 0.42)
+
     private func degradedFallbackBanner(explanation: String) -> some View {
         Button {
             MuseRollingKeywordIndex.shared.isServiceAvailable = true
@@ -846,7 +852,7 @@ struct TitlebarSearchDropdownView: View {
 
                 Text(explanation)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.84) : Color.primary.opacity(0.82))
+                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.86) : Color.primary.opacity(0.82))
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
@@ -854,7 +860,7 @@ struct TitlebarSearchDropdownView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
-                Color.orange.opacity(colorScheme == .dark ? 0.10 : 0.08)
+                Color.orange.opacity(colorScheme == .dark ? 0.12 : 0.08)
             )
             .contentShape(Rectangle())
         }
@@ -867,41 +873,48 @@ struct TitlebarSearchDropdownView: View {
         Button {
             activateTopHit(hit)
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Group {
                     if hit.isSystemSymbol {
                         Image(systemName: hit.iconName)
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.system(size: 13.5, weight: .regular))
                     } else {
-                        HugeIcon(name: hit.iconName, size: 15)
+                        HugeIcon(name: hit.iconName, size: 14)
                     }
                 }
-                .foregroundStyle(isSelected ? Color.white : Color.secondary)
-                .frame(width: 20, height: 20)
+                .foregroundStyle(
+                    isSelected
+                        ? Color.white
+                        : (colorScheme == .dark ? Color.white.opacity(0.72) : Color.secondary)
+                )
+                .frame(width: 18, height: 18)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(hit.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isSelected ? Color.white : Color.primary)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(
+                            isSelected
+                                ? Color.white
+                                : (colorScheme == .dark ? Color.white.opacity(0.92) : Color.primary)
+                        )
                         .lineLimit(1)
                     Text(hit.subtitle)
                         .font(.system(size: 11))
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.82) : Color.secondary)
+                        .foregroundStyle(
+                            isSelected
+                                ? Color.white.opacity(0.80)
+                                : (colorScheme == .dark ? Color.white.opacity(0.56) : Color.secondary)
+                        )
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 5)
             .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(
-                        isSelected
-                            ? Color(red: 0.43, green: 0.25, blue: 0.46)
-                            : Color.white.opacity(colorScheme == .dark ? 0.08 : 0.45)
-                    )
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? Self.safariSelectionFill : Color.clear)
             )
-            .padding(6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -914,23 +927,33 @@ struct TitlebarSearchDropdownView: View {
         Button {
             activateSuggestion(suggestion)
         } label: {
-            HStack(spacing: 10) {
-                HugeIcon(name: "search-01", size: 14)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.75))
-                    .frame(width: 20, height: 20)
+            HStack(spacing: 8) {
+                HugeIcon(name: "search-01", size: 13.5)
+                    .foregroundStyle(
+                        isSelected
+                            ? Color.white
+                            : (colorScheme == .dark ? Color.white.opacity(0.72) : Color.secondary)
+                    )
+                    .frame(width: 18, height: 18)
 
                 HStack(spacing: 0) {
                     if !suggestion.typedPrefix.isEmpty {
                         Text(suggestion.typedPrefix)
                             .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .foregroundStyle(
+                                isSelected
+                                    ? Color.white
+                                    : (colorScheme == .dark ? Color.white.opacity(0.92) : Color.primary)
+                            )
                     }
                     Text(suggestion.completionSuffix)
-                        .font(.system(size: 13, weight: suggestion.typedPrefix.isEmpty ? .regular : .semibold))
+                        .font(.system(size: 13, weight: suggestion.typedPrefix.isEmpty ? .regular : .medium))
                         .foregroundStyle(
                             isSelected
-                                ? Color.white.opacity(0.92)
-                                : (suggestion.typedPrefix.isEmpty ? Color.primary : Color.primary.opacity(0.68))
+                                ? Color.white
+                                : (colorScheme == .dark
+                                    ? (suggestion.typedPrefix.isEmpty ? Color.white.opacity(0.90) : Color.white.opacity(0.76))
+                                    : (suggestion.typedPrefix.isEmpty ? Color.primary : Color.primary.opacity(0.68)))
                         )
                 }
                 .lineLimit(1)
@@ -939,16 +962,20 @@ struct TitlebarSearchDropdownView: View {
 
                 if let subtitle = suggestion.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.system(size: 10.5, weight: .regular, design: .monospaced))
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.75) : Color.secondary.opacity(0.65))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(
+                            isSelected
+                                ? Color.white.opacity(0.78)
+                                : (colorScheme == .dark ? Color.white.opacity(0.46) : Color.secondary.opacity(0.65))
+                        )
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color(red: 0.43, green: 0.25, blue: 0.46) : Color.clear)
+                Capsule(style: .continuous)
+                    .fill(isSelected ? Self.safariSelectionFill : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -967,34 +994,42 @@ struct TitlebarSearchDropdownView: View {
         Button {
             activateSession(session)
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: "square.on.square")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isSelected ? Color.white : Color.secondary)
-                    .frame(width: 22, height: 22)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(isSelected ? Color.white.opacity(0.18) : Color.primary.opacity(0.08))
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(
+                        isSelected
+                            ? Color.white
+                            : (colorScheme == .dark ? Color.white.opacity(0.72) : Color.secondary)
                     )
+                    .frame(width: 18, height: 18)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(session.displayName)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isSelected ? Color.white : Color.primary)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(
+                            isSelected
+                                ? Color.white
+                                : (colorScheme == .dark ? Color.white.opacity(0.92) : Color.primary)
+                        )
                         .lineLimit(1)
                     Text("\(project.name) · Opened Session in \(project.name)")
                         .font(.system(size: 11))
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.80) : Color.secondary)
+                        .foregroundStyle(
+                            isSelected
+                                ? Color.white.opacity(0.80)
+                                : (colorScheme == .dark ? Color.white.opacity(0.56) : Color.secondary)
+                        )
                         .lineLimit(1)
                 }
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color(red: 0.43, green: 0.25, blue: 0.46) : Color.clear)
+                    .fill(isSelected ? Self.safariSelectionFill : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -1079,9 +1114,10 @@ private struct VisualEffectDropdownMaterial: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.material = .popover
+        v.material = .menu
         v.blendingMode = .withinWindow
         v.state = .active
+        v.isEmphasized = true
         v.toolTip = tooltip
         v.setAccessibilityLabel(tooltip)
         return v

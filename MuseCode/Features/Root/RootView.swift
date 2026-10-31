@@ -905,13 +905,17 @@ struct TitlebarSearchPill: View {
                                 .opacity(0)
                             Text(auto.displayHighlightText)
                                 .font(.system(size: 12.5, weight: .regular))
-                                .foregroundStyle(Color.secondary)
+                                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.88) : Color.secondary)
                                 .lineLimit(1)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(
                                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .fill(Color.primary.opacity(0.08))
+                                        .fill(
+                                            colorScheme == .dark
+                                                ? Color(red: 0.36, green: 0.23, blue: 0.42).opacity(0.85)
+                                                : Color.primary.opacity(0.08)
+                                        )
                                 )
                             Spacer(minLength: 0)
                         }

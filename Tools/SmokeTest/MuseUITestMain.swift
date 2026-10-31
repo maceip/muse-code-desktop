@@ -1950,6 +1950,11 @@ struct MuseUITestMain {
             }
         }
 
+        // Verify SessionIndex.seedCache + refreshIndex completes rapidly and resets state.isIndexing = false
+        SessionIndex.seedCache(from: state.projects)
+        await state.refreshIndex(showIndicator: false)
+        check(!state.isIndexing, "state.isIndexing must be false after refreshIndex completes")
+
         print("PASS: All Muse UI, Liquid Glass composer, chat backgrounds, 3D Voice Orb, reactive bottom voice glow, end-to-end STT, tachometer, glowing cursor, session icon catalog, layout, floating panel, dynamic PATH discovery, 10 UI interactivity improvements, project folder creation, git clone, titlebar search autocomplete & suggestion service, 3-column bounded inspector layout, unified top app bar + sidebar surface, bundled Safari Web Extension + persistent JS DOM bridge + Muse CLI skill, and backend state transitions verified.")
         exit(0)
     }

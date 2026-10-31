@@ -433,7 +433,7 @@ final class AppState {
             searchedPaths = []
             phase = .ready
             installCachedIndex()
-            await refreshIndex()
+            await refreshIndex(showIndicator: projects.isEmpty)
             MuseRollingKeywordIndex.shared.startLazyRollingScanIfNeeded(projects: projects)
             if preferences.safariBridgeEnabled {
                 MuseSafariBridgeService.shared.startServerIfNeeded(port: preferences.safariBridgePort)
@@ -508,9 +508,14 @@ final class AppState {
 
     // MARK: - Index maintenance
 
-    func refreshIndex() async {
+    func refreshIndex(showIndicator: Bool = false) async {
         guard phase.isReady else { return }
-        isIndexing = true
+        if showIndicator || projects.isEmpty {
+            isIndexing = true
+        }
+        defer {
+            isIndexing = false
+        }
         let emptyPlaceholders = projects.filter { $0.sessions.isEmpty }
         let loaded = await index.loadAllProjects()
         // Reconcile newly persisted sessions with their existing controllers.
@@ -531,7 +536,6 @@ final class AppState {
         }
         projects = sort(decorated)
         catalog.save(projects: projects)
-        isIndexing = false
         lastIndexedAt = Date()
     }
 
@@ -541,6 +545,7 @@ final class AppState {
     private func installCachedIndex() {
         let cached = catalog.loadProjects()
         guard !cached.isEmpty else { return }
+        SessionIndex.seedCache(from: cached)
         projects = sort(decorate(cached))
     }
 

@@ -264,6 +264,33 @@ struct SessionIndex {
     private static let cacheLock = NSLock()
     private static var cachedRefs: [String: (mtime: Date, size: Int, ref: SessionRef?)] = [:]
 
+    /// Seeds the in-memory session ref cache from `SessionCatalogDatabase` so launch-time
+    /// `refreshIndex()` does not re-parse gigabytes of unchanged `.jsonl` files on disk.
+    static func seedCache(from projects: [ProjectGroup]) {
+        guard !projects.isEmpty else { return }
+        var entries: [String: (mtime: Date, size: Int, ref: SessionRef?)] = [:]
+        for project in projects {
+            for session in project.sessions {
+                guard let path = session.filePath, !path.isEmpty else { continue }
+                let url = URL(fileURLWithPath: path)
+                guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+                      let mtime = values.contentModificationDate,
+                      let size = values.fileSize,
+                      size > 0 else { continue }
+                // Accept cached metadata when file has not been modified after the cached session timestamp.
+                if mtime.timeIntervalSince(session.updatedAt) <= 2.0 {
+                    entries[path] = (mtime: mtime, size: size, ref: session)
+                }
+            }
+        }
+        guard !entries.isEmpty else { return }
+        cacheLock.lock()
+        for (k, v) in entries where cachedRefs[k] == nil {
+            cachedRefs[k] = v
+        }
+        cacheLock.unlock()
+    }
+
     /// Returns all top-level session directories containing valid sessions.
     func sessionDirectories() -> [URL] {
         let urls = sessionFileURLs()
@@ -278,25 +305,40 @@ struct SessionIndex {
         return dirs
     }
 
+    private static let skippedSubdirectoryNames: Set<String> = [
+        "subagent",
+        "tool-outputs",
+        "approval-review",
+        "input-assets",
+        "node_modules",
+        ".git"
+    ]
+
     /// Returns all valid `.jsonl` session files across `PiPaths.candidateSessionDirectories`,
     /// excluding `/subagent/` logs and non-session sidecar streams.
     func sessionFileURLs() -> [URL] {
+        loadAllSessionsAndURLs().urls
+    }
+
+    private func loadAllSessionsAndURLs() -> (urls: [URL], refs: [SessionRef]) {
         let fm = FileManager.default
         var seenPaths = Set<String>()
         var candidates: [URL] = []
+        var refs: [SessionRef] = []
 
         for root in PiPaths.candidateSessionDirectories {
             guard fm.fileExists(atPath: root.path),
                   let enumerator = fm.enumerator(
                     at: root,
-                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .contentModificationDateKey, .fileSizeKey],
+                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .contentModificationDateKey, .creationDateKey, .fileSizeKey],
                     options: [.skipsHiddenFiles]
                   ) else {
                 continue
             }
 
             for case let url as URL in enumerator {
-                if url.lastPathComponent == "subagent" {
+                let name = url.lastPathComponent
+                if Self.skippedSubdirectoryNames.contains(name) {
                     enumerator.skipDescendants()
                     continue
                 }
@@ -304,12 +346,13 @@ struct SessionIndex {
                       !url.path.contains("/subagent/") else { continue }
                 let canonicalFile = url.standardizedFileURL.path
                 guard seenPaths.insert(canonicalFile).inserted else { continue }
-                if loadSessionRef(at: url) != nil {
+                if let ref = loadSessionRef(at: url) {
                     candidates.append(url)
+                    refs.append(ref)
                 }
             }
         }
-        return candidates
+        return (candidates, refs)
     }
 
     func loadAllProjects() async -> [ProjectGroup] {
@@ -322,8 +365,7 @@ struct SessionIndex {
     }
 
     func loadAllSessions() -> [SessionRef] {
-        let files = sessionFileURLs()
-        return files.compactMap { loadSessionRef(at: $0) }
+        loadAllSessionsAndURLs().refs
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -379,8 +421,36 @@ struct SessionIndex {
         return nil
     }
 
+    private static func readBoundedSessionData(at url: URL) -> Data? {
+        let maxDirectBytes = 256 * 1024
+        let headBytes = 192 * 1024
+        let tailBytes = 64 * 1024
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if size <= maxDirectBytes {
+            return try? Data(contentsOf: url, options: .mappedIfSafe)
+        }
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return try? Data(contentsOf: url, options: .mappedIfSafe)
+        }
+        defer { try? handle.close() }
+        var combined = (try? handle.read(upToCount: headBytes)) ?? Data()
+        if let lastNewline = combined.lastIndex(of: UInt8(ascii: "\n")) {
+            combined = combined.prefix(through: lastNewline)
+        }
+        let tailOffset = UInt64(max(headBytes, size - tailBytes))
+        if (try? handle.seek(toOffset: tailOffset)) != nil,
+           let tail = try? handle.readToEnd(),
+           !tail.isEmpty {
+            if let firstNewline = tail.firstIndex(of: UInt8(ascii: "\n")) {
+                let alignedTail = tail[tail.index(after: firstNewline)...]
+                combined.append(contentsOf: alignedTail)
+            }
+        }
+        return combined
+    }
+
     private static func parseSessionFile(at url: URL, mtime: Date, ctime: Date?) -> SessionRef? {
-        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), !data.isEmpty else {
+        guard let data = readBoundedSessionData(at: url), !data.isEmpty else {
             return nil
         }
         let lines = data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true)

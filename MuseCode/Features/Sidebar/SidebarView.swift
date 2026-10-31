@@ -486,7 +486,7 @@ struct SidebarView: View {
             }
 
             Button {
-                Task { await state.refreshIndex() }
+                Task { await state.refreshIndex(showIndicator: true) }
             } label: {
                 HugeIcon(name: "refresh")
                     .foregroundStyle(.white)
