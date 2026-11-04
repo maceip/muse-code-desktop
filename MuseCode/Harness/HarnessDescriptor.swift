@@ -59,7 +59,7 @@ extension HarnessDescriptor {
         return HarnessDescriptor(
             id: .museCode,
             displayName: "Muse",
-            tagline: "Meta's Muse Code CLI, driven over `muse exec --json`.",
+            tagline: "Muse Code Agent Runtime (local CLI or built-in workspace engine).",
             binaryName: "muse",
             versionArguments: ["--version"],
             installMethods: [],

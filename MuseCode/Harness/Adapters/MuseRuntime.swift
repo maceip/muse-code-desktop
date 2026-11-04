@@ -8,6 +8,10 @@
 //
 
 import Foundation
+import NaturalLanguage
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
 final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
     static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
@@ -405,6 +409,11 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
     // MARK: - Turn Execution
 
     private func runTurn(prompt: String, images: [PiImagePayload] = []) async {
+        if installation.origin == "built-in" || installation.executableURL == Bundle.main.executableURL {
+            await runBuiltInTurn(prompt: prompt, images: images)
+            return
+        }
+
         currentText = ""
         currentThinking = ""
         currentTurnModel = selectedModel == "default" ? nil : selectedModel
@@ -575,6 +584,120 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
         Task { @MainActor in
             await MuseUsageService.shared.refresh(installation: nil)
         }
+    }
+
+    private func runBuiltInTurn(prompt: String, images: [PiImagePayload]) async {
+        currentText = ""
+        currentThinking = ""
+        currentTurnModel = selectedModel == "default" ? "apple-on-device" : selectedModel
+        activeToolNames.removeAll()
+        turnToolCalls.removeAll()
+
+        if currentSessionID == nil || currentSessionID?.isEmpty == true {
+            currentSessionID = UUID().uuidString.lowercased()
+            stateFields.sessionId = currentSessionID
+        }
+        stateFields.isStreaming = true
+        beginAssistant(model: currentTurnModel ?? selectedModel, provider: "muse", sessionId: currentSessionID)
+        emit(.turnStart)
+
+        let toolId = "call-\(UUID().uuidString.prefix(8))"
+        let toolArgs: JSONValue = .object(["workspace": .string(projectPath), "query": .string(prompt)])
+        activeToolNames[toolId] = "workspace_inspect"
+        turnToolCalls.append((id: toolId, name: "workspace_inspect", arguments: toolArgs))
+        toolCalls += 1
+        startTool(id: toolId, name: "workspace_inspect", arguments: toolArgs)
+
+        let tagger = NLTagger(tagSchemes: [.lemma, .lexicalClass])
+        tagger.string = prompt
+        var terms: [String] = []
+        tagger.enumerateTags(in: prompt.startIndex..<prompt.endIndex, unit: .word, scheme: .lexicalClass, options: [.omitPunctuation, .omitWhitespace]) { tag, range in
+            guard let tag, tag == .noun || tag == .verb || tag == .adjective || tag == .otherWord else { return true }
+            let word = String(prompt[range]).lowercased()
+            if word.count >= 3 && !terms.contains(word) {
+                terms.append(word)
+            }
+            return true
+        }
+
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: projectPath))?.sorted() ?? []
+        let visibleEntries = entries.filter { !$0.hasPrefix(".") }
+        var matchedSnippets: [String] = []
+        for name in visibleEntries.prefix(40) {
+            let fullPath = (projectPath as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDir), !isDir.boolValue else { continue }
+            let lowerName = name.lowercased()
+            let nameHit = terms.contains { lowerName.contains($0) }
+            if nameHit || matchedSnippets.count < 2,
+               let content = try? String(contentsOfFile: fullPath, encoding: .utf8) {
+                let firstLines = content.split(separator: "\n", omittingEmptySubsequences: false).prefix(12).joined(separator: "\n")
+                if nameHit || terms.contains(where: { content.lowercased().contains($0) }) {
+                    matchedSnippets.append("[\(name)]\n\(firstLines)")
+                }
+            }
+            if matchedSnippets.count >= 3 { break }
+        }
+
+        let inspectReport = "Workspace: \(projectPath)\nTop-level items (\(visibleEntries.count)): \(visibleEntries.prefix(20).joined(separator: ", "))\n" +
+            (matchedSnippets.isEmpty ? "" : "\nMatched file excerpts:\n" + matchedSnippets.joined(separator: "\n---\n"))
+        endTool(id: toolId, name: "workspace_inspect", output: inspectReport, isError: false)
+        appendRuntimeEntry(message: AgentWire.toolResultMessage(id: toolId, name: "workspace_inspect", output: inspectReport, isError: false))
+
+        let thinkingNote = "Inspected workspace `\(projectPath)` (\(visibleEntries.count) top-level items) for query terms: \(terms.isEmpty ? "general overview" : terms.joined(separator: ", "))."
+        currentThinking = thinkingNote
+        streamThinking(thinkingNote)
+
+        var responseBody = ""
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *) {
+            let model = SystemLanguageModel.default
+            if case .available = model.availability {
+                let session = LanguageModelSession(
+                    instructions: "You are Muse Code, a native macOS coding agent. Answer the user's request concisely using the provided workspace inspection context."
+                )
+                let combinedPrompt = "Workspace Context:\n\(inspectReport)\n\nUser Request: \(prompt)"
+                if let result = try? await session.respond(to: combinedPrompt) {
+                    responseBody = result.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+        #endif
+
+        if responseBody.isEmpty {
+            let fileSummary = visibleEntries.isEmpty
+                ? "No top-level files were found in `\(projectPath)` (select a project folder with Open Project Folder to grant sandbox read access)."
+                : "Top-level workspace entries (\(visibleEntries.count)): `\(visibleEntries.prefix(12).joined(separator: "`, `"))`."
+            let excerptSection = matchedSnippets.isEmpty
+                ? ""
+                : "\n\n### Relevant Files Inspected\n```text\n\(matchedSnippets.joined(separator: "\n\n"))\n```"
+            responseBody = """
+            **Muse Built-in Workspace Agent** analyzed `\(projectPath)` for your request (`"\(prompt)"`).
+
+            - \(fileSummary)
+            - **Extracted Query Terms (`NLTagger`)**: \(terms.isEmpty ? "general workspace inspection" : terms.map { "`\($0)`" }.joined(separator: ", "))\(excerptSection)
+            """
+        }
+
+        currentText = responseBody
+        streamText(responseBody)
+
+        let finalMessage = AgentWire.assistantMessage(
+            text: currentText,
+            thinking: currentThinking.isEmpty ? nil : currentThinking,
+            toolCalls: turnToolCalls,
+            model: currentTurnModel ?? selectedModel,
+            provider: "muse"
+        )
+        messages.append(finalMessage)
+        appendRuntimeEntry(message: finalMessage.raw)
+        assistantMessages += 1
+        stateFields.messageCount = messages.count
+        stateFields.isStreaming = false
+        emit(.messageEnd(finalMessage))
+        emit(.turnEnd(message: nil, toolResults: []))
+        emit(.agentEnd(messages: messages, willRetry: false))
+        emit(.agentSettled)
     }
 
     private func consume(line: String) {

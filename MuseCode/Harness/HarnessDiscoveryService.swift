@@ -69,6 +69,19 @@ struct HarnessDiscoveryService {
             }
         }
 
+        if descriptor.id == .museCode {
+            let builtInURL = Bundle.main.executableURL ?? URL(fileURLWithPath: "/usr/bin/true")
+            let appVer = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.5.1"
+            return .found(HarnessInstallation(
+                harnessID: descriptor.id,
+                executableURL: builtInURL,
+                version: "\(appVer) (Built-in Workspace Agent)",
+                shellPath: shellPath,
+                shell: shell,
+                origin: "built-in"
+            ))
+        }
+
         return .missing(searched: searched, detail: detail)
     }
 

@@ -56,11 +56,16 @@ final class AppUpdater {
 
     // MARK: - Checking
 
+    static var isAppStoreSandbox: Bool {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+    }
+
     /// Checks now, then every few hours while the app runs.
     func startChecking() {
         #if DEBUG
         return
         #else
+        guard !Self.isAppStoreSandbox else { return }
         guard checkTask == nil else { return }
         checkTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -72,6 +77,7 @@ final class AppUpdater {
     }
 
     func check() async {
+        guard !Self.isAppStoreSandbox else { return }
         guard !isBusy else { return }
         do {
             var request = URLRequest(url: latestReleaseURL)

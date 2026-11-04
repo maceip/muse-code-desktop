@@ -135,7 +135,7 @@ struct PiSetupView: View {
                         )
                         InstallStep(
                             number: 2,
-                            title: "Authenticate with your Meta Muse account",
+                            title: "Authenticate your optional Muse CLI session",
                             command: "muse login"
                         )
                     }
