@@ -116,7 +116,21 @@ struct PiCodeApp: App {
             fputs("FAIL: bundled MuseSafariExtension.appex missing from Contents/PlugIns\n", stderr)
             exit(1)
         }
-        print("PASS: MuseCode --selftest verified (\(bundleId) v\(version), \(SessionIconCatalog.all.count) icons, 23-frame orb, bundled MuseSafariExtension.appex verified)")
+        MainActor.assumeIsolated {
+            let testState = AppState()
+            testState.openBrowserInInspector()
+            guard testState.inspectorArtifact == .browser, testState.isInspectorVisible else {
+                fputs("FAIL: AppState.openBrowserInInspector() self-test failed\n", stderr)
+                exit(1)
+            }
+            let webView = MuseSafariBridgeService.shared.webViewForDisplay()
+            guard MuseSafariBridgeService.shared.ownedTab.tabId != nil,
+                  webView.configuration.userContentController.userScripts.count >= 1 else {
+                fputs("FAIL: MuseSafariBridgeService.webViewForDisplay() self-test failed\n", stderr)
+                exit(1)
+            }
+        }
+        print("PASS: MuseCode --selftest verified (\(bundleId) v\(version), \(SessionIconCatalog.all.count) icons, 23-frame orb, embedded WKWebView browser chrome, bundled MuseSafariExtension.appex verified)")
         exit(0)
     }
 

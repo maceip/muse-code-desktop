@@ -330,6 +330,16 @@ struct RootView: View {
 
                     if state.phase == .ready, state.activeController != nil {
                         HStack(spacing: 8) {
+                            TitlebarIconButton(
+                                systemImage: "globe-02",
+                                help: (state.isInspectorVisible && state.inspectorArtifact == .browser) ? "Close Muse Browser" : "Open Muse Browser",
+                                isActive: state.isInspectorVisible && state.inspectorArtifact == .browser && !state.isNotificationsVisible
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    state.toggleBrowserInInspector()
+                                }
+                            }
+
                             TitlebarNotificationsButton(state: state)
 
                             TitlebarIconButton(
@@ -431,8 +441,11 @@ struct RootView: View {
                                 colorScheme: colorScheme,
                                 chatBackground: state.preferences.chatBackground
                             )
+                            let effectiveInspectorWidth: CGFloat = state.inspectorArtifact == .browser
+                                ? max(inspectorWidth, min(520, max(420, (detailPaneSize.width * 0.44).rounded())))
+                                : inspectorWidth
                             InspectorView(state: state)
-                                .frame(width: inspectorWidth)
+                                .frame(width: effectiveInspectorWidth)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 14, style: .continuous)

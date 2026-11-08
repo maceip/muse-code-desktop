@@ -24,33 +24,6 @@ private func check(_ condition: @autoclosure () -> Bool, _ message: String) {
 }
 
 @MainActor
-private func collectAccessibilityTexts(from object: Any, depth: Int = 0) -> [String] {
-    guard depth < 25 else { return [] }
-    var out: [String] = []
-    if let element = object as? NSAccessibilityProtocol {
-        if let label = element.accessibilityLabel()?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
-            out.append(label)
-        }
-        if let title = element.accessibilityTitle()?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
-            out.append(title)
-        }
-        if let value = element.accessibilityValue() as? String {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { out.append(trimmed) }
-        }
-        if let help = element.accessibilityHelp()?.trimmingCharacters(in: .whitespacesAndNewlines), !help.isEmpty {
-            out.append(help)
-        }
-        if let children = element.accessibilityChildren() {
-            for child in children {
-                out.append(contentsOf: collectAccessibilityTexts(from: child, depth: depth + 1))
-            }
-        }
-    }
-    return out
-}
-
-@MainActor
 private func collectTexts(in view: NSView) -> [String] {
     var out: [String] = []
     if let tv = view as? PlaceholderTextView {
@@ -75,7 +48,6 @@ private func collectTexts(in view: NSView) -> [String] {
     if let help = view.toolTip?.trimmingCharacters(in: .whitespacesAndNewlines), !help.isEmpty {
         out.append(help)
     }
-    out.append(contentsOf: collectAccessibilityTexts(from: view))
     for sub in view.subviews {
         out.append(contentsOf: collectTexts(in: sub))
     }
@@ -1925,13 +1897,27 @@ struct MuseUITestMain {
         check(safariSettingsTexts.contains("https://scholar.google.com"),
               "SafariBridgeSettingsTab must mount the target URL field and controls (found: \(safariSettingsTexts))")
 
-        // Verify live Safari.app window synchronization (`syncLiveSafariTab`)
-        let liveClaim = await safariBridge.executeCommand([
-            "action": "claimTab",
-            "syncSafariWindow": true
-        ])
-        check((liveClaim["ok"] as? Bool) == true && safariBridge.ownedTab.transport.contains("safari"),
-              "Live Safari.app claimTab must synchronize with running Safari window (got: \(liveClaim))")
+        // Verify MuseEmbeddedBrowserPane (`WKWebView` + browser chrome `<`, `>`, `↻`, URL bar, `Take control` / `Done`) in InspectorView
+        state.openBrowserInInspector()
+        check(state.inspectorArtifact == .browser && state.isInspectorVisible,
+              "openBrowserInInspector() must set state.inspectorArtifact == .browser and open the right inspector")
+        let browserInspectorHost = NSHostingView(rootView: InspectorView(state: state).frame(width: 480, height: 640))
+        window.contentView = browserInspectorHost
+        browserInspectorHost.frame = NSRect(x: 0, y: 0, width: 480, height: 640)
+        browserInspectorHost.layoutSubtreeIfNeeded()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        browserInspectorHost.layoutSubtreeIfNeeded()
+        let browserChromeTexts = collectTexts(in: browserInspectorHost)
+        check(browserChromeTexts.contains("Take control") || browserChromeTexts.contains("Done"),
+              "MuseEmbeddedBrowserPane must mount the 'Take control' / 'Done' interactive button in browser chrome (found: \(browserChromeTexts))")
+        safariBridge.isUserInControl = true
+        browserInspectorHost.layoutSubtreeIfNeeded()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        browserInspectorHost.layoutSubtreeIfNeeded()
+        let controlTexts = collectTexts(in: browserInspectorHost)
+        check(controlTexts.contains("You are in control") && controlTexts.contains("Done"),
+              "Toggling safariBridge.isUserInControl = true must update status header to 'You are in control' and button to 'Done' (found: \(controlTexts))")
+        safariBridge.isUserInControl = false
 
         // Verify top app bar (`AppTheme.chrome`) and side panel (`AppTheme.sidebar`) share identical surface colors
         for appearanceName in [NSAppearance.Name.aqua, NSAppearance.Name.darkAqua] {

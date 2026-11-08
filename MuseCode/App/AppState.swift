@@ -161,6 +161,8 @@ final class AppState {
         case subagent(MuseSubagentInfo)
         /// Persisted session plan or todo list (`write_todos` / `update_goal`).
         case plan(title: String, content: String)
+        /// Embedded live WebKit browser pane with interactive chrome.
+        case browser
     }
 
     var inspectorArtifact: InspectorArtifact?
@@ -248,6 +250,25 @@ final class AppState {
         inspectorArtifact = .plan(title: title, content: content)
         isNotificationsVisible = false
         isInspectorVisible = true
+    }
+
+    func openBrowserInInspector(url: String? = nil) {
+        inspectorArtifact = .browser
+        isNotificationsVisible = false
+        isInspectorVisible = true
+        if let url, !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Task { @MainActor in
+                _ = await MuseSafariBridgeService.shared.executeCommand(["action": "navigate", "url": url])
+            }
+        }
+    }
+
+    func toggleBrowserInInspector() {
+        if isInspectorVisible && inspectorArtifact == .browser && !isNotificationsVisible {
+            showOverview()
+        } else {
+            openBrowserInInspector()
+        }
     }
 
     /// Toggle the artifact viewer. If notifications currently own the one right
@@ -398,6 +419,7 @@ final class AppState {
     /// so the storage is marked unsafe rather than isolated. The token itself is
     /// immutable once set in `init` and only removed once, from `deinit`.
     @ObservationIgnored nonisolated(unsafe) private var activationObserver: NSObjectProtocol?
+    @ObservationIgnored nonisolated(unsafe) private var browserUpdateObserver: NSObjectProtocol?
 
     /// Incremented whenever a menu command should reach the focused view.
     private(set) var commandTick = 0
@@ -414,6 +436,18 @@ final class AppState {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.clearCompletionBadge() }
+        }
+        browserUpdateObserver = NotificationCenter.default.addObserver(
+            forName: MuseSafariBridgeService.didUpdateBrowserNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.inspectorArtifact = .browser
+                self.isNotificationsVisible = false
+                self.isInspectorVisible = true
+            }
         }
     }
 

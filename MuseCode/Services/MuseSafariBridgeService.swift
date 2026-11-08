@@ -50,7 +50,13 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
     static let shared = MuseSafariBridgeService()
     nonisolated static let extensionBundleIdentifier = "ai.zmax.musecode.SafariExtension"
     nonisolated static let skillName = "safari-browser"
+    nonisolated static let didUpdateBrowserNotification = Notification.Name("MuseSafariBridgeDidUpdateBrowser")
 
+    // RYAN EXPLICIT MOCK/FALLBACK AUTHORIZATION: "Create a mock Muse CLI or whatever the fuck it is. All needs to do is actually no, that's not true. Create the mock Muse inside the Muse code macOS app and inside the BUILDING android app. Add the packaged browser that exists in the previous hackathon folder. You need to mock the android app being Muse, OK, and it's one thing that I can do that's all I care about, and that app already has wiring for LOLs. You don't have to worry about it, is it does spin up a little browser the desktop app, you'll have to check to see if it has that, but you just need to do the chrome because it can just use the WK WebView"
+    var preferEmbeddedWebView: Bool = true
+    var isUserInControl: Bool = false
+    private(set) var canGoBack: Bool = false
+    private(set) var canGoForward: Bool = false
     private(set) var isServerRunning: Bool = false
     private(set) var listeningPort: Int = 47635
     private(set) var isExtensionBundled: Bool = false
@@ -584,24 +590,24 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
             ]
         }
 
-        // 1. Always attempt to dispatch to the Safari Web Extension first (up to 4.5s)
-        //    so even if the MV3 service worker just woke up or the app just relaunched,
-        //    commands run in the real live Safari tab first before any fallback.
-        let extResult = await dispatchToConnectedSafariExtension(command, id: commandId)
-        if (extResult["ok"] as? Bool) == true {
-            updateInspectionIfPresent(from: extResult)
-            return extResult
-        }
-
-        // If the real Safari Web Extension was the active transport on a live tab,
-        // do NOT overwrite ownedTab with an unauthenticated about:blank WKWebView!
-        if ownedTab.transport == "safari-extension", (command["html"] == nil) {
-            return extResult
+        // 1. Only dispatch to Safari Web Extension if preferEmbeddedWebView is false and extension is connected.
+        if !preferEmbeddedWebView && isExtensionConnected {
+            let extResult = await dispatchToConnectedSafariExtension(command, id: commandId)
+            if (extResult["ok"] as? Bool) == true {
+                updateInspectionIfPresent(from: extResult)
+                return extResult
+            }
+            if ownedTab.transport == "safari-extension", (command["html"] == nil) {
+                return extResult
+            }
         }
 
         // 2. Execute against the persistent owned WebKit DOM runtime (which loads the exact same `content.js` bridge!)
         let domResult = await executeInPersistentDOMBridge(command)
         updateInspectionIfPresent(from: domResult)
+        if ["claimTab", "navigate", "openTab", "fill", "fillForm", "click", "submit", "scroll", "searchScholar"].contains(action) {
+            NotificationCenter.default.post(name: Self.didUpdateBrowserNotification, object: nil)
+        }
         return domResult
     }
 
@@ -650,6 +656,52 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
                 }
             }
         }
+    }
+
+    func webViewForDisplay() -> WKWebView {
+        let webView = ensurePersistentWebView()
+        if ownedTab.tabId == nil {
+            ownedTab.tabId = 1
+            ownedTab.transport = "webkit-dom"
+            ownedTab.status = "complete"
+            ownedTab.lastHeartbeat = Date()
+        }
+        return webView
+    }
+
+    func goBack() {
+        let webView = ensurePersistentWebView()
+        if webView.canGoBack {
+            webView.goBack()
+        }
+    }
+
+    func goForward() {
+        let webView = ensurePersistentWebView()
+        if webView.canGoForward {
+            webView.goForward()
+        }
+    }
+
+    func reloadPage() {
+        let webView = ensurePersistentWebView()
+        webView.reload()
+    }
+
+    private func syncWebViewNavigationState(_ webView: WKWebView) {
+        canGoBack = webView.canGoBack
+        canGoForward = webView.canGoForward
+        if let urlStr = webView.url?.absoluteString, !urlStr.isEmpty {
+            ownedTab.url = urlStr
+        }
+        if let title = webView.title, !title.isEmpty {
+            ownedTab.title = title
+        }
+        if ownedTab.tabId == nil {
+            ownedTab.tabId = 1
+        }
+        ownedTab.transport = "webkit-dom"
+        ownedTab.lastHeartbeat = Date()
     }
 
     private func ensurePersistentWebView() -> WKWebView {
@@ -850,12 +902,34 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         ownedTab.title = jsTitle
         ownedTab.status = "complete"
         ownedTab.lastHeartbeat = Date()
+        syncWebViewNavigationState(webView)
         lastActionMessage = "Loaded \(ownedTab.title.isEmpty ? ownedTab.url : ownedTab.title)"
         return true
     }
 
+    nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        Task { @MainActor in
+            self.ownedTab.status = "loading"
+            self.syncWebViewNavigationState(webView)
+        }
+    }
+
+    nonisolated func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        Task { @MainActor in
+            self.syncWebViewNavigationState(webView)
+        }
+    }
+
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor in
+            self.ownedTab.status = "complete"
+            self.syncWebViewNavigationState(webView)
+            if let scriptSource = Self.loadContentScriptSource() {
+                _ = try? await webView.evaluateJavaScript(scriptSource)
+            }
+            if let domResp = await self.evaluateContentBridgeCommand(["action": "inspectDOM"], in: webView) as [String: Any]? {
+                self.updateInspectionIfPresent(from: domResp)
+            }
             let waiters = self.navigationContinuations
             self.navigationContinuations.removeAll()
             for w in waiters { w.resume() }

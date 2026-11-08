@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import WebKit
 
 struct InspectorView: View {
     @Bindable var state: AppState
@@ -267,6 +268,15 @@ struct MuseOverviewCard: View {
                         badge: state.isTerminalVisible ? "On" : nil
                     ) {
                         state.toggleTerminal()
+                    }
+
+                    overviewNavRow(
+                        icon: "globe-02",
+                        title: "Browser",
+                        badge: MuseSafariBridgeService.shared.ownedTab.url.isEmpty ? nil : "Live",
+                        showsChevron: true
+                    ) {
+                        state.openBrowserInInspector()
                     }
 
                     overviewNavRow(
@@ -1165,7 +1175,7 @@ struct ArtifactHeader: View {
         case .tool(let id):
             guard let item = item(id), item.kind == .toolCall else { return nil }
             return item.toolFilePath
-        case .review, .files, .extensions, .subagent, .plan:
+        case .review, .files, .extensions, .subagent, .plan, .browser:
             return nil
         }
     }
@@ -1191,6 +1201,9 @@ struct ArtifactHeader: View {
             return subagent.title
         case .plan(let title, _):
             return title
+        case .browser:
+            let tabTitle = MuseSafariBridgeService.shared.ownedTab.title
+            return tabTitle.isEmpty ? "Muse Browser" : tabTitle
         }
     }
 
@@ -1202,6 +1215,7 @@ struct ArtifactHeader: View {
         case .extensions: return "puzzle"
         case .subagent: return "user-multiple"
         case .plan: return "task-add-01"
+        case .browser: return "globe-02"
         case .tool(let id):
             guard let item = item(id) else { return "wrench-01" }
             return QuietFamily.of(item)?.systemImage ?? "wrench-01"
@@ -1253,7 +1267,268 @@ struct ArtifactContentView: View {
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        case .browser:
+            MuseEmbeddedBrowserPane(state: state, controller: controller)
         }
+    }
+}
+
+// MARK: - Embedded Muse WKWebView Browser Chrome
+
+struct MuseEmbeddedBrowserPane: View {
+    @Bindable var state: AppState
+    var controller: PiSessionController
+    @State private var bridge = MuseSafariBridgeService.shared
+    @State private var addressText: String = ""
+    @FocusState private var isAddressFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Agent / User control status bar
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(statusDotColor)
+                    .frame(width: 8, height: 8)
+
+                Text(statusHeaderText)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                if controller.isStreaming {
+                    Button {
+                        Task { await controller.abort() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 9, weight: .bold))
+                            Text("Stop task")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.red.opacity(0.14), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    bridge.isUserInControl.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: bridge.isUserInControl ? "checkmark.circle.fill" : "hand.raised.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(bridge.isUserInControl ? "Done" : "Take control")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(bridge.isUserInControl ? Color.white : Color.primary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3.5)
+                    .background(
+                        bridge.isUserInControl ? Color.accentColor : Color.secondary.opacity(0.18),
+                        in: Capsule()
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("muse-browser-take-control")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Color.black.opacity(0.08))
+
+            Divider()
+
+            // Browser Navigation & Address Bar Chrome
+            HStack(spacing: 6) {
+                Button {
+                    bridge.goBack()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!bridge.canGoBack)
+                .help("Back")
+                .accessibilityIdentifier("muse-browser-back")
+
+                Button {
+                    bridge.goForward()
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!bridge.canGoForward)
+                .help("Forward")
+                .accessibilityIdentifier("muse-browser-forward")
+
+                Button {
+                    bridge.reloadPage()
+                } label: {
+                    Image(systemName: bridge.ownedTab.status == "loading" ? "xmark" : "arrow.clockwise")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.borderless)
+                .help("Reload")
+                .accessibilityIdentifier("muse-browser-reload")
+
+                HStack(spacing: 6) {
+                    Image(systemName: bridge.ownedTab.url.hasPrefix("https") ? "lock.fill" : "globe")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+
+                    TextField("Enter URL or search query…", text: $addressText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, design: .monospaced))
+                        .focused($isAddressFocused)
+                        .onSubmit {
+                            navigateToAddress(addressText)
+                        }
+                        .accessibilityIdentifier("muse-browser-url-field")
+
+                    if !addressText.isEmpty {
+                        Button {
+                            navigateToAddress(addressText)
+                        } label: {
+                            Image(systemName: "arrow.right.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Go")
+                        .accessibilityIdentifier("muse-browser-go")
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                )
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+
+            Divider()
+
+            // Live WKWebView Viewport
+            MuseWebViewRepresentable(webView: bridge.webViewForDisplay())
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("muse-browser-webview")
+
+            if let dom = bridge.latestDOMInspection {
+                Divider()
+                HStack(spacing: 10) {
+                    Label("\(dom.headingCount) H", systemImage: "textformat")
+                    Label("\(dom.inputCount) inputs", systemImage: "character.cursor.ibeam")
+                    Label("\(dom.buttonCount) buttons", systemImage: "hand.tap")
+                    Label("\(dom.linkCount) links", systemImage: "link")
+                    Spacer(minLength: 0)
+                    Text(dom.readyState)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+            }
+        }
+        .onAppear {
+            if bridge.ownedTab.url.isEmpty {
+                addressText = "https://scholar.google.com"
+                Task { @MainActor in
+                    _ = await bridge.executeCommand(["action": "navigate", "url": "https://scholar.google.com"])
+                }
+            } else {
+                addressText = bridge.ownedTab.url
+            }
+        }
+        .onChange(of: bridge.ownedTab.url) { _, newURL in
+            if !isAddressFocused && !newURL.isEmpty {
+                addressText = newURL
+            }
+        }
+    }
+
+    private var statusDotColor: Color {
+        if bridge.isUserInControl {
+            return .orange
+        }
+        if bridge.ownedTab.status == "loading" || controller.isStreaming {
+            return .blue
+        }
+        return .green
+    }
+
+    private var statusHeaderText: String {
+        if bridge.isUserInControl {
+            return "You are in control"
+        }
+        if bridge.ownedTab.status == "loading" {
+            return "Muse is loading page…"
+        }
+        if controller.isStreaming {
+            return "Muse is browsing…"
+        }
+        return bridge.ownedTab.title.isEmpty ? "Muse Browser ready" : bridge.ownedTab.title
+    }
+
+    private func navigateToAddress(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let targetURL: String
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") || trimmed.hasPrefix("about:") {
+            targetURL = trimmed
+        } else if trimmed.contains(".") && !trimmed.contains(" ") {
+            targetURL = "https://\(trimmed)"
+        } else {
+            let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
+            targetURL = "https://www.google.com/search?q=\(encoded)"
+        }
+        addressText = targetURL
+        Task { @MainActor in
+            _ = await bridge.executeCommand(["action": "navigate", "url": targetURL])
+        }
+    }
+}
+
+struct MuseWebViewRepresentable: NSViewRepresentable {
+    let webView: WKWebView
+
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView(frame: .zero)
+        container.autoresizesSubviews = true
+        attachWebView(to: container)
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if webView.superview !== nsView {
+            attachWebView(to: nsView)
+        }
+    }
+
+    private func attachWebView(to container: NSView) {
+        webView.removeFromSuperview()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
     }
 }
 
