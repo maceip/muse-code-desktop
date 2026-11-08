@@ -603,6 +603,9 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
                 }
             }
         }
+        if lower.contains("cfp") || lower.contains("speaker") || lower.contains("deepsec") || lower.contains("signup") || lower.contains("sign up") || lower.contains("register") {
+            return "http://127.0.0.1:8795/signup"
+        }
         if lower.contains("scholar") {
             let query = prompt
                 .replacingOccurrences(of: "(?i)(search|google scholar|scholar|for|on|in browser|browse|open)", with: " ", options: .regularExpression)
@@ -644,7 +647,7 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
 
         for endpoint in endpoints {
             guard let url = URL(string: endpoint) else { continue }
-            var req = URLRequest(url: url, timeoutInterval: endpoint.contains("127.0.0.1") ? 4.0 : 8.0)
+            var req = URLRequest(url: url, timeoutInterval: 30.0)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             if !token.isEmpty {
