@@ -694,8 +694,16 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             turnToolCalls.append((id: mcpToolId, name: "walkaway_start_task", arguments: mcpArgs))
             toolCalls += 1
             startTool(id: mcpToolId, name: "walkaway_start_task", arguments: mcpArgs)
+            var stagedFieldsForWebView: [String: String] = [:]
             if let mcpStart = await Self.callWalkawayMCPTool(name: "walkaway_start_task", arguments: ["goal": prompt, "url": targetURL]) {
                 let approvalResp = await Self.callWalkawayMCPTool(name: "walkaway_request_approval", arguments: [:]) ?? mcpStart
+                let cardBodyStr = (approvalResp["card_body"] as? String) ?? ""
+                for part in cardBodyStr.components(separatedBy: ";") {
+                    let kv = part.split(separator: "=", maxSplits: 1).map { String($0).trimmingCharacters(in: .whitespaces) }
+                    if kv.count == 2, !kv[0].isEmpty, kv[1] != "[VAULT_SECRET]" {
+                        stagedFieldsForWebView[kv[0]] = kv[1]
+                    }
+                }
                 let mcpSummary = """
                 MCP Connector (`walkaway_start_task` -> `walkaway_request_approval`):
                 Status: \(approvalResp["status"] ?? "running")
@@ -720,9 +728,13 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
             toolCalls += 1
             startTool(id: navToolId, name: "browser_navigate", arguments: navArgs)
 
+            let fieldsToStage = stagedFieldsForWebView
             let navResult: (url: String, title: String, domSummary: String) = await MainActor.run {
                 Task { @MainActor in
                     _ = await MuseSafariBridgeService.shared.executeCommand(["action": "navigate", "url": targetURL])
+                    if !fieldsToStage.isEmpty {
+                        _ = await MuseSafariBridgeService.shared.executeCommand(["action": "fillForm", "fields": fieldsToStage, "submit": false])
+                    }
                     if wantsScroll {
                         _ = await MuseSafariBridgeService.shared.executeCommand(["action": "scroll", "y": 700])
                     }
@@ -742,7 +754,7 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
 
             endTool(id: navToolId, name: "browser_navigate", output: navResult.domSummary, isError: false)
             appendRuntimeEntry(message: AgentWire.toolResultMessage(id: navToolId, name: "browser_navigate", output: navResult.domSummary, isError: false))
-            browserReport = navResult.domSummary
+            browserReport += navResult.domSummary
         } else if wantsScroll {
             let scrollToolId = "call-\(UUID().uuidString.prefix(8))"
             let scrollArgs: JSONValue = .object(["y": .number(700)])

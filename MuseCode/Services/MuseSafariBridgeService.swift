@@ -569,6 +569,16 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
         let commandId = (command["id"] as? String) ?? UUID().uuidString
         command["id"] = commandId
         let action = (command["action"] as? String) ?? "status"
+        let userInitiated = (command["userInitiated"] as? Bool) ?? false
+
+        if isUserInControl && !userInitiated && ["navigate", "openTab", "fill", "fillForm", "click", "submit", "scroll", "searchScholar"].contains(action) {
+            return [
+                "ok": false,
+                "id": commandId,
+                "action": action,
+                "error": "User is currently in control of the browser; automated agent actions are paused until Done is clicked."
+            ]
+        }
 
         // High-level convenience action: `searchScholar` navigates to Google Scholar with the query and extracts results
         if action == "searchScholar" {
@@ -686,6 +696,34 @@ final class MuseSafariBridgeService: NSObject, WKNavigationDelegate {
     func reloadPage() {
         let webView = ensurePersistentWebView()
         webView.reload()
+    }
+
+    func toggleUserControl() {
+        isUserInControl.toggle()
+        let webView = ensurePersistentWebView()
+        if isUserInControl {
+            webView.window?.makeFirstResponder(webView)
+            let focusJS = """
+            (function() {
+                var el = document.activeElement;
+                if (!el || !['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) {
+                    el = document.querySelector('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([disabled]), textarea:not([disabled]), select:not([disabled])');
+                }
+                if (el) {
+                    el.focus();
+                    if (typeof el.select === 'function' && el.tagName === 'INPUT' && el.type !== 'checkbox' && el.type !== 'radio') {
+                        try { el.setSelectionRange(el.value.length, el.value.length); } catch (_) {}
+                    }
+                    return el.id || el.name || el.tagName;
+                }
+                return null;
+            })();
+            """
+            webView.evaluateJavaScript(focusJS, completionHandler: nil)
+            lastActionMessage = "You are in control — click any field to type, then click Done."
+        } else {
+            lastActionMessage = "Returned browser control to Muse agent."
+        }
     }
 
     private func syncWebViewNavigationState(_ webView: WKWebView) {

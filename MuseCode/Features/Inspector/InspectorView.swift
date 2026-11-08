@@ -1316,7 +1316,7 @@ struct MuseEmbeddedBrowserPane: View {
                 }
 
                 Button {
-                    bridge.isUserInControl.toggle()
+                    bridge.toggleUserControl()
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: bridge.isUserInControl ? "checkmark.circle.fill" : "hand.raised.fill")
@@ -1498,7 +1498,7 @@ struct MuseEmbeddedBrowserPane: View {
         }
         addressText = targetURL
         Task { @MainActor in
-            _ = await bridge.executeCommand(["action": "navigate", "url": targetURL])
+            _ = await bridge.executeCommand(["action": "navigate", "url": targetURL, "userInitiated": true])
         }
     }
 }
