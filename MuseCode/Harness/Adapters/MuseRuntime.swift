@@ -621,6 +621,51 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
         return nil
     }
 
+    private static func callWalkawayMCPTool(name: String, arguments: [String: Any]) async -> [String: Any]? {
+        let env = ProcessInfo.processInfo.environment
+        let customEndpoint = env["WALKAWAY_MCP_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoints = [
+            customEndpoint,
+            "http://127.0.0.1:8890/mcp",
+            "https://muse.secure.build/mcp"
+        ].compactMap { $0 }.filter { !$0.isEmpty }
+        let token = env["WALKAWAY_CONNECTOR_TOKEN"] ?? ""
+
+        let rpcBody: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": [
+                "name": name,
+                "arguments": arguments
+            ]
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: rpcBody) else { return nil }
+
+        for endpoint in endpoints {
+            guard let url = URL(string: endpoint) else { continue }
+            var req = URLRequest(url: url, timeoutInterval: endpoint.contains("127.0.0.1") ? 4.0 : 8.0)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !token.isEmpty {
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            req.httpBody = bodyData
+            if let (data, resp) = try? await URLSession.shared.data(for: req),
+               let http = resp as? HTTPURLResponse,
+               (200..<300).contains(http.statusCode),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let result = json["result"] as? [String: Any],
+               (result["isError"] as? Bool) != true {
+                if let structured = result["structuredContent"] as? [String: Any] {
+                    return structured
+                }
+                return result
+            }
+        }
+        return nil
+    }
+
     private func runBuiltInTurn(prompt: String, images: [PiImagePayload]) async {
         currentText = ""
         currentThinking = ""
@@ -642,6 +687,32 @@ final class MuseRuntime: BufferedAgentRuntime, @unchecked Sendable {
         let wantsScroll = lowerPrompt.contains("scroll")
 
         if let targetURL = detectedURL {
+            // 1. Call the real Walkaway Muse MCP Connector (`http://127.0.0.1:8890/mcp` or `https://muse.secure.build/mcp`) if reachable
+            let mcpToolId = "call-\(UUID().uuidString.prefix(8))"
+            let mcpArgs: JSONValue = .object(["goal": .string(prompt), "url": .string(targetURL)])
+            activeToolNames[mcpToolId] = "walkaway_start_task"
+            turnToolCalls.append((id: mcpToolId, name: "walkaway_start_task", arguments: mcpArgs))
+            toolCalls += 1
+            startTool(id: mcpToolId, name: "walkaway_start_task", arguments: mcpArgs)
+            if let mcpStart = await Self.callWalkawayMCPTool(name: "walkaway_start_task", arguments: ["goal": prompt, "url": targetURL]) {
+                let approvalResp = await Self.callWalkawayMCPTool(name: "walkaway_request_approval", arguments: [:]) ?? mcpStart
+                let mcpSummary = """
+                MCP Connector (`walkaway_start_task` -> `walkaway_request_approval`):
+                Status: \(approvalResp["status"] ?? "running")
+                Page: \(approvalResp["page_title"] ?? "") (\(approvalResp["page_url"] ?? targetURL))
+                Proposed Step: \(approvalResp["proposed_step"] ?? "none")
+                Card: \(approvalResp["card_title"] ?? "") — \(approvalResp["card_body"] ?? "")
+                Say: \(approvalResp["say"] ?? "")
+                """
+                endTool(id: mcpToolId, name: "walkaway_start_task", output: mcpSummary, isError: false)
+                appendRuntimeEntry(message: AgentWire.toolResultMessage(id: mcpToolId, name: "walkaway_start_task", output: mcpSummary, isError: false))
+                browserReport += mcpSummary + "\n\n"
+            } else {
+                let fallbackNote = "Walkaway MCP server (`127.0.0.1:8890/mcp`) not running; driving embedded Muse WKWebView directly."
+                endTool(id: mcpToolId, name: "walkaway_start_task", output: fallbackNote, isError: false)
+                appendRuntimeEntry(message: AgentWire.toolResultMessage(id: mcpToolId, name: "walkaway_start_task", output: fallbackNote, isError: false))
+            }
+
             let navToolId = "call-\(UUID().uuidString.prefix(8))"
             let navArgs: JSONValue = .object(["url": .string(targetURL)])
             activeToolNames[navToolId] = "browser_navigate"
